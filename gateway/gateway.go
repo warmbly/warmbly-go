@@ -62,6 +62,10 @@ type Client struct {
 	readyOnce sync.Once
 	readyCh   chan struct{}
 	readyErr  error
+
+	finishOnce sync.Once
+	done       chan struct{}
+	termErr    error
 }
 
 // Option configures a [Client].
@@ -129,6 +133,7 @@ func New(token string, opts ...Option) *Client {
 		handlers:   make(map[EventName][]HandlerFunc),
 		events:     make(chan *Event, 64),
 		readyCh:    make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(c)
@@ -213,9 +218,36 @@ func (c *Client) signalReady(err error) {
 	})
 }
 
+// Done returns a channel that is closed when the session has permanently
+// stopped — because [Client.Close] was called or the context was canceled, or
+// because a fatal error (such as an authentication failure) ended it and no
+// further reconnection will be attempted. After it is closed, [Client.Err]
+// reports the terminal error, if any.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
+// Err returns the terminal error after [Client.Done] is closed: nil for a clean
+// shutdown (Close or context cancellation), or the fatal error that stopped the
+// session. It returns nil before the session stops.
+func (c *Client) Err() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.termErr
+}
+
+func (c *Client) finish(err error) {
+	c.finishOnce.Do(func() {
+		c.mu.Lock()
+		c.termErr = err
+		c.mu.Unlock()
+		close(c.done)
+	})
+}
+
 // manage runs the connect/reconnect loop for the lifetime of the session.
 func (c *Client) manage(ctx context.Context) {
 	defer c.wg.Done()
+	var termErr error
+	defer func() { c.finish(termErr) }()
 	var attempt int
 	for {
 		if ctx.Err() != nil {
@@ -229,11 +261,13 @@ func (c *Client) manage(ctx context.Context) {
 			attempt = 0
 		}
 		if err != nil {
-			c.logf("gateway: connection ended: %v (resumable=%v)", err, resumable)
 			if isFatalClose(err) {
+				c.logf("gateway: fatal close, not reconnecting: %v", err)
+				termErr = err
 				c.signalReady(err)
 				return
 			}
+			c.logf("gateway: connection ended: %v (resumable=%v)", err, resumable)
 		}
 		if !resumable {
 			c.mu.Lock()
@@ -375,14 +409,14 @@ func (c *Client) process(ctx context.Context, data []byte) (ready bool, err erro
 		_ = json.Unmarshal(env.Data, &resumable)
 		return false, &disconnectError{resumable: resumable, reason: "invalid session"}
 	case OpDispatch:
-		return c.dispatch(ctx, &env), nil
+		return c.dispatch(&env), nil
 	default:
 		c.logf("gateway: ignoring unexpected op %s", env.Op)
 		return false, nil
 	}
 }
 
-func (c *Client) dispatch(ctx context.Context, env *envelope) (ready bool) {
+func (c *Client) dispatch(env *envelope) (ready bool) {
 	name := EventName(env.Type)
 	seq := 0
 	if env.Seq != nil {
@@ -404,9 +438,13 @@ func (c *Client) dispatch(ctx context.Context, env *envelope) (ready bool) {
 	}
 
 	ev := &Event{Type: name, Seq: seq, Raw: append(json.RawMessage(nil), env.Data...)}
+	// Never block the read loop on a slow consumer: a blocked send would stop
+	// us reading heartbeat ACKs and trip false zombie detection. Drop (and log)
+	// when the buffer is full instead. Increase it with [WithEventBuffer].
 	select {
 	case c.events <- ev:
-	case <-ctx.Done():
+	default:
+		c.logf("gateway: event buffer full; dropping %s event", string(name))
 	}
 	return ready
 }

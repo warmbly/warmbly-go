@@ -5,7 +5,10 @@ import "context"
 // HandlerFunc handles a dispatched [Event]. Handlers for a session run on a
 // single dispatch goroutine in the order events arrive, so a slow handler
 // delays subsequent events; offload long work to your own goroutine if needed.
-// The context is canceled when the session closes.
+// If handlers cannot keep up and the internal buffer (see [WithEventBuffer])
+// fills, further events are dropped and logged rather than stalling — and
+// risking the liveness of — the connection. The context is canceled when the
+// session closes.
 type HandlerFunc func(ctx context.Context, e *Event)
 
 // Handle registers fn to be called for every event of the given name. Multiple
