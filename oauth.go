@@ -90,7 +90,7 @@ type OAuthAppListParams struct {
 func (p *OAuthAppListParams) values() url.Values {
 	q := make(url.Values)
 	if p != nil {
-		p.ListOptions.apply(q)
+		p.apply(q)
 	}
 	return q
 }
@@ -133,7 +133,7 @@ func (s *OAuthAppService) Update(ctx context.Context, id string, params *OAuthAp
 
 // Delete permanently removes an OAuth application.
 func (s *OAuthAppService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "oauth/applications/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "oauth/applications/"+url.PathEscape(id))
 }
 
 // RotateSecret generates a new client secret for the application, invalidating

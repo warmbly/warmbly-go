@@ -62,7 +62,7 @@ func (e *CloseError) Error() string {
 }
 
 // Conn is a client WebSocket connection. A Conn supports one concurrent reader
-// and one concurrent writer; writes are serialised internally so the caller may
+// and one concurrent writer; writes are serialized internally so the caller may
 // write from a separate goroutine than the one reading.
 type Conn struct {
 	conn net.Conn
@@ -77,7 +77,7 @@ type Conn struct {
 // Dial performs the opening handshake against urlStr (ws:// or wss://) and
 // returns an established connection. Extra request headers (for example
 // Authorization) may be supplied; Host and the WebSocket handshake headers are
-// managed automatically. The handshake honours ctx's deadline and cancellation.
+// managed automatically. The handshake honors ctx's deadline and cancellation.
 func Dial(ctx context.Context, urlStr string, header http.Header) (*Conn, *http.Response, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -281,7 +281,7 @@ func (c *Conn) ReadMessage(ctx context.Context) (MessageType, []byte, error) {
 func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	var hdr [2]byte
 	if _, err = io.ReadFull(c.br, hdr[:]); err != nil {
-		return
+		return fin, opcode, payload, err
 	}
 	fin = hdr[0]&0x80 != 0
 	if hdr[0]&0x70 != 0 {
@@ -295,13 +295,13 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	case 126:
 		var ext [2]byte
 		if _, err = io.ReadFull(c.br, ext[:]); err != nil {
-			return
+			return fin, opcode, payload, err
 		}
 		length = int64(binary.BigEndian.Uint16(ext[:]))
 	case 127:
 		var ext [8]byte
 		if _, err = io.ReadFull(c.br, ext[:]); err != nil {
-			return
+			return fin, opcode, payload, err
 		}
 		length = int64(binary.BigEndian.Uint64(ext[:]))
 	}
@@ -314,13 +314,13 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	if masked {
 		// A compliant server never masks; tolerate but unmask anyway.
 		if _, err = io.ReadFull(c.br, maskKey[:]); err != nil {
-			return
+			return fin, opcode, payload, err
 		}
 	}
 
 	payload = make([]byte, length)
 	if _, err = io.ReadFull(c.br, payload); err != nil {
-		return
+		return fin, opcode, payload, err
 	}
 	if masked {
 		for i := range payload {
@@ -331,7 +331,7 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 }
 
 // WriteMessage writes data as a single (unfragmented) masked message. Writes
-// are serialised, so it is safe to call concurrently with [Conn.ReadMessage].
+// are serialized, so it is safe to call concurrently with [Conn.ReadMessage].
 func (c *Conn) WriteMessage(ctx context.Context, mt MessageType, data []byte) error {
 	var opcode byte
 	switch mt {

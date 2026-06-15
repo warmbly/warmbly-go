@@ -157,7 +157,7 @@ func (p *CampaignListParams) values() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	if p.Search != "" {
 		q.Set("search", p.Search)
 	}
@@ -204,7 +204,7 @@ func (s *CampaignService) Update(ctx context.Context, id string, params *Campaig
 
 // Delete permanently deletes a campaign.
 func (s *CampaignService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "campaigns/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "campaigns/"+url.PathEscape(id))
 }
 
 // Start begins (or resumes) sending for a campaign.
@@ -301,5 +301,5 @@ func (s *CampaignService) UpdateStep(ctx context.Context, id, stepID string, par
 
 // DeleteStep removes a step from a campaign's sequence.
 func (s *CampaignService) DeleteStep(ctx context.Context, id, stepID string) (*Response, error) {
-	return s.client.delete(ctx, "campaigns/"+url.PathEscape(id)+"/steps/"+url.PathEscape(stepID), nil)
+	return s.client.delete(ctx, "campaigns/"+url.PathEscape(id)+"/steps/"+url.PathEscape(stepID))
 }

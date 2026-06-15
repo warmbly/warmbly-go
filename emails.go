@@ -105,7 +105,7 @@ func (p *EmailListParams) values() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	if p.Search != "" {
 		q.Set("search", p.Search)
 	}
@@ -148,7 +148,7 @@ func (s *EmailService) Update(ctx context.Context, id string, params *EmailUpdat
 
 // Delete disconnects and removes a mailbox.
 func (s *EmailService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "emails/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "emails/"+url.PathEscape(id))
 }
 
 // Send sends a one-off message from the given mailbox.

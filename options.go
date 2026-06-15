@@ -83,7 +83,7 @@ func WithBaseURL(raw string) Option {
 	}
 }
 
-// WithHTTPClient sets the underlying [*http.Client]. Use this to customise
+// WithHTTPClient sets the underlying [*http.Client]. Use this to customize
 // transport, proxies, TLS or timeouts. The client's Timeout, if any, applies to
 // each individual request.
 func WithHTTPClient(hc *http.Client) Option {
@@ -110,7 +110,7 @@ func WithUserAgent(product string) Option {
 
 // WithMaxRetries sets how many times the client retries a request that fails
 // with a 429 or 5xx response. Retries use exponential backoff with jitter and
-// honour any Retry-After header. The default is 2; set 0 to disable retries.
+// honor any Retry-After header. The default is 2; set 0 to disable retries.
 func WithMaxRetries(n int) Option {
 	return func(c *Client) error {
 		if n < 0 {
@@ -122,13 +122,13 @@ func WithMaxRetries(n int) Option {
 }
 
 // WithRetryWaitBounds sets the minimum and maximum backoff between retries.
-func WithRetryWaitBounds(min, max time.Duration) Option {
+func WithRetryWaitBounds(minWait, maxWait time.Duration) Option {
 	return func(c *Client) error {
-		if min <= 0 || max <= 0 || min > max {
+		if minWait <= 0 || maxWait <= 0 || minWait > maxWait {
 			return fmt.Errorf("warmbly: invalid retry wait bounds")
 		}
-		c.retryWaitMin = min
-		c.retryWaitMax = max
+		c.retryWaitMin = minWait
+		c.retryWaitMax = maxWait
 		return nil
 	}
 }

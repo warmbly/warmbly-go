@@ -175,7 +175,7 @@ func (p *WebhookListParams) values() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	return q
 }
 
@@ -217,7 +217,7 @@ func (s *WebhookService) Update(ctx context.Context, id string, params *WebhookU
 
 // Delete permanently removes a webhook endpoint.
 func (s *WebhookService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "webhooks/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "webhooks/"+url.PathEscape(id))
 }
 
 // RotateSecret generates a new signing secret for the endpoint and returns the

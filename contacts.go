@@ -187,7 +187,7 @@ func (s *ContactService) Update(ctx context.Context, id string, params *ContactU
 
 // Delete permanently deletes a single contact by ID.
 func (s *ContactService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "contacts/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "contacts/"+url.PathEscape(id))
 }
 
 // Timeline returns the activity timeline for a contact, most recent first.

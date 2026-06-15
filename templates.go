@@ -57,7 +57,7 @@ func (p *TemplateListParams) values() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	if p.Search != "" {
 		q.Set("search", p.Search)
 	}
@@ -101,5 +101,5 @@ func (s *TemplateService) Update(ctx context.Context, id string, params *Templat
 
 // Delete permanently deletes a template.
 func (s *TemplateService) Delete(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "templates/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "templates/"+url.PathEscape(id))
 }

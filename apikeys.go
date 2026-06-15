@@ -88,7 +88,7 @@ func (p *APIKeyListParams) values() url.Values {
 	if p == nil {
 		return q
 	}
-	p.ListOptions.apply(q)
+	p.apply(q)
 	if p.Search != "" {
 		q.Set("search", p.Search)
 	}
@@ -149,7 +149,7 @@ func (s *APIKeyService) Update(ctx context.Context, id string, params *APIKeyUpd
 
 // Revoke permanently revokes an API key.
 func (s *APIKeyService) Revoke(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id))
 }
 
 // Permissions lists the permission keys that may be granted to API keys.

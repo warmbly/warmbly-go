@@ -140,5 +140,5 @@ func (s *OrganizationService) UpdateMember(ctx context.Context, id string, param
 // RemoveMember removes a member from the current organization. This requires a
 // user-context credential (an OAuth access token).
 func (s *OrganizationService) RemoveMember(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "organization/members/"+url.PathEscape(id), nil)
+	return s.client.delete(ctx, "organization/members/"+url.PathEscape(id))
 }

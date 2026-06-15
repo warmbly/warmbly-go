@@ -95,13 +95,13 @@ func WithLogger(logf func(format string, args ...any)) Option {
 
 // WithReconnectBackoff sets the minimum and maximum delay between reconnection
 // attempts. Delays grow exponentially with jitter between these bounds.
-func WithReconnectBackoff(min, max time.Duration) Option {
+func WithReconnectBackoff(minDelay, maxDelay time.Duration) Option {
 	return func(c *Client) {
-		if min > 0 {
-			c.backoffMin = min
+		if minDelay > 0 {
+			c.backoffMin = minDelay
 		}
-		if max > 0 {
-			c.backoffMax = max
+		if maxDelay > 0 {
+			c.backoffMax = maxDelay
 		}
 	}
 }
@@ -136,7 +136,7 @@ func New(token string, opts ...Option) *Client {
 	return c
 }
 
-// Open connects and runs the session until ctx is cancelled or [Client.Close]
+// Open connects and runs the session until ctx is canceled or [Client.Close]
 // is called. It blocks until the first session is established (the READY event)
 // or a fatal error occurs, returning that error. Reconnection and resumption
 // happen automatically in the background after Open returns.
@@ -165,7 +165,7 @@ func (c *Client) Open(ctx context.Context) error {
 		}
 		return c.readyErr
 	case <-sctx.Done():
-		// Cancelled before the first READY.
+		// Canceled before the first READY.
 		c.signalReady(sctx.Err())
 		return sctx.Err()
 	}
@@ -258,9 +258,13 @@ func (c *Client) runOnce(ctx context.Context) (resumable bool, hadReady bool, er
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, _, derr := wsconn.Dial(connCtx, c.url, nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.url, nil)
 	if derr != nil {
 		return true, false, fmt.Errorf("dial: %w", derr)
+	}
+	if resp != nil {
+		// The 101 response carries no body; close it to satisfy linters.
+		_ = resp.Body.Close()
 	}
 	conn.SetMaxMessage(c.maxMessage)
 	c.setConn(conn)
@@ -413,7 +417,7 @@ func (c *Client) dispatch(ctx context.Context, env *envelope) (ready bool) {
 func (c *Client) heartbeatLoop(ctx context.Context, conn *wsconn.Conn, interval time.Duration, done chan<- struct{}) {
 	defer close(done)
 
-	// Jitter the first beat to avoid synchronised reconnect storms.
+	// Jitter the first beat to avoid synchronized reconnect storms.
 	first := time.Duration(float64(interval) * rand.Float64())
 	timer := time.NewTimer(first)
 	defer timer.Stop()
@@ -461,10 +465,10 @@ func (c *Client) dispatchLoop(ctx context.Context) {
 func (c *Client) fire(ctx context.Context, ev *Event) {
 	c.mu.RLock()
 	named := append([]HandlerFunc(nil), c.handlers[ev.Type]...)
-	any := append([]HandlerFunc(nil), c.anyHandlers...)
+	wildcards := append([]HandlerFunc(nil), c.anyHandlers...)
 	c.mu.RUnlock()
 
-	for _, h := range any {
+	for _, h := range wildcards {
 		c.safeCall(ctx, h, ev)
 	}
 	for _, h := range named {
@@ -481,7 +485,7 @@ func (c *Client) safeCall(ctx context.Context, h HandlerFunc, ev *Event) {
 	h(ctx, ev)
 }
 
-// send marshals and writes a frame. Writes are serialised by the underlying
+// send marshals and writes a frame. Writes are serialized by the underlying
 // connection, so send is safe to call from multiple goroutines.
 func (c *Client) send(ctx context.Context, op Opcode, data any) error {
 	var raw json.RawMessage
