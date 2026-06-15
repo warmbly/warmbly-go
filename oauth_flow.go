@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -296,7 +297,7 @@ func S256ChallengeFromVerifier(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// AuthCodeOption customises the parameters of an authorization or token request.
+// AuthCodeOption customizes the parameters of an authorization or token request.
 type AuthCodeOption interface {
 	setValue(url.Values)
 }
@@ -431,9 +432,16 @@ func revokeToken(ctx context.Context, hc *http.Client, revokeURL, clientID, clie
 
 func parseToken(body []byte, contentType string) (*Token, error) {
 	tok := &Token{}
-	if strings.Contains(contentType, "application/x-www-form-urlencoded") ||
-		strings.Contains(contentType, "text/plain") {
-		vals, err := url.ParseQuery(string(body))
+
+	// Token endpoints return JSON in practice. Detect it by content type or by
+	// the body shape, since some servers omit (or mis-sniff) the header. Fall
+	// back to a form-encoded body only when it is clearly not JSON.
+	trimmed := strings.TrimSpace(string(body))
+	isJSON := strings.Contains(contentType, "json") || strings.HasPrefix(trimmed, "{")
+	isForm := strings.Contains(contentType, "application/x-www-form-urlencoded")
+
+	if isForm && !isJSON {
+		vals, err := url.ParseQuery(trimmed)
 		if err != nil {
 			return nil, fmt.Errorf("warmbly: oauth2: parse token response: %w", err)
 		}
@@ -442,9 +450,9 @@ func parseToken(body []byte, contentType string) (*Token, error) {
 		tok.RefreshToken = vals.Get("refresh_token")
 		tok.Scope = vals.Get("scope")
 		if e := vals.Get("expires_in"); e != "" {
-			var secs int64
-			fmt.Sscan(e, &secs)
-			tok.ExpiresIn = secs
+			if secs, perr := strconv.ParseInt(e, 10, 64); perr == nil {
+				tok.ExpiresIn = secs
+			}
 		}
 	} else {
 		if err := json.Unmarshal(body, tok); err != nil {

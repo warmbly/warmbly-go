@@ -191,8 +191,6 @@ func (c *Client) newRequest(ctx context.Context, method, refPath string, body an
 // do executes a request with retries and decodes a successful JSON body into
 // out (which may be nil). On a non-2xx response it returns a [*Error].
 func (c *Client) do(req *http.Request, out any) (*Response, error) {
-	var lastErr error
-
 	for attempt := 0; ; attempt++ {
 		// Rewind the body for retries.
 		if attempt > 0 && req.GetBody != nil {
@@ -214,7 +212,6 @@ func (c *Client) do(req *http.Request, out any) (*Response, error) {
 			if cerr := req.Context().Err(); cerr != nil {
 				return nil, cerr
 			}
-			lastErr = err
 			if attempt < c.maxRetries {
 				if werr := c.waitRetry(req.Context(), attempt, nil); werr != nil {
 					return nil, werr
@@ -232,7 +229,6 @@ func (c *Client) do(req *http.Request, out any) (*Response, error) {
 			if werr := c.waitRetry(req.Context(), attempt, resp); werr != nil {
 				return resp, werr
 			}
-			lastErr = apiErr
 			continue
 		}
 
@@ -246,14 +242,11 @@ func (c *Client) do(req *http.Request, out any) (*Response, error) {
 		}
 		return resp, nil
 	}
-
-	// Unreachable: the loop always returns. Kept for the compiler if edited.
-	_ = lastErr
 }
 
-// waitRetry sleeps before the next attempt, honouring Retry-After when present
+// waitRetry sleeps before the next attempt, honoring Retry-After when present
 // and otherwise using exponential backoff with full jitter. It returns the
-// context error if the context is cancelled while waiting.
+// context error if the context is canceled while waiting.
 func (c *Client) waitRetry(ctx context.Context, attempt int, resp *Response) error {
 	wait := c.backoff(attempt)
 	if resp != nil && resp.RateLimit.RetryAfter > 0 {
@@ -394,10 +387,10 @@ func (c *Client) put(ctx context.Context, path string, body, out any) (*Response
 	return c.do(req, out)
 }
 
-func (c *Client) delete(ctx context.Context, path string, out any) (*Response, error) {
+func (c *Client) delete(ctx context.Context, path string) (*Response, error) {
 	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return nil, err
 	}
-	return c.do(req, out)
+	return c.do(req, nil)
 }
