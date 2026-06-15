@@ -62,9 +62,11 @@ type Page[T any] struct {
 // rate-limit metadata.
 func (p *Page[T]) Response() *Response { return p.resp }
 
-// HasMore reports whether a further page is available.
+// HasMore reports whether a further page is available. It requires both the
+// has_more flag and a non-empty cursor, so a server that reports has_more with
+// an empty/null cursor cannot drive an infinite re-fetch loop.
 func (p *Page[T]) HasMore() bool {
-	return p.Pagination.HasMore && p.Pagination.NextCursor != nil
+	return p.Pagination.HasMore && p.NextCursor() != ""
 }
 
 // NextCursor returns the opaque cursor for the next page, or "" if none.
