@@ -175,6 +175,34 @@ func TestPaginationAutoPaging(t *testing.T) {
 	}
 }
 
+// TestPaginationStopsOnEmptyCursor guards against an infinite re-fetch loop when
+// a server reports has_more=true but returns no cursor.
+func TestPaginationStopsOnEmptyCursor(t *testing.T) {
+	var calls int32
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n := atomic.AddInt32(&calls, 1); n > 5 {
+			t.Fatalf("server hit %d times — pagination is looping", n)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"c1","name":"one"}],"pagination":{"has_more":true,"next_cursor":""}}`))
+	})
+
+	page, err := c.Campaigns.List(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var n int
+	for _, err := range page.All(context.Background()) {
+		if err != nil {
+			t.Fatalf("iterating: %v", err)
+		}
+		n++
+	}
+	if n != 1 {
+		t.Errorf("iterated %d items, want 1 (no further pages)", n)
+	}
+}
+
 func TestPostEncodesJSONBody(t *testing.T) {
 	var body map[string]any
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

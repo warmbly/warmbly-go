@@ -179,3 +179,30 @@ func TestExchangeError(t *testing.T) {
 		t.Errorf("unexpected oauth error: %+v", oerr)
 	}
 }
+
+// TestExchangeStringExpiresIn ensures a quoted-string expires_in (which some
+// servers emit) is tolerated instead of breaking the whole token parse.
+func TestExchangeStringExpiresIn(t *testing.T) {
+	fixed := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	old := timeNow
+	timeNow = func() time.Time { return fixed }
+	defer func() { timeNow = old }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"wmblyo_x","token_type":"Bearer","expires_in":"3600"}`))
+	}))
+	defer srv.Close()
+
+	cfg := &OAuth2Config{ClientID: "c", Endpoint: OAuth2Endpoint{TokenURL: srv.URL}}
+	tok, err := cfg.Exchange(context.Background(), "code")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if tok.AccessToken != "wmblyo_x" {
+		t.Errorf("access token = %q", tok.AccessToken)
+	}
+	if want := fixed.Add(3600 * time.Second); !tok.Expiry.Equal(want) {
+		t.Errorf("Expiry = %v, want %v", tok.Expiry, want)
+	}
+}

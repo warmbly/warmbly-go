@@ -174,6 +174,34 @@ func TestGatewaySession(t *testing.T) {
 	}
 }
 
+// TestGatewayDoneOnClose verifies that Close terminates the session, closes
+// Done, and reports a nil terminal error for a clean shutdown.
+func TestGatewayDoneOnClose(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go runTestGateway(t, ln)
+
+	g := New("tok_test", WithURL("ws://"+ln.Addr().String()+"/"), WithLogger(t.Logf))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := g.Open(ctx); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	_ = g.Close()
+	select {
+	case <-g.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("Done was not closed after Close")
+	}
+	if err := g.Err(); err != nil {
+		t.Errorf("Err after clean shutdown = %v, want nil", err)
+	}
+}
+
 func runTestGateway(t *testing.T, ln net.Listener) {
 	conn, err := ln.Accept()
 	if err != nil {
