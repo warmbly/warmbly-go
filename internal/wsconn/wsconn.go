@@ -51,6 +51,11 @@ const guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 // defaultMaxMessage caps the size of a reassembled message to guard memory.
 const defaultMaxMessage = 8 << 20 // 8 MiB
 
+// writeWait bounds how long a single frame write may block, so a peer that
+// stops reading cannot wedge the writer (including control-frame echoes issued
+// from the read path) indefinitely.
+const writeWait = 15 * time.Second
+
 // CloseError reports that the peer sent a close frame.
 type CloseError struct {
 	Code   int
@@ -230,7 +235,9 @@ func (c *Conn) ReadMessage(ctx context.Context) (MessageType, []byte, error) {
 		started  bool
 	)
 	for {
-		fin, opcode, frame, err := c.readFrame()
+		// Budget the next data frame against the remaining reassembly allowance
+		// so an over-budget frame is rejected before it is read or allocated.
+		fin, opcode, frame, err := c.readFrame(c.maxMessage - int64(len(payload)))
 		if err != nil {
 			return 0, nil, err
 		}
@@ -265,9 +272,6 @@ func (c *Conn) ReadMessage(ctx context.Context) (MessageType, []byte, error) {
 			return 0, nil, fmt.Errorf("wsconn: unknown opcode 0x%x", opcode)
 		}
 
-		if int64(len(payload))+int64(len(frame)) > c.maxMessage {
-			return 0, nil, fmt.Errorf("wsconn: message exceeds %d bytes", c.maxMessage)
-		}
 		payload = append(payload, frame...)
 
 		if fin {
@@ -277,8 +281,10 @@ func (c *Conn) ReadMessage(ctx context.Context) (MessageType, []byte, error) {
 }
 
 // readFrame reads a single frame and returns its FIN bit, opcode and unmasked
-// payload. Server-to-client frames must not be masked.
-func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
+// payload. Server-to-client frames must not be masked. maxData bounds the
+// payload of a data/continuation frame; control frames are bounded by the RFC
+// limit of 125 bytes regardless of maxData.
+func (c *Conn) readFrame(maxData int64) (fin bool, opcode byte, payload []byte, err error) {
 	var hdr [2]byte
 	if _, err = io.ReadFull(c.br, hdr[:]); err != nil {
 		return fin, opcode, payload, err
@@ -306,8 +312,17 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 		length = int64(binary.BigEndian.Uint64(ext[:]))
 	}
 
-	if length < 0 || length > c.maxMessage {
-		return false, 0, nil, fmt.Errorf("wsconn: frame length %d out of bounds", length)
+	if opcode&0x08 != 0 {
+		// RFC 6455 §5.5: control frames must not be fragmented and carry at
+		// most a 125-byte payload.
+		if !fin {
+			return false, 0, nil, errors.New("wsconn: fragmented control frame")
+		}
+		if length > 125 {
+			return false, 0, nil, fmt.Errorf("wsconn: control frame too long (%d bytes)", length)
+		}
+	} else if length < 0 || length > maxData {
+		return false, 0, nil, fmt.Errorf("wsconn: frame length %d exceeds remaining %d-byte budget", length, maxData)
 	}
 
 	var maskKey [4]byte
@@ -342,22 +357,32 @@ func (c *Conn) WriteMessage(ctx context.Context, mt MessageType, data []byte) er
 	default:
 		return fmt.Errorf("wsconn: invalid message type %d", mt)
 	}
-	stop := c.applyDeadline(ctx, c.conn.SetWriteDeadline)
-	defer stop()
-	return c.writeFrame(opcode, data)
+	// Bound the write by writeWait, tightening to ctx's deadline if sooner.
+	dl := time.Now().Add(writeWait)
+	if d, ok := ctx.Deadline(); ok && d.Before(dl) {
+		dl = d
+	}
+	return c.writeFrame(opcode, data, dl)
 }
 
 func (c *Conn) writeControl(opcode byte, payload []byte) error {
 	if len(payload) > 125 {
 		payload = payload[:125]
 	}
-	return c.writeFrame(opcode, payload)
+	return c.writeFrame(opcode, payload, time.Now().Add(writeWait))
 }
 
-// writeFrame writes one complete, client-masked frame with FIN set.
-func (c *Conn) writeFrame(opcode byte, payload []byte) error {
+// writeFrame writes one complete, client-masked frame with FIN set. A non-zero
+// deadline bounds the write so a stalled peer cannot block the writer forever;
+// it is set and cleared under writeMu to avoid racing concurrent writers.
+func (c *Conn) writeFrame(opcode byte, payload []byte, deadline time.Time) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+
+	if !deadline.IsZero() {
+		_ = c.conn.SetWriteDeadline(deadline)
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
 
 	var hdr []byte
 	b0 := byte(0x80) | opcode // FIN + opcode
