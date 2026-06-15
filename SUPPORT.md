@@ -27,10 +27,10 @@ version and SDK version when reporting a bug.
 For anything related to your Warmbly account — billing, API keys, deliverability,
 mailbox warmup, or other platform questions — email:
 
-- **support@warmbly.com**
+- **team@warmbly.com**
 
 > Please note: GitHub Issues are for **SDK bugs and feature requests only**, not
 > account support. For account or billing questions, email
-> support@warmbly.com or check the [documentation](https://docs.warmbly.com) —
+> team@warmbly.com or check the [documentation](https://docs.warmbly.com) —
 > the maintainers of this repository can't access or change your account from
 > here.

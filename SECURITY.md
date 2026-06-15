@@ -23,7 +23,7 @@ Report privately through either of:
 
 - GitHub private security advisories:
   <https://github.com/warmbly/warmbly-go/security/advisories/new>
-- Email: **security@warmbly.com**
+- Email: **team@warmbly.com**
 
 Please include:
 
@@ -46,4 +46,4 @@ public disclosure. We are happy to coordinate disclosure timing with you.
 
 This policy covers the warmbly-go SDK itself. Vulnerabilities in the Warmbly
 platform or API (as opposed to this client library) should also be sent to
-**security@warmbly.com** and will be routed to the appropriate team.
+**team@warmbly.com** and will be routed to the appropriate team.

@@ -30,7 +30,7 @@ representing the project in public.
 ## Reporting
 
 If you experience or witness behavior that violates these guidelines, please
-report it privately to **conduct@warmbly.com**. Reports are handled
+report it privately to **team@warmbly.com**. Reports are handled
 confidentially. Include what happened, where, and any context that helps us
 understand the situation; links or screenshots are useful when available.
 
