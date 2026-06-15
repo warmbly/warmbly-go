@@ -324,7 +324,8 @@ func decodeError(r *http.Response) *Error {
 	}
 	if apiErr.RetryAfter == 0 {
 		if rl := parseRateLimit(r.Header); rl.RetryAfter > 0 {
-			apiErr.RetryAfter = int(rl.RetryAfter.Seconds())
+			// Round up so a sub-second wait is not truncated to 0.
+			apiErr.RetryAfter = int((rl.RetryAfter + time.Second - 1) / time.Second)
 		}
 	}
 	return apiErr
@@ -347,9 +348,10 @@ func decodeBody(r *http.Response, out any) error {
 	return nil
 }
 
-// drain consumes and closes a response body so the connection can be reused.
+// drain consumes the remaining body to EOF and closes it so the underlying
+// connection can be returned to the pool and reused.
 func drain(r *http.Response) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 4<<10))
+	_, _ = io.Copy(io.Discard, r.Body)
 	_ = r.Body.Close()
 }
 
