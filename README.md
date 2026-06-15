@@ -112,25 +112,25 @@ Every resource is exposed as a service on the `Client`. Listing returns a page t
 ctx := context.Background()
 
 // List with automatic pagination.
-page, err := client.Contacts.List(ctx, nil)
+page, err := client.Campaigns.List(ctx, nil)
 if err != nil {
     log.Fatal(err)
 }
-for contact, err := range page.All(ctx) {
+for campaign, err := range page.All(ctx) {
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println(contact.Email)
+    fmt.Println(campaign.Name)
 }
 
-// Fetch a single record by ID.
-campaign, err := client.Campaigns.Get(ctx, "camp_123")
+// Fetch a single record by ID (single-record calls also return the *Response).
+campaign, _, err := client.Campaigns.Get(ctx, "camp_123")
 if err != nil {
     log.Fatal(err)
 }
 
 // Create a new record.
-created, err := client.Campaigns.Create(ctx, &warmbly.CampaignCreateParams{
+created, _, err := client.Campaigns.Create(ctx, &warmbly.CampaignCreateParams{
     Name: "Q3 outbound",
 })
 if err != nil {
@@ -154,7 +154,7 @@ for email, err := range page.All(ctx) {
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println(email.Subject)
+    fmt.Println(email.Email)
 }
 ```
 
@@ -178,7 +178,7 @@ Key sentinels include `warmbly.ErrNotFound`, `warmbly.ErrUnauthorized`, and `war
 
 ## Retries & rate limits
 
-The client automatically retries transient failures using exponential backoff with jitter, and honours the `Retry-After` header when the server sends one. Rate-limit headers from each response are parsed and exposed (for example via `client.RateLimit`) so you can observe your remaining quota. Tune retry behaviour with the `warmbly.WithMaxRetries` option:
+The client automatically retries transient failures using exponential backoff with jitter, and honours the `Retry-After` header when the server sends one. Rate-limit headers from each response are parsed and exposed on the returned `*Response` (`resp.RateLimit`) so you can observe your remaining quota. Tune retry behaviour with the `warmbly.WithMaxRetries` option:
 
 ```go
 client, err := warmbly.New(
