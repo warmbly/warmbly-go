@@ -12,6 +12,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Use bash on every runner (including Windows) so the run steps parse
+# identically across platforms.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
     name: Test (${{ matrix.os }}, Go ${{ matrix.go-version }})
@@ -60,9 +66,9 @@ jobs:
           go-version: stable
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.6
+          version: v2.12.2
 
   gofmt:
     name: gofmt
