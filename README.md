@@ -223,7 +223,7 @@ For lower-level use you can call `warmbly.VerifyWebhookSignature` directly.
 
 ## Examples
 
-Runnable programs covering authentication, resource access, pagination, the real-time gateway, and webhook handling live in the [`examples/`](examples/) directory.
+The [`examples/`](examples/) directory has a runnable program for each part of the SDK — API keys, both OAuth flows, campaigns, contacts, emails/warmup, templates, analytics, webhooks, the real-time gateway, and error handling. See [`examples/README.md`](examples/README.md) for the full index.
 
 ## Versioning
 
