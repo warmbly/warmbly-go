@@ -32,7 +32,8 @@ Initial release of the official Go SDK for Warmbly.
   `warmbly.VerifyWebhookSignature` and `client.Webhooks.ConstructEvent`.
 - Real-time gateway client (subpackage `gateway`) with a persistent
   connection, intent-based subscriptions, typed event handlers, automatic
-  heartbeat, session resume, and automatic reconnect.
+  heartbeat, session resume, and automatic reconnect. Session termination is
+  observable via `Done()` and `Err()`.
 - Zero external dependencies: the entire module uses only the Go standard
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
