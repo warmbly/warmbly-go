@@ -340,7 +340,9 @@ type OAuth2Error struct {
 	URI         string `json:"error_uri"`
 	Message     string `json:"message"`
 	RequestID   string `json:"request_id"`
-	// Body is the raw response body for diagnostics.
+	// Body is the raw error-response body for diagnostics. It is only populated
+	// for non-2xx responses (never a successful token payload), so it does not
+	// carry issued credentials.
 	Body []byte `json:"-"`
 }
 
@@ -398,7 +400,10 @@ func retrieveToken(ctx context.Context, hc *http.Client, tokenURL, clientID, cli
 		return nil, err
 	}
 	if tok.AccessToken == "" {
-		return nil, &OAuth2Error{StatusCode: resp.StatusCode, Code: "server_error", Description: "token endpoint returned no access_token", Body: body}
+		// Do not attach the raw body: this is a 2xx response that may carry
+		// other credentials (e.g. a refresh_token), and OAuth2Error values are
+		// often logged.
+		return nil, &OAuth2Error{StatusCode: resp.StatusCode, Code: "server_error", Description: "token endpoint returned no access_token"}
 	}
 	return tok, nil
 }
@@ -439,8 +444,11 @@ func parseToken(body []byte, contentType string) (*Token, error) {
 	trimmed := strings.TrimSpace(string(body))
 	isJSON := strings.Contains(contentType, "json") || strings.HasPrefix(trimmed, "{")
 	isForm := strings.Contains(contentType, "application/x-www-form-urlencoded")
+	// Detect a form body even when the Content-Type is missing or generic, while
+	// keeping JSON the default when the shape is ambiguous.
+	looksForm := !isJSON && (isForm || (trimmed != "" && !strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "=")))
 
-	if isForm && !isJSON {
+	if looksForm {
 		vals, err := url.ParseQuery(trimmed)
 		if err != nil {
 			return nil, fmt.Errorf("warmbly: oauth2: parse token response: %w", err)
@@ -455,8 +463,26 @@ func parseToken(body []byte, contentType string) (*Token, error) {
 			}
 		}
 	} else {
-		if err := json.Unmarshal(body, tok); err != nil {
+		// Decode via a shadow struct so expires_in tolerates both numeric and
+		// quoted-string forms (some servers emit "expires_in":"3600").
+		var raw struct {
+			AccessToken  string      `json:"access_token"`
+			TokenType    string      `json:"token_type"`
+			RefreshToken string      `json:"refresh_token"`
+			Scope        string      `json:"scope"`
+			ExpiresIn    json.Number `json:"expires_in"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, fmt.Errorf("warmbly: oauth2: decode token response: %w", err)
+		}
+		tok.AccessToken = raw.AccessToken
+		tok.TokenType = raw.TokenType
+		tok.RefreshToken = raw.RefreshToken
+		tok.Scope = raw.Scope
+		if raw.ExpiresIn != "" {
+			if secs, perr := raw.ExpiresIn.Int64(); perr == nil {
+				tok.ExpiresIn = secs
+			}
 		}
 	}
 	if tok.ExpiresIn > 0 {
