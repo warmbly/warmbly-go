@@ -1,0 +1,91 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gocritic
+    - unconvert
+    - prealloc
+    - bodyclose
+    - errorlint
+    - nakedret
+    - unparam
+  settings:
+    misspell:
+      locale: US
+    nakedret:
+      max-func-lines: 30
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - examples
+      - third_party$
+      - builtin$
+    rules:
+      # Relax strict linters in tests.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+          - gocritic
+          - bodyclose
+          - revive
+      # The examples directory is illustrative; don't hold it to the
+      # same standard as the library itself.
+      - path: examples/
+        linters:
+          - errcheck
+          - unparam
+          - revive
+          - gocritic
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/warmbly/warmbly-go
+  exclusions:
+    generated: lax
+    paths:
+      - examples
+      - third_party$
+      - builtin$

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://docs.warmbly.com
+    about: Read the Warmbly API and SDK documentation before opening an issue.
+  - name: Discussions
+    url: https://github.com/warmbly/warmbly-go/discussions
+    about: Ask questions and discuss ideas with the community.
+  - name: Security policy
+    url: https://github.com/warmbly/warmbly-go/security/policy
+    about: Please report security vulnerabilities privately, not as public issues.

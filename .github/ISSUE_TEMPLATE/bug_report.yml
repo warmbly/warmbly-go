@@ -1,0 +1,97 @@
+name: Bug report
+description: Report a problem with the warmbly-go SDK
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+
+        Please fill out the form below as completely as possible. A minimal,
+        self-contained reproduction is the single most helpful thing you can
+        provide. Do **not** include API keys, access tokens, or other secrets.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug, including any error messages or stack traces.
+      placeholder: When I call client.Campaigns.List, the SDK returns ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+      placeholder: I expected the call to return the first page of campaigns.
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: A minimal Go program (or snippet) that reproduces the issue. Please remove any secrets.
+      render: go
+      placeholder: |
+        package main
+
+        import (
+            "context"
+            "log"
+
+            "github.com/warmbly/warmbly-go"
+        )
+
+        func main() {
+            client, err := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
+            if err != nil {
+                log.Fatal(err)
+            }
+
+            ctx := context.Background()
+            _, err = client.Campaigns.List(ctx, nil)
+            if err != nil {
+                log.Fatal(err)
+            }
+        }
+    validations:
+      required: false
+  - type: input
+    id: sdk-version
+    attributes:
+      label: warmbly-go version
+      description: Which version of github.com/warmbly/warmbly-go are you using? (e.g. v1.2.3 or a commit SHA)
+      placeholder: v1.2.3
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: The output of `go version`.
+      placeholder: go version go1.23.0 darwin/arm64
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: Which operating system are you running on?
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - FreeBSD
+        - Other
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched the existing issues and this has not already been reported.
+          required: true
+        - label: I have removed all secrets (API keys, access tokens) from the report.
+          required: true
