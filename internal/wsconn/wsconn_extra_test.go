@@ -3,10 +3,17 @@ package wsconn
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"strings"
@@ -244,15 +251,14 @@ func TestWSDialDefaultPortBranch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// The default-port branch under test runs before the dial; the dial
-			// to the default port on loopback is expected to fail, which is
-			// fine.
+			// The default-port branch under test runs before the dial. The dial
+			// to the default port on loopback is expected to fail; any error is
+			// acceptable (connection refused, a TLS error, or — if something is
+			// listening on the runner — an HTTP handshake rejection), because the
+			// branch has already executed regardless of how the dial resolves.
 			_, _, err := Dial(context.Background(), tc.url, nil)
 			if err == nil {
-				t.Skip("unexpected listener on the default port; branch still executed")
-			}
-			if !strings.Contains(err.Error(), "dial") && !strings.Contains(err.Error(), "tls handshake") {
-				t.Errorf("error = %v, want a dial or tls handshake error", err)
+				t.Skip("a server unexpectedly answered the default port; the branch still executed")
 			}
 		})
 	}
@@ -738,11 +744,12 @@ func TestWSReadMessageExceedsBudget(t *testing.T) {
 	a, b := tcpPair(t)
 	b.SetMaxMessage(8)
 
-	// Writer sends a data frame larger than the reader's budget.
+	// Writer sends a data frame larger than the reader's budget. The reader
+	// rejects it after reading the header and may close the connection before
+	// the body is fully written, so a resulting write error is expected here and
+	// deliberately ignored — the assertion under test is the reader's rejection.
 	go func() {
-		if err := a.WriteMessage(context.Background(), MessageBinary, make([]byte, 64)); err != nil {
-			t.Errorf("write: %v", err)
-		}
+		_ = a.WriteMessage(context.Background(), MessageBinary, make([]byte, 64))
 	}()
 
 	_, _, err := b.ReadMessage(context.Background())
@@ -751,5 +758,138 @@ func TestWSReadMessageExceedsBudget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds remaining") || !strings.Contains(err.Error(), "budget") {
 		t.Errorf("error = %v, want an exceeds remaining ... budget error", err)
+	}
+}
+
+// wsFailReader is an io.Reader that always fails, used to drive the
+// crypto/rand failure branches by temporarily replacing rand.Reader.
+type wsFailReader struct{}
+
+func (wsFailReader) Read([]byte) (int, error) { return 0, errors.New("wsconn test: rand failure") }
+
+func TestWSWriteFrameRandError(t *testing.T) {
+	a, _ := tcpPair(t)
+
+	old := rand.Reader
+	rand.Reader = wsFailReader{}
+	t.Cleanup(func() { rand.Reader = old })
+
+	// writeFrame reads a fresh mask key from rand.Reader before writing; a
+	// failing reader makes it return the "read mask key" error.
+	err := a.writeFrame(opText, []byte("x"), time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "read mask key") {
+		t.Fatalf("err = %v, want a read mask key error", err)
+	}
+}
+
+func TestWSDialRandKeyError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// Hold the accepted connection open; Dial fails before it writes.
+		t.Cleanup(func() { _ = c.Close() })
+	}()
+
+	old := rand.Reader
+	rand.Reader = wsFailReader{}
+	t.Cleanup(func() { rand.Reader = old })
+
+	// The TCP dial succeeds, then generating the Sec-WebSocket-Key reads from
+	// rand.Reader and fails, covering the "read random key" branch.
+	_, _, err = Dial(context.Background(), "ws://"+ln.Addr().String()+"/", nil)
+	if err == nil || !strings.Contains(err.Error(), "read random key") {
+		t.Fatalf("err = %v, want a read random key error", err)
+	}
+}
+
+// wsSelfSignedCert returns a self-signed certificate valid for 127.0.0.1,
+// together with a pool that trusts it.
+func wsSelfSignedCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, pool
+}
+
+func TestWSDialWSSSuccess(t *testing.T) {
+	cert, pool := wsSelfSignedCert(t)
+
+	// Trust the test CA through the package seam, exercising the real wss://
+	// success path (TLS handshake, conn = tlsConn, and the wss->https scheme
+	// rewrite in buildHandshake).
+	old := tlsClientConfig
+	tlsClientConfig = func(host string) *tls.Config {
+		return &tls.Config{ServerName: host, RootCAs: pool}
+	}
+	t.Cleanup(func() { tlsClientConfig = old })
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			connCh <- nil
+			return
+		}
+		br := bufio.NewReader(c)
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			_ = c.Close()
+			connCh <- nil
+			return
+		}
+		key := req.Header.Get("Sec-WebSocket-Key")
+		writeRaw(t, c, "HTTP/1.1 101 Switching Protocols\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Sec-WebSocket-Accept: "+serverAcceptKey(t, key)+"\r\n\r\n")
+		connCh <- c
+	}()
+
+	conn, resp, err := Dial(context.Background(), "wss://"+ln.Addr().String()+"/gateway", nil)
+	if err != nil {
+		t.Fatalf("Dial wss: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(1000, "") })
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Errorf("status = %d, want 101", resp.StatusCode)
+	}
+	if srv := <-connCh; srv == nil {
+		t.Fatal("server connection was not established over TLS")
 	}
 }
