@@ -13,6 +13,7 @@ go run ./examples/<name>
 | [`apikeys`](apikeys) | Create, list, and inspect API keys |
 | [`oauth`](oauth) | OAuth 2.1 authorization-code flow with PKCE (browser login) |
 | [`oauthapps`](oauthapps) | Register/manage OAuth apps + client-credentials grant |
+| [`organization`](organization) | Read/rename the org, list members, invite/re-role/remove |
 | [`campaigns`](campaigns) | Create a campaign, add sequence steps, test, start, list |
 | [`contacts`](contacts) | Import contacts, search with pagination, bulk update |
 | [`emails`](emails) | List mailboxes, drive warmup, check ban status, send |
