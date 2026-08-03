@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,7 +24,8 @@ func main() {
 	}
 	ctx := context.Background()
 
-	// Discover the available event types.
+	// The catalog is the authoritative list of deliverable events, and marks
+	// the high-volume ones you have to opt into explicitly.
 	types, _, err := client.Webhooks.EventTypes(ctx)
 	if err != nil {
 		log.Fatal(err)
@@ -32,12 +34,12 @@ func main() {
 
 	// Register an endpoint subscribed to replies and bounces.
 	hook, _, err := client.Webhooks.Create(ctx, &warmbly.WebhookCreateParams{
-		URL: "https://app.example.com/webhooks/warmbly",
-		EventTypes: []string{
-			string(warmbly.EventCampaignReplyReceived),
-			string(warmbly.EventCampaignEmailBounced),
-		},
+		URL:         "https://app.example.com/webhooks/warmbly",
 		Description: "reply + bounce notifications",
+		EventTypes: []string{
+			warmbly.EventCampaignReplyReceived,
+			warmbly.EventCampaignEmailBounced,
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -46,25 +48,45 @@ func main() {
 	secret := hook.Secret
 	fmt.Println("created webhook", hook.ID)
 
-	// Receiver: verify every delivery before trusting its payload.
+	// A new endpoint receives nothing until it proves it owns its URL. This
+	// sends the challenge; the handler below echoes it back.
+	if _, err := client.Webhooks.Verify(ctx, hook.ID); err != nil {
+		log.Fatal(err)
+	}
+
 	http.HandleFunc("/webhooks/warmbly", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+
+		// Answer the ownership challenge by echoing it back.
+		if challenge := r.Header.Get(warmbly.WebhookChallengeHeader); challenge != "" {
+			_, _ = w.Write([]byte(challenge))
+			return
+		}
+
+		// Verify before trusting anything in the payload. ConstructEvent also
+		// rejects a stale signature, which defeats replay.
 		event, err := client.Webhooks.ConstructEvent(body, r.Header.Get(warmbly.WebhookSignatureHeader), secret)
-		if err != nil {
+		switch {
+		case errors.Is(err, warmbly.ErrWebhookSignatureExpired):
+			http.Error(w, "stale signature", http.StatusUnauthorized)
+			return
+		case err != nil:
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}
-		switch warmbly.WebhookEventName(event.Event) {
+
+		// Deliveries retry, so deduplicate on the event id before acting.
+		switch event.EventType {
 		case warmbly.EventCampaignReplyReceived:
-			log.Printf("reply received (delivery %s)", event.ID)
+			log.Printf("reply received (event %s)", event.ID)
 		case warmbly.EventCampaignEmailBounced:
-			log.Printf("email bounced (delivery %s)", event.ID)
+			log.Printf("email bounced (event %s)", event.ID)
 		default:
-			log.Printf("event %s (delivery %s)", event.Event, event.ID)
+			log.Printf("event %s (%s)", event.EventType, event.ID)
 		}
 		w.WriteHeader(http.StatusOK)
 	})

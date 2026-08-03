@@ -40,11 +40,13 @@ func TestClientHTTPWriteVerbs(t *testing.T) {
 			b, _ := io.ReadAll(r.Body)
 			gotBody = string(b)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":["acc_1","acc_2"]}`))
+			_, _ = w.Write([]byte(`{"data":[{"email_account_id":"acc_1"},{"email_account_id":"acc_2"}]}`))
 		})
-		senders, resp, err := c.Campaigns.SetSenders(context.Background(), "camp_1", []string{"acc_1", "acc_2"})
+		senders, resp, err := c.Campaigns.ReplaceSenders(context.Background(), "camp_1", []CampaignSenderInput{
+			{EmailAccountID: "acc_1"}, {EmailAccountID: "acc_2"},
+		})
 		if err != nil {
-			t.Fatalf("SetSenders: %v", err)
+			t.Fatalf("ReplaceSenders: %v", err)
 		}
 		if gotMethod != http.MethodPut {
 			t.Errorf("method = %s, want PUT", gotMethod)
@@ -55,7 +57,7 @@ func TestClientHTTPWriteVerbs(t *testing.T) {
 		if !strings.Contains(gotBody, `"acc_1"`) {
 			t.Errorf("body = %q, want it to contain acc_1", gotBody)
 		}
-		if strings.Join(senders, ",") != "acc_1,acc_2" {
+		if len(senders) != 2 || senders[0].EmailAccountID != "acc_1" || senders[1].EmailAccountID != "acc_2" {
 			t.Errorf("senders = %v", senders)
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -195,7 +197,7 @@ func TestClientHTTPDecodeBody(t *testing.T) {
 // path that cannot be parsed as a URL reference.
 func TestClientHTTPNewRequestInvalidPath(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {})
-	_, err := c.newRequest(context.Background(), http.MethodGet, "http://%zz", nil)
+	_, err := c.newRequest(context.Background(), http.MethodGet, "http://%zz", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for an invalid request path")
 	}
@@ -208,7 +210,7 @@ func TestClientHTTPNewRequestInvalidPath(t *testing.T) {
 // branch using a body value that cannot be marshaled (a channel).
 func TestClientHTTPNewRequestEncodeError(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {})
-	_, err := c.newRequest(context.Background(), http.MethodPost, "campaigns", make(chan int))
+	_, err := c.newRequest(context.Background(), http.MethodPost, "campaigns", make(chan int), nil)
 	if err == nil {
 		t.Fatal("expected an error encoding an unmarshalable body")
 	}
@@ -225,7 +227,7 @@ func TestClientHTTPNewRequestEncodeError(t *testing.T) {
 // failure branch using a method string containing illegal characters.
 func TestClientHTTPNewRequestBadMethod(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {})
-	_, err := c.newRequest(context.Background(), "BAD METHOD", "campaigns", nil)
+	_, err := c.newRequest(context.Background(), "BAD METHOD", "campaigns", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for an invalid HTTP method")
 	}
@@ -558,7 +560,7 @@ func TestClientHTTPNewRequestBodyAndHeaders(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	req, err := c.newRequest(context.Background(), http.MethodPost, "/campaigns", map[string]string{"name": "x"})
+	req, err := c.newRequest(context.Background(), http.MethodPost, "/campaigns", map[string]string{"name": "x"}, nil)
 	if err != nil {
 		t.Fatalf("newRequest: %v", err)
 	}
@@ -598,7 +600,7 @@ func TestClientHTTPDoRewindBodyError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"server_error","message":"down"}`))
 	})
 
-	req, err := c.newRequest(context.Background(), http.MethodPost, "campaigns", map[string]string{"name": "x"})
+	req, err := c.newRequest(context.Background(), http.MethodPost, "campaigns", map[string]string{"name": "x"}, nil)
 	if err != nil {
 		t.Fatalf("newRequest: %v", err)
 	}
@@ -634,7 +636,7 @@ func TestClientHTTPDoRewindsBodyOnRetry(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"camp_new","name":"Created"}`))
 	})
 
-	camp, _, err := c.Campaigns.Create(context.Background(), &CampaignCreateParams{Name: "Created", DailyLimit: 50})
+	camp, _, err := c.Campaigns.Create(context.Background(), &CampaignCreateParams{Name: "Created", DailyLimit: Int(50)})
 	if err != nil {
 		t.Fatalf("Create with retry: %v", err)
 	}

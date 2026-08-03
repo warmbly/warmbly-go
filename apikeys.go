@@ -6,170 +6,352 @@ import (
 	"time"
 )
 
-// APIKeyService manages API keys for the current organization.
+// APIKeyService manages the organization's API keys.
 //
 // API keys authenticate server-to-server requests and are prefixed "wmbly_".
-// The secret is shown exactly once, at creation time; only a prefix/suffix is
-// retrievable afterwards.
+// The secret is shown exactly once, at creation; afterwards only a prefix and
+// suffix are retrievable.
 type APIKeyService service
+
+// API permission bits. A key's grant is the bitwise OR of the scopes it holds,
+// which is what travels in [APIKey.Permissions]:
+//
+//	perms := warmbly.PermReadCampaigns | warmbly.PermWriteCampaigns
+//
+// These are distinct from the organization role permissions that gate a human
+// session.
+const (
+	// PermReadEmails grants reading mailboxes and their settings.
+	PermReadEmails uint64 = 1 << iota
+	// PermReadCampaigns grants reading campaigns and their steps.
+	PermReadCampaigns
+	// PermReadContacts grants reading contacts, notes and activities.
+	PermReadContacts
+	// PermReadUnibox grants reading the unified inbox.
+	PermReadUnibox
+	// PermReadAnalytics grants reading analytics and statistics.
+	PermReadAnalytics
+
+	// PermWriteEmails grants modifying mailbox settings.
+	PermWriteEmails
+	// PermWriteCampaigns grants creating and editing campaigns and steps.
+	PermWriteCampaigns
+	// PermWriteContacts grants creating and editing contacts, notes and
+	// activities.
+	PermWriteContacts
+	// PermWriteUnibox grants marking messages seen and sending replies.
+	PermWriteUnibox
+
+	// PermBulkContacts grants bulk contact import, export and delete. It is
+	// separate so a key can read and write without bulk power.
+	PermBulkContacts
+	// PermBulkCampaigns grants bulk campaign operations.
+	PermBulkCampaigns
+
+	// PermRealtimeSubscribe grants subscribing to the realtime gateway.
+	PermRealtimeSubscribe
+	// PermWebhooks grants managing webhook endpoints.
+	PermWebhooks
+
+	// PermAPIKeys grants creating, listing and revoking API keys, so an
+	// integration can rotate its own credentials.
+	PermAPIKeys
+
+	// PermSendCampaigns grants starting and stopping campaigns. It is separate
+	// from PermWriteCampaigns because starting one actually sends mail.
+	PermSendCampaigns
+
+	// PermReadTemplates grants reading reply templates.
+	PermReadTemplates
+	// PermWriteTemplates grants creating and editing reply templates.
+	PermWriteTemplates
+	// PermReadCRM grants reading pipelines, deals and CRM tasks.
+	PermReadCRM
+	// PermWriteCRM grants creating and editing pipelines, deals and CRM tasks.
+	PermWriteCRM
+
+	// PermReadAuditLogs grants reading the organization audit trail.
+	PermReadAuditLogs
+
+	// PermIntegrations grants connecting and managing third-party integrations
+	// and automations.
+	PermIntegrations
+	// PermWarmupRouting grants managing warmup routing rules.
+	PermWarmupRouting
+
+	// PermAIAgent grants running the AI assistant and the MCP tool surface.
+	PermAIAgent
+	// PermAIResearch grants running AI contact research.
+	PermAIResearch
+)
+
+// Preset permission masks matching the presets the API advertises.
+const (
+	// PermReadOnly grants every read scope and nothing else.
+	PermReadOnly = PermReadEmails | PermReadCampaigns | PermReadContacts |
+		PermReadUnibox | PermReadAnalytics | PermReadTemplates |
+		PermReadCRM | PermReadAuditLogs
+
+	// PermFullAccess grants every scope this SDK release knows about. A key
+	// minted with it will not pick up scopes added later.
+	PermFullAccess = PermReadOnly | PermWriteEmails | PermWriteCampaigns |
+		PermWriteContacts | PermWriteUnibox | PermBulkContacts |
+		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
+		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
+		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+)
+
+// API key lifecycle states returned in [APIKey.Status].
+const (
+	APIKeyStatusActive  = "active"
+	APIKeyStatusRevoked = "revoked"
+	APIKeyStatusExpired = "expired"
+)
 
 // APIKey is an API key as returned by the API. The full secret is never
 // included; see [APIKeyWithSecret], returned only by [APIKeyService.Create].
 type APIKey struct {
 	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
 	UserID         string `json:"user_id"`
+	OrganizationID string `json:"organization_id"`
 	Name           string `json:"name"`
-	// Prefix is the leading, non-secret portion shown in listings (e.g. the
-	// first 8 characters).
-	Prefix string `json:"prefix"`
-	// Suffix is the trailing portion shown in listings (e.g. the last 4
-	// characters), to help users disambiguate keys.
-	Suffix string `json:"suffix"`
-	// Scopes are the permission keys granted to the key.
-	Scopes []string `json:"scopes"`
-	// AllowedEmailAccounts optionally restricts the key to specific email
-	// account IDs. Empty means all accounts in the organization.
-	AllowedEmailAccounts []string `json:"allowed_email_accounts,omitempty"`
-	// AllowedIPs optionally restricts use to these IPs or CIDR ranges.
+	Description    string `json:"description,omitempty"`
+	// KeyPrefix and KeySuffix are the non-secret ends of the key, shown so a
+	// human can tell two keys apart.
+	KeyPrefix string `json:"key_prefix"`
+	KeySuffix string `json:"key_suffix"`
+	// Permissions is the granted scope bitmask; test it with [APIKey.Can].
+	Permissions uint64 `json:"permissions"`
+	// AllowedIPs restricts use to these IPs or CIDR ranges. Empty means any.
 	AllowedIPs []string `json:"allowed_ips,omitempty"`
-	// RateLimitPerMinute is the per-key request ceiling per minute.
-	RateLimitPerMinute int        `json:"rate_limit_per_minute"`
-	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
-	RevokedAt          *time.Time `json:"revoked_at,omitempty"`
-	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
-	LastUsedIP         string     `json:"last_used_ip,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// AllowedEmailAccounts restricts the key to specific mailbox ids. Empty
+	// means every mailbox in the organization.
+	AllowedEmailAccounts []string `json:"allowed_email_accounts,omitempty"`
+	// RateLimitPerMinute is the per-key request ceiling.
+	RateLimitPerMinute int `json:"rate_limit_per_minute"`
+	// Status is [APIKeyStatusActive], [APIKeyStatusRevoked] or
+	// [APIKeyStatusExpired].
+	Status        string     `json:"status"`
+	LastUsedAt    *time.Time `json:"last_used_at"`
+	LastRequestIP *string    `json:"last_request_ip"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+	RevokedAt     *time.Time `json:"revoked_at"`
+	RevokedReason *string    `json:"revoked_reason"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
+
+// Can reports whether the key holds every bit in perms.
+//
+//	if key.Can(warmbly.PermSendCampaigns) { ... }
+func (k *APIKey) Can(perms uint64) bool { return k.Permissions&perms == perms }
+
+// CanAny reports whether the key holds at least one bit in perms.
+func (k *APIKey) CanAny(perms uint64) bool { return k.Permissions&perms != 0 }
 
 // Revoked reports whether the key has been revoked.
 func (k *APIKey) Revoked() bool { return k.RevokedAt != nil }
 
-// APIKeyWithSecret is an API key together with its plaintext secret. The Secret
-// is only ever returned by [APIKeyService.Create]; store it securely.
+// APIKeyWithSecret is an API key together with its plaintext secret, returned
+// only by [APIKeyService.Create].
 type APIKeyWithSecret struct {
 	APIKey
-	// Secret is the full plaintext key (prefixed "wmbly_"). Capture it now; it
-	// cannot be retrieved again.
+	// Secret is the full plaintext credential (prefixed "wmbly_"). Capture it
+	// now; it cannot be retrieved again.
 	Secret string `json:"secret"`
 }
 
-// APIKeyCreateParams are the parameters for creating an API key.
+// APIKeyCreateParams provisions an API key. Name and Permissions are required.
 type APIKeyCreateParams struct {
-	Name                 string     `json:"name"`
-	Scopes               []string   `json:"scopes,omitempty"`
-	AllowedEmailAccounts []string   `json:"allowed_email_accounts,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Permissions is the scope bitmask, for example
+	// [PermReadOnly] or PermReadCampaigns|PermSendCampaigns.
+	Permissions          uint64     `json:"permissions"`
 	AllowedIPs           []string   `json:"allowed_ips,omitempty"`
+	AllowedEmailAccounts []string   `json:"allowed_email_accounts,omitempty"`
 	RateLimitPerMinute   int        `json:"rate_limit_per_minute,omitempty"`
 	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
 }
 
-// APIKeyUpdateParams are the parameters for updating an API key. Only non-nil
-// fields are sent, so zero values are not mistaken for "clear this field".
+// APIKeyUpdateParams updates an API key. Nil fields are left unchanged.
 type APIKeyUpdateParams struct {
-	Name                 *string    `json:"name,omitempty"`
-	Scopes               *[]string  `json:"scopes,omitempty"`
-	AllowedEmailAccounts *[]string  `json:"allowed_email_accounts,omitempty"`
-	AllowedIPs           *[]string  `json:"allowed_ips,omitempty"`
-	RateLimitPerMinute   *int       `json:"rate_limit_per_minute,omitempty"`
-	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	Name                 *string   `json:"name,omitempty"`
+	Description          *string   `json:"description,omitempty"`
+	Permissions          *uint64   `json:"permissions,omitempty"`
+	AllowedIPs           *[]string `json:"allowed_ips,omitempty"`
+	AllowedEmailAccounts *[]string `json:"allowed_email_accounts,omitempty"`
+	RateLimitPerMinute   *int      `json:"rate_limit_per_minute,omitempty"`
 }
 
-// APIKeyListParams filters and paginates a list of API keys.
-type APIKeyListParams struct {
-	ListOptions
-	// Search filters by name substring.
-	Search string
+// Permission describes one scope bit the API advertises.
+type Permission struct {
+	// Name is the stable identifier, for example "READ_CAMPAIGNS".
+	Name  string `json:"name"`
+	Value uint64 `json:"value"`
+	// Description is human-readable copy for a permission picker.
+	Description string `json:"description"`
+	// Category groups the bit as "read", "write", "bulk" or "special".
+	Category string `json:"category"`
 }
 
-func (p *APIKeyListParams) values() url.Values {
+// PermissionCatalog is the full set of API scopes plus the server's preset
+// masks. Prefer the presets over hard-coding a mask when you want "everything":
+// the server's value stays current as scopes are added.
+type PermissionCatalog struct {
+	Permissions []Permission      `json:"permissions"`
+	Presets     PermissionPresets `json:"presets"`
+}
+
+// PermissionPresets are the server-side preset masks.
+type PermissionPresets struct {
+	ReadOnly   uint64 `json:"read_only"`
+	FullAccess uint64 `json:"full_access"`
+}
+
+// APIKeyUsageSummary is a rollup of the organization's key usage.
+type APIKeyUsageSummary struct {
+	ActiveKeys  int `json:"active_keys"`
+	RevokedKeys int `json:"revoked_keys"`
+	ExpiredKeys int `json:"expired_keys"`
+	// Requests24h and Errors24h cover the last rolling day.
+	Requests24h     int64      `json:"requests_24h"`
+	Errors24h       int64      `json:"errors_24h"`
+	AvgLatencyMS24h float64    `json:"avg_latency_ms_24h"`
+	LastCallAt      *time.Time `json:"last_call_at"`
+}
+
+// Bucket granularities accepted by [APIKeyAnalyticsParams.Interval].
+const (
+	IntervalMinute = "minute"
+	IntervalHour   = "hour"
+	IntervalDay    = "day"
+)
+
+// APIKeyAnalyticsParams selects the window and granularity of a usage report.
+type APIKeyAnalyticsParams struct {
+	// From defaults to 24 hours before To; To defaults to now.
+	From time.Time
+	To   time.Time
+	// Interval is [IntervalMinute], [IntervalHour] or [IntervalDay].
+	Interval string
+}
+
+func (p *APIKeyAnalyticsParams) values() url.Values {
 	q := make(url.Values)
 	if p == nil {
 		return q
 	}
-	p.apply(q)
-	if p.Search != "" {
-		q.Set("search", p.Search)
-	}
+	setTime(q, "from", &p.From)
+	setTime(q, "to", &p.To)
+	setNonEmpty(q, "interval", p.Interval)
 	return q
 }
 
-// Permission describes a permission key that can be granted to an API key or
-// OAuth application.
-type Permission struct {
-	Key         string `json:"key"`
-	Description string `json:"description"`
-	Group       string `json:"group,omitempty"`
+// APIKeyAnalytics is call volume, latency and error rate over a window, both
+// bucketed over time and broken down by endpoint.
+type APIKeyAnalytics struct {
+	// APIKeyID is the key the report covers, or the zero UUID for the
+	// organization-wide report.
+	APIKeyID string    `json:"api_key_id"`
+	From     time.Time `json:"from"`
+	To       time.Time `json:"to"`
+	// Interval is one of the Interval* constants.
+	Interval  string               `json:"interval"`
+	Buckets   []APIKeyUsageBucket  `json:"buckets"`
+	Endpoints []APIKeyEndpointStat `json:"endpoints"`
+	Total     int64                `json:"total"`
+	Errors    int64                `json:"errors"`
 }
 
-// APIKeyUsageSummary is an aggregate usage report for the organization's keys.
-type APIKeyUsageSummary struct {
-	TotalRequests     int64      `json:"total_requests"`
-	ThrottledRequests int64      `json:"throttled_requests"`
-	WindowStart       *time.Time `json:"window_start,omitempty"`
-	WindowEnd         *time.Time `json:"window_end,omitempty"`
+// APIKeyUsageBucket is one time bucket of API traffic.
+type APIKeyUsageBucket struct {
+	Bucket       time.Time `json:"bucket"`
+	Total        int64     `json:"total"`
+	Success      int64     `json:"success"`
+	ClientErrors int64     `json:"client_errors"`
+	ServerErrors int64     `json:"server_errors"`
+	AvgLatencyMS float64   `json:"avg_latency_ms"`
+}
+
+// APIKeyEndpointStat is one endpoint's share of the traffic.
+type APIKeyEndpointStat struct {
+	Endpoint     string  `json:"endpoint"`
+	Method       string  `json:"method"`
+	Count        int64   `json:"count"`
+	ErrorCount   int64   `json:"error_count"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+}
+
+// APIKeyUsageLog is a single recorded API request made with a key.
+type APIKeyUsageLog struct {
+	ID             string    `json:"id"`
+	APIKeyID       string    `json:"api_key_id"`
+	Endpoint       string    `json:"endpoint"`
+	Method         string    `json:"method"`
+	IPAddress      string    `json:"ip_address"`
+	UserAgent      string    `json:"user_agent"`
+	ResponseCode   int       `json:"response_code"`
+	ResponseTimeMS int       `json:"response_time_ms"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // List returns a page of API keys.
-func (s *APIKeyService) List(ctx context.Context, params *APIKeyListParams) (*Page[APIKey], error) {
-	return listJSON[APIKey](ctx, s.client, "api-keys", params.values())
+func (s *APIKeyService) List(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[APIKey], error) {
+	q := make(url.Values)
+	params.apply(q)
+	return listJSON[APIKey](ctx, s.client, "api-keys", q, opts...)
 }
 
 // Get retrieves a single API key by ID.
-func (s *APIKeyService) Get(ctx context.Context, id string) (*APIKey, *Response, error) {
-	key := new(APIKey)
-	resp, err := s.client.get(ctx, "api-keys/"+url.PathEscape(id), key)
-	if err != nil {
-		return nil, resp, err
-	}
-	return key, resp, nil
+func (s *APIKeyService) Get(ctx context.Context, id string, opts ...RequestOption) (*APIKey, *Response, error) {
+	return fetch[APIKey](ctx, s.client, "api-keys/"+url.PathEscape(id), opts)
 }
 
 // Create provisions a new API key. The returned [APIKeyWithSecret] is the only
-// time the plaintext secret is available.
-func (s *APIKeyService) Create(ctx context.Context, params *APIKeyCreateParams) (*APIKeyWithSecret, *Response, error) {
-	key := new(APIKeyWithSecret)
-	resp, err := s.client.post(ctx, "api-keys", params, key)
-	if err != nil {
-		return nil, resp, err
-	}
-	return key, resp, nil
+// time the plaintext credential is available.
+func (s *APIKeyService) Create(ctx context.Context, params *APIKeyCreateParams, opts ...RequestOption) (*APIKeyWithSecret, *Response, error) {
+	return send[APIKeyWithSecret](ctx, s.client, s.client.post, "api-keys", params, opts)
 }
 
 // Update modifies an existing API key.
-func (s *APIKeyService) Update(ctx context.Context, id string, params *APIKeyUpdateParams) (*APIKey, *Response, error) {
-	key := new(APIKey)
-	resp, err := s.client.patch(ctx, "api-keys/"+url.PathEscape(id), params, key)
-	if err != nil {
-		return nil, resp, err
-	}
-	return key, resp, nil
+func (s *APIKeyService) Update(ctx context.Context, id string, params *APIKeyUpdateParams, opts ...RequestOption) (*APIKey, *Response, error) {
+	return send[APIKey](ctx, s.client, s.client.patch, "api-keys/"+url.PathEscape(id), params, opts)
 }
 
-// Revoke permanently revokes an API key.
-func (s *APIKeyService) Revoke(ctx context.Context, id string) (*Response, error) {
-	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id))
+// Revoke permanently revokes an API key. The reason is stored on the key and
+// may be empty.
+func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...RequestOption) (*Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "reason", reason)
+	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
 }
 
-// Permissions lists the permission keys that may be granted to API keys.
-func (s *APIKeyService) Permissions(ctx context.Context) ([]Permission, *Response, error) {
-	var out struct {
-		Data []Permission `json:"data"`
-	}
-	resp, err := s.client.get(ctx, "api-keys/permissions", &out)
-	if err != nil {
-		return nil, resp, err
-	}
-	return out.Data, resp, nil
+// Permissions lists every scope bit the API exposes, together with the preset
+// masks.
+func (s *APIKeyService) Permissions(ctx context.Context, opts ...RequestOption) (*PermissionCatalog, *Response, error) {
+	return fetch[PermissionCatalog](ctx, s.client, "api-keys/permissions", opts)
 }
 
-// UsageSummary returns an aggregate usage summary for the organization's keys.
-func (s *APIKeyService) UsageSummary(ctx context.Context) (*APIKeyUsageSummary, *Response, error) {
-	summary := new(APIKeyUsageSummary)
-	resp, err := s.client.get(ctx, "api-keys/usage/summary", summary)
-	if err != nil {
-		return nil, resp, err
-	}
-	return summary, resp, nil
+// UsageSummary returns a rollup of the organization's key usage.
+func (s *APIKeyService) UsageSummary(ctx context.Context, opts ...RequestOption) (*APIKeyUsageSummary, *Response, error) {
+	return fetch[APIKeyUsageSummary](ctx, s.client, "api-keys/usage/summary", opts)
+}
+
+// UsageAnalytics returns call volume and latency across every key in the
+// organization.
+func (s *APIKeyService) UsageAnalytics(ctx context.Context, params *APIKeyAnalyticsParams, opts ...RequestOption) (*APIKeyAnalytics, *Response, error) {
+	return fetch[APIKeyAnalytics](ctx, s.client, withQuery("api-keys/usage/analytics", params.values()), opts)
+}
+
+// Analytics returns call volume and latency for a single key.
+func (s *APIKeyService) Analytics(ctx context.Context, id string, params *APIKeyAnalyticsParams, opts ...RequestOption) (*APIKeyAnalytics, *Response, error) {
+	return fetch[APIKeyAnalytics](ctx, s.client, withQuery("api-keys/"+url.PathEscape(id)+"/analytics", params.values()), opts)
+}
+
+// Logs returns a page of individual requests made with a key.
+func (s *APIKeyService) Logs(ctx context.Context, id string, params *ListOptions, opts ...RequestOption) (*Page[APIKeyUsageLog], error) {
+	q := make(url.Values)
+	params.apply(q)
+	return listJSON[APIKeyUsageLog](ctx, s.client, "api-keys/"+url.PathEscape(id)+"/logs", q, opts...)
 }

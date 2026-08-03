@@ -10,16 +10,18 @@ The official Go SDK for the Warmbly cold-outreach & mailbox-warmup platform.
 [![Release](https://img.shields.io/github/v/release/warmbly/warmbly-go?sort=semver)](https://github.com/warmbly/warmbly-go/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`warmbly-go` is a fully typed client for the Warmbly REST API and its real-time event gateway. It covers everything from API-key and OAuth 2.1 authentication to campaigns, contacts, emails, webhooks, and analytics, plus a persistent gateway connection for live engagement events. **It has zero external dependencies** — the entire module is built on the Go standard library, including a dependency-free RFC 6455 WebSocket implementation, so adding it to your project pulls in nothing but Warmbly itself.
+`warmbly-go` is a fully typed client for the Warmbly REST API and its realtime event gateway. It covers the whole customer-facing v1 surface — mailboxes and warmup, campaigns and sequences, contacts and CRM, the unified inbox, integrations and automations, AI generation and the Advisor, analytics, webhooks, keys and billing — plus a persistent gateway connection for live events. **It has zero external dependencies**: the entire module is built on the Go standard library, including a dependency-free RFC 6455 WebSocket implementation, so adding it pulls in nothing but Warmbly itself.
 
 ## Features
 
-- **Typed REST client.** Services hang off a single `Client`: `client.APIKeys`, `client.OAuthApps`, `client.Emails`, `client.Campaigns`, `client.Contacts`, `client.Webhooks`, `client.Templates`, `client.Analytics`, and `client.Organization`.
-- **Flexible authentication.** API keys via `warmbly.WithAPIKey`, or OAuth 2.1 access tokens via `warmbly.WithAccessToken` / `warmbly.WithTokenSource`. Full OAuth client flows: authorization-code with PKCE and client-credentials, plus OAuth application management.
-- **Robust by default.** Automatic retries with exponential backoff and jitter (honouring `Retry-After`), rate-limit header parsing, and cursor pagination with a Go 1.23 auto-paging iterator.
-- **Typed errors.** A decoded `*warmbly.Error` carrying the request ID and message, matchable with `errors.Is` against sentinels such as `warmbly.ErrNotFound`, `warmbly.ErrUnauthorized`, and `warmbly.ErrRateLimited`.
-- **Webhook signature verification.** HMAC-SHA256 verification via `warmbly.VerifyWebhookSignature` and `client.Webhooks.ConstructEvent`.
-- **Real-time gateway.** A persistent connection with intent-based subscriptions, typed event handlers, automatic heartbeat, session resume, and reconnect.
+- **The whole API, typed.** Every service hangs off one `Client`; see [Services](#services) for the map.
+- **Flexible authentication.** API keys via `warmbly.WithAPIKey`, OAuth 2.1 access tokens via `warmbly.WithAccessToken` / `warmbly.WithTokenSource`, and session tokens from `client.Auth.Login` for the routes an API key deliberately cannot reach. Full OAuth client flows: authorization-code with PKCE and client-credentials.
+- **Safe retries.** Exponential backoff with jitter honoring `Retry-After`, plus per-request `Idempotency-Key` support so retrying a send never sends twice.
+- **Typed errors.** A decoded `*warmbly.Error` carrying the request ID and message, matchable with `errors.Is` against sentinels such as `warmbly.ErrNotFound` and `warmbly.ErrRateLimited`.
+- **Cursor pagination.** A generic `Page[T]` with a Go 1.23 auto-paging iterator.
+- **Webhook verification.** Signature and replay checking via `client.Webhooks.ConstructEvent`.
+- **Realtime gateway.** A persistent connection with intent filtering, typed handlers, heartbeats, reconnection and sequence-based replay of missed events.
+- **Forward compatible.** `client.Do` reaches an endpoint this release does not model yet, and `WithQueryParam` adds a filter that landed after it shipped.
 - **Zero dependencies.** Standard library only. No transitive supply chain to audit.
 
 ## Installation
@@ -104,6 +106,22 @@ client, err := warmbly.New(warmbly.WithAccessToken("..."))
 
 > **Transparent refresh.** Pass a token source with `warmbly.WithTokenSource` to have the client fetch and refresh tokens automatically, so requests never fail on an expired access token. The configs returned by the OAuth flows produce clients backed by a refreshing token source out of the box.
 
+### Session tokens
+
+Some of the API is deliberately unreachable with a long-lived key: workspace governance, billing, and the AI assistant all act as a named person rather than an integration. `client.Auth` signs a user in and yields a session token for those.
+
+Sign-in is two steps. The first emails a code; the second exchanges it for tokens. An account with two-factor enabled takes one more, through `Auth.VerifyTwoFA`.
+
+```go
+session, _, err := client.Auth.Login(ctx, &warmbly.LoginParams{Email: email, Password: password})
+tokens, _, err := client.Auth.LoginConfirm(ctx, &warmbly.ConfirmParams{Session: session, Code: emailedCode})
+
+authed, err := warmbly.New(warmbly.WithAccessToken(tokens.AccessToken))
+org, _, err := authed.Organization.Current(ctx)
+```
+
+An API key used on one of these routes gets a clean `warmbly.ErrUnauthorized` rather than a confusing failure.
+
 ## Working with resources
 
 Every resource is exposed as a service on the `Client`. Listing returns a page that you can iterate with the auto-paging iterator; individual records are fetched by ID, and most resources support creation:
@@ -139,7 +157,63 @@ if err != nil {
 fmt.Println(created.ID)
 ```
 
-The full set of services: `client.APIKeys`, `client.OAuthApps`, `client.Emails`, `client.Campaigns`, `client.Contacts`, `client.Webhooks`, `client.Templates`, `client.Analytics`, and `client.Organization`.
+## Services
+
+| Service | What it covers |
+| --- | --- |
+| `client.Emails` | Connected mailboxes, warmup lifecycle, domain authentication, address verification, one-off sends |
+| `client.Campaigns` | Campaigns, sequence steps, A/B variants, attachments, senders, preflight, template preview |
+| `client.Contacts` | Contacts and the 360 view, faceted search, CRM notes, import and export, AI research |
+| `client.Unibox` | Unified inbox: reading, replying, composing, labels, snoozes, scheduled sends, AI drafts |
+| `client.Templates` | Reply templates, spam scoring, rendering, ordering |
+| `client.Analytics` | Dashboard, per-campaign engagement, warmup progress, deliverability health, plan usage |
+| `client.Advisor` | Continuous checks on sending posture, with one-click and agent fixes |
+| `client.CRM` | Pipelines, deals, task types and the task board |
+| `client.Teams` | Named groups of members for CRM assignment |
+| `client.Meetings` | Calls booked through a connected scheduler |
+| `client.Integrations` | Third-party connections, event subscriptions, field mappings, contact pushes |
+| `client.Automations` | Event-triggered flows across those connections |
+| `client.LeadSync` | Google Sheets to contacts sync |
+| `client.Generation` | AI writing and rewriting |
+| `client.Skills` | Workspace AI playbooks that steer it |
+| `client.Webhooks` | Endpoints, the event catalog, and the delivery log |
+| `client.APIKeys` | Keys, scopes and usage analytics |
+| `client.OAuthApps` | OAuth 2.1 application registration and the consent flow |
+| `client.Outreach` | Organization-wide sending policy |
+| `client.Deliverability` | Bounce and complaint ingestion from an upstream pipeline |
+| `client.WarmupRouting` | Warmup partner-selection rules |
+| `client.Tasks` | Send-task dead-letter queue |
+| `client.AuditLogs` | The organization audit trail |
+| `client.Folders` / `Tags` / `Categories` | The label sets that organize campaigns, mailboxes and contacts |
+| `client.Meta` | Caller identity, plan catalog, timezones |
+| `client.Auth` | Sign-in, sessions, profile, two-factor, passkeys, notifications |
+| `client.Organization` | Workspace settings, members, roles, invitations, danger zone |
+| `client.Billing` | Subscription, plan changes, AI credits, referrals |
+
+`Auth`, `Organization` and `Billing` are session-only; see [Session tokens](#session-tokens).
+
+### Reaching something new
+
+The API moves faster than this SDK's release cadence. `client.Do` issues a request against any path, with the same authentication, retries and typed errors as a generated method:
+
+```go
+var out map[string]any
+_, err := client.Do(ctx, http.MethodGet, "some/new/endpoint", nil, &out)
+```
+
+`warmbly.WithQueryParam` does the same for a filter that a typed parameter struct does not carry yet.
+
+## Idempotency
+
+Anything that sends mail or spends money accepts an `Idempotency-Key`. Retrying with the same key replays the original response instead of acting twice, which turns an ambiguous timeout into a safe retry:
+
+```go
+result, resp, err := client.Emails.Send(ctx, mailboxID, params,
+    warmbly.WithIdempotencyKey("order-4171-welcome"))
+if resp.IdempotentReplayed {
+    // The original send already went out; this was a replay.
+}
+```
 
 ## Pagination
 
@@ -187,17 +261,20 @@ client, err := warmbly.New(
 )
 ```
 
-## Real-time gateway
+## Realtime gateway
 
-The `gateway` subpackage maintains a persistent connection to Warmbly's event gateway and delivers typed events as they happen. You subscribe to **intents** (categories of events) and register typed handlers with `gateway.On`; the gateway takes care of heartbeats, session resume, and reconnection automatically.
+The `gateway` subpackage holds a websocket open to a workspace and delivers typed events as they happen. Declare the **intents** you want, register handlers with `gateway.On`, and the client handles heartbeats, reconnection and replay of missed events.
 
 ```go
 import "github.com/warmbly/warmbly-go/gateway"
 
-g := gateway.New(apiKey, gateway.WithIntents(gateway.IntentEmailEngagement|gateway.IntentCampaigns))
+g := gateway.New(apiKey, orgID,
+    gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail))
+
 gateway.On(g, gateway.EventEmailOpened, func(ctx context.Context, e *gateway.EngagementEvent) {
     log.Printf("contact %s opened a message", e.ContactID)
 })
+
 if err := g.Open(ctx); err != nil {
     log.Fatal(err)
 }
@@ -205,21 +282,29 @@ defer g.Close()
 <-ctx.Done()
 ```
 
-The underlying WebSocket transport is a dependency-free RFC 6455 implementation living in `internal/wsconn`, so the gateway adds no third-party packages either. See the [gateway package documentation](https://pkg.go.dev/github.com/warmbly/warmbly-go/gateway) for the full list of intents, events, and handler types.
+Every event carries a monotonic per-workspace sequence number. The client replays the gap after a reconnect, so a brief drop loses nothing; replay is at-least-once, so deduplicate on `Event.Seq` if your handler is not idempotent. A disconnect that outlasts the server's buffer surfaces as `EventResumeFailed`, your cue to resync from the REST API.
+
+Intents only ever narrow the stream — a credential without unibox access receives no inbox events however it asks. The underlying transport is the dependency-free RFC 6455 implementation in `internal/wsconn`, so the gateway adds no third-party packages either.
 
 ## Webhooks
 
-Verify inbound webhook payloads before trusting them. `client.Webhooks.ConstructEvent` validates the HMAC-SHA256 signature (sent in the `X-Webhook-Signature` header) and returns the decoded event:
+Verify every inbound delivery before trusting it. `client.Webhooks.ConstructEvent` checks the HMAC-SHA256 signature from the `X-Warmbly-Signature` header and rejects a stale one, which defeats replay:
 
 ```go
 event, err := client.Webhooks.ConstructEvent(body, r.Header.Get(warmbly.WebhookSignatureHeader), endpointSecret)
-if err != nil {
-    http.Error(w, "invalid signature", http.StatusBadRequest)
+switch {
+case errors.Is(err, warmbly.ErrWebhookSignatureExpired):
+    http.Error(w, "stale signature", http.StatusUnauthorized)
+    return
+case err != nil:
+    http.Error(w, "invalid signature", http.StatusUnauthorized)
     return
 }
 ```
 
-For lower-level use you can call `warmbly.VerifyWebhookSignature` directly.
+A new endpoint receives nothing until it proves it owns its URL: call `client.Webhooks.Verify`, then echo the `X-Warmbly-Webhook-Challenge` header back from your handler. Deliveries retry, so deduplicate on `event.ID`.
+
+For lower-level use, `warmbly.VerifyWebhookSignature` and `warmbly.ConstructWebhookEvent` expose the same checks with an explicit tolerance.
 
 ## Examples
 

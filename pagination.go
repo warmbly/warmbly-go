@@ -25,12 +25,14 @@ type Pagination struct {
 
 // ListOptions are the pagination controls common to every list endpoint.
 // Resource-specific list parameter types embed it.
+// They always travel in the query string, so they are never serialized into a
+// request body even when embedded in a POST-search parameter type.
 type ListOptions struct {
 	// Limit is the maximum number of items per page (server-capped, typically
 	// at 100). Zero uses the server default.
-	Limit int
+	Limit int `json:"-"`
 	// Cursor is the opaque pagination token from a previous page's NextCursor.
-	Cursor string
+	Cursor string `json:"-"`
 }
 
 func (o *ListOptions) apply(q url.Values) {
@@ -122,13 +124,9 @@ func (p *Page[T]) All(ctx context.Context) iter.Seq2[T, error] {
 // listJSON fetches one page from a list endpoint and wires up the closure used
 // to fetch following pages. It is the generic backend for every service's List
 // method (Go method sets cannot be generic, so this is a free function).
-func listJSON[T any](ctx context.Context, c *Client, path string, query url.Values) (*Page[T], error) {
-	u := path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
+func listJSON[T any](ctx context.Context, c *Client, path string, query url.Values, opts ...RequestOption) (*Page[T], error) {
 	page := &Page[T]{}
-	resp, err := c.get(ctx, u, page)
+	resp, err := c.get(ctx, withQuery(path, query), page, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,9 +134,34 @@ func listJSON[T any](ctx context.Context, c *Client, path string, query url.Valu
 	page.fetch = func(ctx context.Context, cursor string) (*Page[T], error) {
 		q := cloneValues(query)
 		q.Set("cursor", cursor)
-		return listJSON[T](ctx, c, path, q)
+		return listJSON[T](ctx, c, path, q, opts...)
 	}
 	return page, nil
+}
+
+// listPostJSON is listJSON for the search endpoints, which take their filters
+// in a POST body while paginating through the query string.
+func listPostJSON[T any](ctx context.Context, c *Client, path string, query url.Values, body any, opts ...RequestOption) (*Page[T], error) {
+	page := &Page[T]{}
+	resp, err := c.post(ctx, withQuery(path, query), body, page, opts...)
+	if err != nil {
+		return nil, err
+	}
+	page.resp = resp
+	page.fetch = func(ctx context.Context, cursor string) (*Page[T], error) {
+		q := cloneValues(query)
+		q.Set("cursor", cursor)
+		return listPostJSON[T](ctx, c, path, q, body, opts...)
+	}
+	return page, nil
+}
+
+// withQuery appends an encoded query string to path when there is one.
+func withQuery(path string, query url.Values) string {
+	if len(query) == 0 {
+		return path
+	}
+	return path + "?" + query.Encode()
 }
 
 func cloneValues(v url.Values) url.Values {

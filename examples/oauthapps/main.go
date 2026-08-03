@@ -1,6 +1,6 @@
 // Command oauthapps demonstrates registering and managing an OAuth 2.1
-// application, then using its credentials for machine-to-machine access via the
-// client-credentials grant.
+// application, then using its credentials for machine-to-machine access through
+// the client-credentials grant.
 //
 //	WARMBLY_API_KEY=wmbly_... go run ./examples/oauthapps
 package main
@@ -15,26 +15,39 @@ import (
 )
 
 func main() {
-	// Manage applications with an admin API key.
+	// Applications are managed with a key that may manage API credentials.
 	admin, err := warmbly.New(warmbly.WithAPIKey(os.Getenv("WARMBLY_API_KEY")))
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
 
-	app, _, err := admin.OAuthApps.Create(ctx, &warmbly.OAuthAppCreateParams{
+	// Scopes are the same bitmask API keys use.
+	app, _, err := admin.OAuthApps.Create(ctx, &warmbly.OAuthAppParams{
 		Name:         "Reporting Bot",
 		Description:  "Reads analytics on a schedule",
 		RedirectURIs: []string{"https://app.example.com/callback"},
-		Scopes:       []string{"analytics:read", "campaigns:read"},
+		Scopes:       warmbly.PermReadAnalytics | warmbly.PermReadCampaigns,
+
+		// An app-level webhook subscription delivers to every workspace that
+		// authorizes the app. Its host must sit inside the allowed domains.
+		AllowedWebhookDomains: []string{"app.example.com"},
+		WebhookURL:            "https://app.example.com/webhooks/warmbly",
+		WebhookEvents:         []string{warmbly.EventCampaignCompleted},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	// ClientID and ClientSecret are available now; the secret won't be shown again.
+	// The client secret is available only now.
 	fmt.Println("registered app", app.ClientID)
 
-	// Use the app's own credentials (no user) to call the API.
+	// The app-webhook secret verifies deliveries exactly like an ordinary
+	// endpoint's; see VerifyWebhookSignature.
+	if hookSecret, _, err := admin.OAuthApps.WebhookSecret(ctx, app.ID); err == nil {
+		fmt.Printf("app webhook secret is %d characters\n", len(hookSecret))
+	}
+
+	// Act as the application itself, with no user in the loop.
 	cc := &warmbly.ClientCredentialsConfig{
 		ClientID:     app.ClientID,
 		ClientSecret: app.ClientSecret,
@@ -44,16 +57,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	dash, _, err := client.Analytics.Dashboard(ctx, nil)
+	dash, _, err := client.Analytics.Dashboard(ctx, warmbly.Period7Days)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("dashboard: %d emails sent, %.1f%% reply rate\n", dash.EmailsSent, dash.ReplyRate*100)
+	fmt.Printf("dashboard: %d emails sent, %.1f%% reply rate\n",
+		dash.OverallStats.TotalEmailsSent, dash.OverallStats.ReplyRate*100)
 
-	// Rotate the secret if it may have leaked.
+	// Rotate the secret if it may have leaked. The old one stops working at
+	// once, so deploy the new one first.
 	rotated, _, err := admin.OAuthApps.RotateSecret(ctx, app.ID)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("rotated secret for", rotated.ClientID)
+	fmt.Printf("rotated secret (%d characters)\n", len(rotated))
 }
