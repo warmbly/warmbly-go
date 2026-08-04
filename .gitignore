@@ -8,6 +8,25 @@
 *.so
 *.dylib
 
+# `go build ./examples/<name>` drops the compiled binary in the working
+# directory under the package's own name, which is easy to commit by accident.
+/analytics
+/apikeys
+/campaigns
+/contacts
+/emails
+/errors
+/gateway/gateway
+/oauth
+/oauthapps
+/organization
+/templates
+/webhooks
+
+# macOS AppleDouble sidecars, which appear on non-APFS volumes.
+._*
+.DS_Store
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -30,3 +49,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# macOS sidecar files, which appear on non-APFS volumes.
+._*
+.DS_Store
