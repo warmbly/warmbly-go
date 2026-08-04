@@ -1,7 +1,7 @@
-// Command gateway streams real-time events from the Warmbly gateway and logs
-// them until interrupted.
+// Command gateway streams realtime events from a workspace and logs them until
+// interrupted.
 //
-//	WARMBLY_API_KEY=wmbly_... go run ./examples/gateway
+//	WARMBLY_API_KEY=wmbly_... WARMBLY_ORG_ID=... go run ./examples/gateway
 package main
 
 import (
@@ -15,8 +15,10 @@ import (
 )
 
 func main() {
-	g := gateway.New(os.Getenv("WARMBLY_API_KEY"),
-		gateway.WithIntents(gateway.IntentEmailEngagement|gateway.IntentCampaigns|gateway.IntentWarmup),
+	g := gateway.New(os.Getenv("WARMBLY_API_KEY"), os.Getenv("WARMBLY_ORG_ID"),
+		// Narrow the stream to the families this process cares about. Omit this
+		// to receive everything the credential may see.
+		gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail, gateway.IntentWarmup),
 		gateway.WithLogger(log.Printf),
 	)
 
@@ -26,9 +28,16 @@ func main() {
 	gateway.On(g, gateway.EventEmailClicked, func(_ context.Context, e *gateway.EngagementEvent) {
 		log.Printf("clicked: contact=%s url=%s", e.ContactID, e.URL)
 	})
-	gateway.On(g, gateway.EventWarmupHealthChanged, func(_ context.Context, e *gateway.WarmupEvent) {
-		log.Printf("warmup health for %s is now %s (%.0f)", e.EmailAccountID, e.Health, e.Score)
+	gateway.On(g, gateway.EventAccountHealthChanged, func(_ context.Context, e *gateway.AccountEvent) {
+		log.Printf("mailbox %s health is now %s", e.Email, e.Health)
 	})
+
+	// A resume failure means the disconnect outlasted the server's replay
+	// buffer: resync from the REST API rather than assuming you saw everything.
+	gateway.On(g, gateway.EventResumeFailed, func(_ context.Context, e *gateway.ResumeFailed) {
+		log.Printf("resume failed (%s); resync from sequence %d", e.Reason, e.CurrentSeq)
+	})
+
 	g.HandleAny(func(_ context.Context, e *gateway.Event) {
 		log.Printf("event %s (seq %d)", e.Type, e.Seq)
 	})
@@ -41,6 +50,10 @@ func main() {
 	}
 	defer g.Close()
 
-	log.Println("connected; streaming events (ctrl-c to quit)")
+	log.Printf("connected at sequence %d; streaming (ctrl-c to quit)", g.Ready().Seq)
 	<-ctx.Done()
+
+	// Persist the position so a restart can pick up where this left off with
+	// gateway.WithResumeFrom.
+	log.Printf("last sequence seen: %d", g.LastSeq())
 }
