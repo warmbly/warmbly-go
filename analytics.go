@@ -3,131 +3,442 @@ package warmbly
 import (
 	"context"
 	"net/url"
+	"strings"
 	"time"
 )
 
-// AnalyticsService reads aggregate analytics for the current organization. All
-// of its operations are read-only.
+// AnalyticsService reads aggregate analytics: the organization dashboard,
+// per-campaign engagement, warmup progress, deliverability health, mailbox
+// status and plan usage. Every operation is read-only.
+//
+// The date-range endpoints take plain calendar days, which the SDK formats as
+// YYYY-MM-DD in UTC.
 type AnalyticsService service
 
-// AnalyticsRange optionally restricts an analytics query to a time window and
-// selects the bucket size of any returned time series.
-type AnalyticsRange struct {
-	// From is the inclusive start of the window. Nil leaves it unbounded.
-	From *time.Time
-	// To is the inclusive end of the window. Nil leaves it unbounded.
-	To *time.Time
-	// Granularity is the time-series bucket size: "day", "week" or "month".
-	// Empty uses the server default.
-	Granularity string
+// Rolling windows accepted by [AnalyticsService.Dashboard].
+const (
+	Period7Days  = "7d"
+	Period30Days = "30d"
+	Period90Days = "90d"
+)
+
+// Usage windows accepted by [AnalyticsService.Usage].
+const (
+	UsagePeriodDay   = "day"
+	UsagePeriodWeek  = "week"
+	UsagePeriodMonth = "month"
+)
+
+// DateRange is the window an analytics response covers.
+type DateRange struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
 }
 
-func (r *AnalyticsRange) values() url.Values {
-	q := make(url.Values)
-	if r == nil {
-		return q
-	}
-	if r.From != nil {
-		q.Set("from", r.From.Format(time.RFC3339))
-	}
-	if r.To != nil {
-		q.Set("to", r.To.Format(time.RFC3339))
-	}
-	if r.Granularity != "" {
-		q.Set("granularity", r.Granularity)
-	}
-	return q
-}
-
-// withQuery appends an encoded query string to path, omitting the "?" entirely
-// when there are no parameters to send.
-func withQuery(path string, q url.Values) string {
-	if len(q) == 0 {
-		return path
-	}
-	return path + "?" + q.Encode()
-}
-
-// TimeseriesPoint is a single bucket of time-series analytics.
-type TimeseriesPoint struct {
-	Date    time.Time `json:"date"`
-	Sent    int64     `json:"sent"`
-	Opens   int64     `json:"opens"`
-	Clicks  int64     `json:"clicks"`
-	Replies int64     `json:"replies"`
-}
-
-// DashboardAnalytics is the organization-wide analytics summary.
+// DashboardAnalytics is the organization-wide engagement summary.
 type DashboardAnalytics struct {
-	EmailsSent      int64             `json:"emails_sent"`
-	Delivered       int64             `json:"delivered"`
-	Opens           int64             `json:"opens"`
-	Clicks          int64             `json:"clicks"`
-	Replies         int64             `json:"replies"`
-	Bounces         int64             `json:"bounces"`
-	Unsubscribes    int64             `json:"unsubscribes"`
-	OpenRate        float64           `json:"open_rate"`
-	ReplyRate       float64           `json:"reply_rate"`
-	BounceRate      float64           `json:"bounce_rate"`
-	ActiveCampaigns int               `json:"active_campaigns"`
-	Series          []TimeseriesPoint `json:"series,omitempty"`
+	// Period is [Period7Days], [Period30Days] or [Period90Days].
+	Period         string              `json:"period"`
+	OverallStats   OverallStats        `json:"overall_stats"`
+	RecentActivity []ActivityEvent     `json:"recent_activity"`
+	TopCampaigns   []CampaignSummary   `json:"top_campaigns"`
+	AccountHealth  AccountHealthTotals `json:"account_health"`
+	DailyTrend     []DailyStat         `json:"daily_trend"`
 }
 
-// CampaignAnalytics is the analytics summary for a single campaign.
+// OverallStats are the headline counters for the dashboard window.
+type OverallStats struct {
+	TotalEmailsSent int64 `json:"total_emails_sent"`
+	TotalOpens      int64 `json:"total_opens"`
+	// MachineOpens are opens attributed to a mail-privacy proxy rather than a
+	// human, and are excluded from OpenRate.
+	MachineOpens    int64   `json:"machine_opens"`
+	TotalClicks     int64   `json:"total_clicks"`
+	TotalReplies    int64   `json:"total_replies"`
+	TotalBounces    int64   `json:"total_bounces"`
+	OpenRate        float64 `json:"open_rate"`
+	ClickRate       float64 `json:"click_rate"`
+	ReplyRate       float64 `json:"reply_rate"`
+	BounceRate      float64 `json:"bounce_rate"`
+	ActiveCampaigns int     `json:"active_campaigns"`
+	ActiveAccounts  int     `json:"active_accounts"`
+}
+
+// ActivityEvent is one recent engagement event on the dashboard feed.
+type ActivityEvent struct {
+	// Type is the engagement, for example "open", "click" or "reply".
+	Type         string    `json:"type"`
+	CampaignID   string    `json:"campaign_id"`
+	CampaignName string    `json:"campaign_name"`
+	ContactEmail string    `json:"contact_email"`
+	ContactID    string    `json:"contact_id"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// CampaignSummary is one campaign's headline engagement.
+type CampaignSummary struct {
+	CampaignID string  `json:"campaign_id"`
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
+	EmailsSent int64   `json:"emails_sent"`
+	OpenRate   float64 `json:"open_rate"`
+	ClickRate  float64 `json:"click_rate"`
+	ReplyRate  float64 `json:"reply_rate"`
+	BounceRate float64 `json:"bounce_rate,omitempty"`
+}
+
+// AccountHealthTotals counts mailboxes by health band.
+type AccountHealthTotals struct {
+	TotalAccounts   int `json:"total_accounts"`
+	HealthyAccounts int `json:"healthy_accounts"`
+	WarningAccounts int `json:"warning_accounts"`
+	ErrorAccounts   int `json:"error_accounts"`
+}
+
+// DailyStat is one day of engagement on a trend line.
+type DailyStat struct {
+	// Date is a calendar day formatted YYYY-MM-DD.
+	Date    string `json:"date"`
+	Sent    int64  `json:"sent"`
+	Opens   int64  `json:"opens"`
+	Clicks  int64  `json:"clicks"`
+	Replies int64  `json:"replies"`
+}
+
+// HourlyStat is one hour of engagement within a day.
+type HourlyStat struct {
+	// Hour is 0-23 in the organization timezone.
+	Hour    int   `json:"hour"`
+	Sent    int64 `json:"sent"`
+	Opens   int64 `json:"opens"`
+	Clicks  int64 `json:"clicks"`
+	Replies int64 `json:"replies"`
+}
+
+// CampaignAnalytics is one campaign's engagement, broken down by step.
 type CampaignAnalytics struct {
-	CampaignID   string            `json:"campaign_id"`
-	Sent         int64             `json:"sent"`
-	Delivered    int64             `json:"delivered"`
-	Opens        int64             `json:"opens"`
-	UniqueOpens  int64             `json:"unique_opens"`
-	Clicks       int64             `json:"clicks"`
-	Replies      int64             `json:"replies"`
-	Bounces      int64             `json:"bounces"`
-	Unsubscribes int64             `json:"unsubscribes"`
-	OpenRate     float64           `json:"open_rate"`
-	ReplyRate    float64           `json:"reply_rate"`
-	Series       []TimeseriesPoint `json:"series,omitempty"`
+	CampaignID string                  `json:"campaign_id"`
+	Name       string                  `json:"name"`
+	Status     string                  `json:"status"`
+	DateRange  DateRange               `json:"date_range"`
+	Summary    CampaignAnalyticsTotals `json:"summary"`
+	Steps      []StepAnalytics         `json:"steps"`
 }
 
-// WarmupAnalytics is the analytics summary for mailbox warmup activity.
+// CampaignAnalyticsTotals are a campaign's headline counters.
+type CampaignAnalyticsTotals struct {
+	TotalContacts int64 `json:"total_contacts"`
+	EmailsSent    int64 `json:"emails_sent"`
+	// EmailsPending are queued sends not yet dispatched.
+	EmailsPending int64   `json:"emails_pending"`
+	UniqueOpens   int64   `json:"unique_opens"`
+	MachineOpens  int64   `json:"machine_opens"`
+	UniqueClicks  int64   `json:"unique_clicks"`
+	Replies       int64   `json:"replies"`
+	Bounces       int64   `json:"bounces"`
+	Unsubscribes  int64   `json:"unsubscribes"`
+	OpenRate      float64 `json:"open_rate"`
+	ClickRate     float64 `json:"click_rate"`
+	ReplyRate     float64 `json:"reply_rate"`
+	BounceRate    float64 `json:"bounce_rate"`
+}
+
+// StepAnalytics is one sequence step's engagement.
+type StepAnalytics struct {
+	StepID     string `json:"step_id"`
+	Name       string `json:"name"`
+	Position   int    `json:"position"`
+	EmailsSent int64  `json:"emails_sent"`
+	Opens      int64  `json:"opens"`
+	Clicks     int64  `json:"clicks"`
+	Replies    int64  `json:"replies"`
+	Bounces    int64  `json:"bounces"`
+}
+
+// CampaignComparison compares several campaigns over one window.
+type CampaignComparison struct {
+	Campaigns []CampaignSummary `json:"campaigns"`
+	Period    DateRange         `json:"period"`
+}
+
+// WarmupAnalytics is warmup progress for one mailbox, or for the organization
+// when no mailbox was named.
 type WarmupAnalytics struct {
-	AccountsWarming int               `json:"accounts_warming"`
-	HealthScore     float64           `json:"health_score"`
-	SentToday       int64             `json:"sent_today"`
-	InboxRate       float64           `json:"inbox_rate"`
-	SpamRate        float64           `json:"spam_rate"`
-	Series          []TimeseriesPoint `json:"series,omitempty"`
+	EmailAccountID string            `json:"email_account_id"`
+	Email          string            `json:"email"`
+	DateRange      DateRange         `json:"date_range"`
+	Summary        WarmupSummary     `json:"summary"`
+	DailyStats     []WarmupDailyStat `json:"daily_stats"`
 }
 
-// Dashboard retrieves the organization-wide analytics summary, optionally scoped
-// to a time range.
-func (s *AnalyticsService) Dashboard(ctx context.Context, params *AnalyticsRange) (*DashboardAnalytics, *Response, error) {
-	out := new(DashboardAnalytics)
-	resp, err := s.client.get(ctx, withQuery("analytics/dashboard", params.values()), out)
-	if err != nil {
-		return nil, resp, err
-	}
-	return out, resp, nil
+// WarmupSummary is the rollup for a warmup window.
+type WarmupSummary struct {
+	TotalSent    int64   `json:"total_sent"`
+	TotalReplied int64   `json:"total_replied"`
+	AverageDaily float64 `json:"average_daily"`
+	ReplyRate    float64 `json:"reply_rate"`
+	// TargetProgress is how far the ramp has come, from 0 to 1.
+	TargetProgress float64 `json:"target_progress"`
+	DaysActive     int     `json:"days_active"`
 }
 
-// Campaign retrieves the analytics summary for a single campaign, optionally
-// scoped to a time range.
-func (s *AnalyticsService) Campaign(ctx context.Context, id string, params *AnalyticsRange) (*CampaignAnalytics, *Response, error) {
-	out := new(CampaignAnalytics)
-	resp, err := s.client.get(ctx, withQuery("analytics/campaigns/"+url.PathEscape(id), params.values()), out)
-	if err != nil {
-		return nil, resp, err
-	}
-	return out, resp, nil
+// WarmupDailyStat is one day of warmup volume against its target.
+type WarmupDailyStat struct {
+	Date          string `json:"date"`
+	EmailsSent    int64  `json:"emails_sent"`
+	EmailsReplied int64  `json:"emails_replied"`
+	TargetVolume  int64  `json:"target_volume"`
 }
 
-// Warmup retrieves the mailbox-warmup analytics summary, optionally scoped to a
-// time range.
-func (s *AnalyticsService) Warmup(ctx context.Context, params *AnalyticsRange) (*WarmupAnalytics, *Response, error) {
-	out := new(WarmupAnalytics)
-	resp, err := s.client.get(ctx, withQuery("analytics/warmup", params.values()), out)
-	if err != nil {
-		return nil, resp, err
+// Deliverability health bands returned in [DeliverabilityDashboard.Band] and in
+// the per-mailbox and per-campaign breakdowns.
+const (
+	BandHealthy     = "healthy"
+	BandWatch       = "watch"
+	BandThrottled   = "throttled"
+	BandQuarantined = "quarantined"
+	BandBlocked     = "blocked"
+)
+
+// DeliverabilityDashboard is the organization's sending health over a window:
+// bounce and complaint pressure, inbox placement, reply intent, and the
+// mailboxes and campaigns driving it.
+type DeliverabilityDashboard struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+
+	EventsTotal          int64 `json:"events_total"`
+	BounceCount          int64 `json:"bounce_count"`
+	ComplaintCount       int64 `json:"complaint_count"`
+	UnsubscribeCount     int64 `json:"unsubscribe_count"`
+	ReplyCount           int64 `json:"reply_count"`
+	OpenCount            int64 `json:"open_count"`
+	ClickCount           int64 `json:"click_count"`
+	SuppressedRecipients int64 `json:"suppressed_recipients"`
+	// DLQPending is how many send tasks are parked in the dead-letter queue.
+	DLQPending int64 `json:"dlq_pending"`
+
+	IntentPositive    int64 `json:"intent_positive"`
+	IntentNegative    int64 `json:"intent_negative"`
+	IntentOutOfOffice int64 `json:"intent_out_of_office"`
+	IntentQuestion    int64 `json:"intent_question"`
+	IntentNeutral     int64 `json:"intent_neutral"`
+
+	EmailsSent    int64   `json:"emails_sent"`
+	BounceRate    float64 `json:"bounce_rate"`
+	ComplaintRate float64 `json:"complaint_rate"`
+	OpenRate      float64 `json:"open_rate"`
+	ClickRate     float64 `json:"click_rate"`
+	ReplyRate     float64 `json:"reply_rate"`
+
+	// SpamPlacementRate and InboxPlacementRate come from seed-inbox testing;
+	// PlacementSamples is how many seeds backed them.
+	SpamPlacementRate  float64 `json:"spam_placement_rate"`
+	InboxPlacementRate float64 `json:"inbox_placement_rate"`
+	PlacementSamples   int64   `json:"placement_samples"`
+
+	// Band is the overall health verdict: one of the Band* constants.
+	Band string `json:"band"`
+
+	Timeseries []DeliverabilityDay       `json:"timeseries,omitempty"`
+	ByMailbox  []DeliverabilityBreakdown `json:"by_mailbox,omitempty"`
+	ByCampaign []DeliverabilityBreakdown `json:"by_campaign,omitempty"`
+}
+
+// DeliverabilityDay is one day on the deliverability trend line.
+type DeliverabilityDay struct {
+	Date         string `json:"date"`
+	Sent         int64  `json:"sent"`
+	Bounces      int64  `json:"bounces"`
+	Complaints   int64  `json:"complaints"`
+	Opens        int64  `json:"opens"`
+	Clicks       int64  `json:"clicks"`
+	Replies      int64  `json:"replies"`
+	Unsubscribes int64  `json:"unsubscribes"`
+}
+
+// DeliverabilityBreakdown is one mailbox's or campaign's contribution to
+// deliverability. EmailAccountID and Email are set on the mailbox breakdown;
+// CampaignID and Name on the campaign breakdown.
+type DeliverabilityBreakdown struct {
+	EmailAccountID string `json:"email_account_id,omitempty"`
+	Email          string `json:"email,omitempty"`
+	CampaignID     string `json:"campaign_id,omitempty"`
+	Name           string `json:"name,omitempty"`
+
+	Sent          int64   `json:"sent"`
+	Bounces       int64   `json:"bounces"`
+	Complaints    int64   `json:"complaints"`
+	BounceRate    float64 `json:"bounce_rate"`
+	ComplaintRate float64 `json:"complaint_rate"`
+	// Band is one of the Band* constants.
+	Band string `json:"band"`
+}
+
+// AccountStatus is one mailbox's operational state: health, recent errors and
+// how much of its daily allowance it has used.
+type AccountStatus struct {
+	ID           string            `json:"id"`
+	Email        string            `json:"email"`
+	Provider     string            `json:"provider"`
+	Status       string            `json:"status"`
+	LastSyncedAt *time.Time        `json:"last_synced_at"`
+	Health       AccountHealth     `json:"health"`
+	Errors       []AccountError    `json:"errors,omitempty"`
+	DailyUsage   AccountDailyUsage `json:"daily_usage"`
+	// InCampaign reports whether the mailbox is attached to a running campaign.
+	InCampaign bool `json:"in_campaign"`
+}
+
+// AccountHealth is a mailbox's health verdict.
+type AccountHealth struct {
+	Status string `json:"status"`
+	// Score runs 0 to 100, higher being healthier.
+	Score  int      `json:"score"`
+	Issues []string `json:"issues,omitempty"`
+}
+
+// AccountError is a recent error recorded against a mailbox.
+type AccountError struct {
+	ID        string    `json:"id"`
+	ErrorCode string    `json:"error_code"`
+	Severity  string    `json:"severity"`
+	Title     string    `json:"title"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AccountDailyUsage is a mailbox's sending against today's caps.
+type AccountDailyUsage struct {
+	Date          string `json:"date"`
+	CampaignSent  int64  `json:"campaign_sent"`
+	CampaignLimit int64  `json:"campaign_limit"`
+	WarmupSent    int64  `json:"warmup_sent"`
+	WarmupLimit   int64  `json:"warmup_limit"`
+}
+
+// UsageOverview is the organization's consumption against its plan.
+type UsageOverview struct {
+	UserID string `json:"user_id"`
+	// Period is [UsagePeriodDay], [UsagePeriodWeek] or [UsagePeriodMonth].
+	Period        string            `json:"period"`
+	EmailAccounts EmailAccountUsage `json:"email_accounts"`
+	Campaigns     CampaignUsage     `json:"campaigns"`
+	Contacts      ContactUsage      `json:"contacts"`
+	API           APIUsage          `json:"api"`
+}
+
+// EmailAccountUsage counts mailboxes by state.
+type EmailAccountUsage struct {
+	Total      int `json:"total"`
+	Active     int `json:"active"`
+	InWarmup   int `json:"in_warmup"`
+	WithErrors int `json:"with_errors"`
+}
+
+// CampaignUsage counts campaigns by state plus total volume.
+type CampaignUsage struct {
+	Total      int   `json:"total"`
+	Active     int   `json:"active"`
+	Paused     int   `json:"paused"`
+	Draft      int   `json:"draft"`
+	EmailsSent int64 `json:"emails_sent"`
+}
+
+// ContactUsage counts contacts.
+type ContactUsage struct {
+	Total      int64 `json:"total"`
+	Subscribed int64 `json:"subscribed"`
+	AddedToday int64 `json:"added_today"`
+}
+
+// APIUsage is API call volume against the plan's daily limit.
+type APIUsage struct {
+	TotalCalls int64 `json:"total_calls"`
+	DailyLimit int64 `json:"daily_limit"`
+	// TopEndpoints are the busiest endpoints, each carrying its own endpoint
+	// and count keys.
+	TopEndpoints []map[string]any `json:"top_endpoints,omitempty"`
+}
+
+// Dashboard returns the organization-wide engagement summary. Period is
+// [Period7Days], [Period30Days] or [Period90Days]; anything else falls back to
+// [Period7Days].
+func (s *AnalyticsService) Dashboard(ctx context.Context, period string, opts ...RequestOption) (*DashboardAnalytics, *Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "period", period)
+	return fetch[DashboardAnalytics](ctx, s.client, withQuery("analytics/dashboard", q), opts)
+}
+
+// Campaign returns one campaign's engagement, broken down by step.
+func (s *AnalyticsService) Campaign(ctx context.Context, id string, opts ...RequestOption) (*CampaignAnalytics, *Response, error) {
+	return fetch[CampaignAnalytics](ctx, s.client, "analytics/campaigns/"+url.PathEscape(id), opts)
+}
+
+// CampaignDaily returns a campaign's day-by-day engagement over a date range.
+func (s *AnalyticsService) CampaignDaily(ctx context.Context, id string, from, to time.Time, opts ...RequestOption) ([]DailyStat, *Response, error) {
+	q := url.Values{"from": {formatDay(from)}, "to": {formatDay(to)}}
+	return fetchData[DailyStat](ctx, s.client, withQuery("analytics/campaigns/"+url.PathEscape(id)+"/daily", q), opts)
+}
+
+// CampaignHourly returns a campaign's hour-by-hour engagement for one day. A
+// zero date reports today.
+func (s *AnalyticsService) CampaignHourly(ctx context.Context, id string, date time.Time, opts ...RequestOption) ([]HourlyStat, *Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "date", formatDay(date))
+	return fetchData[HourlyStat](ctx, s.client, withQuery("analytics/campaigns/"+url.PathEscape(id)+"/hourly", q), opts)
+}
+
+// CompareCampaigns compares up to ten campaigns over one date range.
+func (s *AnalyticsService) CompareCampaigns(ctx context.Context, ids []string, from, to time.Time, opts ...RequestOption) (*CampaignComparison, *Response, error) {
+	q := url.Values{
+		"ids":  {strings.Join(ids, ",")},
+		"from": {formatDay(from)},
+		"to":   {formatDay(to)},
 	}
-	return out, resp, nil
+	return fetch[CampaignComparison](ctx, s.client, withQuery("analytics/campaigns/compare", q), opts)
+}
+
+// Warmup returns warmup progress over a date range. Pass an empty emailID for
+// the whole organization.
+func (s *AnalyticsService) Warmup(ctx context.Context, emailID string, from, to time.Time, opts ...RequestOption) (*WarmupAnalytics, *Response, error) {
+	q := url.Values{"from": {formatDay(from)}, "to": {formatDay(to)}}
+	setNonEmpty(q, "email_id", emailID)
+	return fetch[WarmupAnalytics](ctx, s.client, withQuery("analytics/warmup", q), opts)
+}
+
+// Deliverability returns the organization's sending health over a window. Zero
+// times default to the last seven days.
+func (s *AnalyticsService) Deliverability(ctx context.Context, from, to time.Time, opts ...RequestOption) (*DeliverabilityDashboard, *Response, error) {
+	q := make(url.Values)
+	setTime(q, "from", &from)
+	setTime(q, "to", &to)
+	return fetch[DeliverabilityDashboard](ctx, s.client, withQuery("analytics/deliverability", q), opts)
+}
+
+// Accounts returns the operational status of every mailbox.
+func (s *AnalyticsService) Accounts(ctx context.Context, opts ...RequestOption) ([]AccountStatus, *Response, error) {
+	return fetchData[AccountStatus](ctx, s.client, "analytics/accounts", opts)
+}
+
+// Account returns one mailbox's operational status.
+func (s *AnalyticsService) Account(ctx context.Context, id string, opts ...RequestOption) (*AccountStatus, *Response, error) {
+	return fetch[AccountStatus](ctx, s.client, "analytics/accounts/"+url.PathEscape(id), opts)
+}
+
+// Usage returns the organization's consumption against its plan. Period is
+// [UsagePeriodDay], [UsagePeriodWeek] or [UsagePeriodMonth].
+func (s *AnalyticsService) Usage(ctx context.Context, period string, opts ...RequestOption) (*UsageOverview, *Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "period", period)
+	return fetch[UsageOverview](ctx, s.client, withQuery("analytics/usage", q), opts)
+}
+
+// formatDay renders a calendar day the way the analytics endpoints expect. A
+// zero time renders empty so the caller can omit the parameter.
+func formatDay(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02")
 }

@@ -217,7 +217,7 @@ func TestPostEncodesJSONBody(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"camp_new","name":"Created"}`))
 	})
 
-	camp, resp, err := c.Campaigns.Create(context.Background(), &CampaignCreateParams{Name: "Created", DailyLimit: 50})
+	camp, resp, err := c.Campaigns.Create(context.Background(), &CampaignCreateParams{Name: "Created", DailyLimit: Int(50)})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
