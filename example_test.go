@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
+	"time"
 
 	"github.com/warmbly/warmbly-go"
 )
 
-// Example shows the basic flow: construct a client with an API key and list a
-// resource.
-func Example() {
+func ExampleNew() {
 	client, err := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
 	if err != nil {
 		log.Fatal(err)
@@ -24,90 +21,88 @@ func Example() {
 		log.Fatal(err)
 	}
 	for _, c := range page.Data {
-		fmt.Println(c.Name)
+		fmt.Println(c.Name, c.Status)
 	}
 }
 
-// Example_pagination iterates every item across all pages using the auto-paging
-// iterator.
-func Example_pagination() {
+// Auto-paging walks every page for you, fetching the next one only when the
+// current one runs out.
+func ExamplePage_All() {
 	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
-
 	ctx := context.Background()
-	page, err := client.Contacts.Search(ctx, &warmbly.ContactSearchParams{Query: "acme.com"})
+
+	page, err := client.Emails.List(ctx, &warmbly.EmailListParams{Query: "acme.com"})
 	if err != nil {
 		log.Fatal(err)
 	}
-	for contact, err := range page.All(ctx) {
+	for mailbox, err := range page.All(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(contact.Email)
+		fmt.Println(mailbox.Email, mailbox.WarmupActive())
 	}
 }
 
-// Example_oauth runs the authorization-code flow with PKCE.
-func Example_oauth() {
-	cfg := &warmbly.OAuth2Config{
-		ClientID:     "client_id",
-		ClientSecret: "client_secret",
-		RedirectURL:  "https://app.example.com/callback",
-		Scopes:       []string{"campaigns:read", "contacts:read"},
-	}
-
-	verifier := warmbly.GenerateVerifier()
-	authURL := cfg.AuthCodeURL("opaque-state", warmbly.S256ChallengeOption(verifier))
-	fmt.Println("visit:", authURL)
-
-	// ... after the user authorizes and you receive ?code=... on the callback:
-	ctx := context.Background()
-	tok, err := cfg.Exchange(ctx, "the-code", warmbly.VerifierOption(verifier))
-	if err != nil {
-		log.Fatal(err)
-	}
-	client, err := cfg.NewClient(ctx, tok)
-	if err != nil {
-		log.Fatal(err)
-	}
-	_ = client
-}
-
-// Example_errorHandling distinguishes API errors with errors.Is and errors.As.
-func Example_errorHandling() {
+// Errors decode into a typed *Error that matches the package sentinels, so you
+// can branch on the status without parsing the body.
+func ExampleError() {
 	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
 
-	_, _, err := client.Campaigns.Get(context.Background(), "nonexistent")
+	_, _, err := client.Campaigns.Get(context.Background(), "camp_missing")
 	switch {
 	case errors.Is(err, warmbly.ErrNotFound):
 		fmt.Println("no such campaign")
 	case errors.Is(err, warmbly.ErrRateLimited):
-		fmt.Println("slow down")
+		var apiErr *warmbly.Error
+		errors.As(err, &apiErr)
+		fmt.Println("slow down for", apiErr.RetryAfter, "seconds")
 	case err != nil:
 		var apiErr *warmbly.Error
 		if errors.As(err, &apiErr) {
-			fmt.Printf("request %s failed: %s\n", apiErr.RequestID, apiErr.Message)
+			// The request id is what support needs to find the request.
+			fmt.Printf("%s (request %s)\n", apiErr.Message, apiErr.RequestID)
 		}
 	}
 }
 
-// Example_webhookHandler verifies an incoming webhook delivery before acting on
-// it.
-func Example_webhookHandler() {
+// An idempotency key makes a retry safe on anything that sends mail or spends
+// money: repeating the key replays the original response instead of acting
+// twice.
+func ExampleWithIdempotencyKey() {
 	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
-	const endpointSecret = "whsec_..."
 
-	http.HandleFunc("/webhooks/warmbly", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		event, err := client.Webhooks.ConstructEvent(body, r.Header.Get(warmbly.WebhookSignatureHeader), endpointSecret)
-		if err != nil {
-			http.Error(w, "invalid signature", http.StatusUnauthorized)
-			return
-		}
-		fmt.Println("received", event.Event)
-		w.WriteHeader(http.StatusOK)
-	})
+	result, resp, err := client.Emails.Send(context.Background(), "mailbox_id", &warmbly.SendEmailParams{
+		To:        []string{"prospect@example.com"},
+		Subject:   "Hello",
+		BodyPlain: "Hi there.",
+	}, warmbly.WithIdempotencyKey("order-4171-welcome"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if resp.IdempotentReplayed {
+		fmt.Println("already sent; replayed the original response")
+	}
+	fmt.Println("queued", result.TaskID, "for", result.ScheduledAt.Format(time.RFC3339))
+}
+
+// Verify every webhook delivery before trusting its payload.
+func ExampleWebhookService_ConstructEvent() {
+	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
+
+	var body []byte            // the raw request body, unmodified
+	var signatureHeader string // r.Header.Get(warmbly.WebhookSignatureHeader)
+	const secret = "whsec_..."
+
+	event, err := client.Webhooks.ConstructEvent(body, signatureHeader, secret)
+	if err != nil {
+		// Either the signature did not match or it was too old to trust.
+		log.Fatal(err)
+	}
+
+	switch event.EventType {
+	case warmbly.EventCampaignReplyReceived:
+		fmt.Println("someone replied")
+	case warmbly.EventWarmupBlocked:
+		fmt.Println("a mailbox was blocked from the warmup pool")
+	}
 }

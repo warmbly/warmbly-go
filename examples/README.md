@@ -10,14 +10,19 @@ go run ./examples/<name>
 
 | Example | What it shows |
 | --- | --- |
-| [`apikeys`](apikeys) | Create, list, and inspect API keys |
+| [`apikeys`](apikeys) | Mint keys with scope bitmasks, list them, read usage |
 | [`oauth`](oauth) | OAuth 2.1 authorization-code flow with PKCE (browser login) |
-| [`oauthapps`](oauthapps) | Register/manage OAuth apps + client-credentials grant |
-| [`campaigns`](campaigns) | Create a campaign, add sequence steps, test, start, list |
-| [`contacts`](contacts) | Import contacts, search with pagination, bulk update |
-| [`emails`](emails) | List mailboxes, drive warmup, check ban status, send |
-| [`templates`](templates) | Create, update, list, and delete message templates |
-| [`analytics`](analytics) | Read dashboard and warmup analytics over a date range |
-| [`webhooks`](webhooks) | Register an endpoint and verify inbound deliveries |
-| [`gateway`](gateway) | Stream real-time events with typed handlers |
+| [`oauthapps`](oauthapps) | Register and manage OAuth apps, client-credentials grant |
+| [`organization`](organization) | Sign in for a session token, then manage the workspace and its people |
+| [`campaigns`](campaigns) | Create a campaign with its sequence, preflight it, start it |
+| [`contacts`](contacts) | Add contacts, faceted search, the 360 view, bulk edits |
+| [`emails`](emails) | List mailboxes, drive warmup, check domain auth, send |
+| [`templates`](templates) | Create, score, render, reorder and delete templates |
+| [`analytics`](analytics) | Engagement, deliverability health and per-mailbox status |
+| [`webhooks`](webhooks) | Register an endpoint, answer its challenge, verify deliveries |
+| [`gateway`](gateway) | Stream realtime events with typed handlers and resume |
 | [`errors`](errors) | Error handling, retry configuration, rate-limit state |
+
+The `organization` example signs in with `WARMBLY_EMAIL` / `WARMBLY_PASSWORD`
+rather than an API key, because workspace governance is session-only. The
+`gateway` example also needs `WARMBLY_ORG_ID`.

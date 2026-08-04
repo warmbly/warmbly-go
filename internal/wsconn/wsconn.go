@@ -79,6 +79,13 @@ type Conn struct {
 	closeOnce sync.Once
 }
 
+// tlsClientConfig builds the client TLS configuration used for wss:// dials. It
+// is a package variable so tests can trust a test CA; in production it verifies
+// the server against the host's system roots.
+var tlsClientConfig = func(host string) *tls.Config {
+	return &tls.Config{ServerName: host}
+}
+
 // Dial performs the opening handshake against urlStr (ws:// or wss://) and
 // returns an established connection. Extra request headers (for example
 // Authorization) may be supplied; Host and the WebSocket handshake headers are
@@ -116,7 +123,7 @@ func Dial(ctx context.Context, urlStr string, header http.Header) (*Conn, *http.
 
 	conn := rawConn
 	if useTLS {
-		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: u.Hostname()})
+		tlsConn := tls.Client(rawConn, tlsClientConfig(u.Hostname()))
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			rawConn.Close()
 			return nil, nil, fmt.Errorf("wsconn: tls handshake: %w", err)
