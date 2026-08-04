@@ -122,7 +122,7 @@ func TestConstructEvent(t *testing.T) {
 	}
 }
 
-// TestConstructEventRejectsStaleSignature covers replay defence: a correctly
+// TestConstructEventRejectsStaleSignature covers replay defense: a correctly
 // signed but old delivery must not be accepted.
 func TestConstructEventRejectsStaleSignature(t *testing.T) {
 	client, err := New(WithAPIKey("wmbly_test"))

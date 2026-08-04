@@ -62,7 +62,7 @@ type SendTimeOptimizationSettings struct {
 	Enabled                bool   `json:"enabled"`
 	UseContactTimezone     bool   `json:"use_contact_timezone"`
 	DefaultContactTimezone string `json:"default_contact_timezone"`
-	// PreferredHours are local hours (0-23) to favour.
+	// PreferredHours are local hours (0-23) to favor.
 	PreferredHours          []int   `json:"preferred_hours"`
 	WeekendWeightMultiplier float64 `json:"weekend_weight_multiplier"`
 }
@@ -110,7 +110,7 @@ func (s *OutreachService) Update(ctx context.Context, settings *OutreachSettings
 	body := struct {
 		Settings *OutreachSettings `json:"settings"`
 	}{Settings: settings}
-	return send[OutreachSettings](ctx, s.client, s.client.patch, "outreach/settings", body, opts)
+	return send[OutreachSettings](ctx, s.client.patch, "outreach/settings", body, opts)
 }
 
 // DeliverabilityService ingests deliverability events (bounces, complaints,

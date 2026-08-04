@@ -283,7 +283,7 @@ func (s *IntegrationService) Connections(ctx context.Context, opts ...RequestOpt
 
 // Connect creates a connection for an API-key or webhook provider.
 func (s *IntegrationService) Connect(ctx context.Context, params *ConnectParams, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
-	return send[IntegrationConnection](ctx, s.client, s.client.post, "integrations/connections", params, opts)
+	return send[IntegrationConnection](ctx, s.client.post, "integrations/connections", params, opts)
 }
 
 // Connection returns one connection with its event subscriptions and recent
@@ -323,7 +323,7 @@ func (s *IntegrationService) Events(ctx context.Context, id string, opts ...Requ
 
 // CreateEvent subscribes a connection to a Warmbly event.
 func (s *IntegrationService) CreateEvent(ctx context.Context, id string, params *EventSubscriptionParams, opts ...RequestOption) (*EventSubscription, *Response, error) {
-	return send[EventSubscription](ctx, s.client, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/events", params, opts)
+	return send[EventSubscription](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/events", params, opts)
 }
 
 // DeleteEvent removes an event subscription.
@@ -397,7 +397,7 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`
 	}{ContactIDs: contactIDs}
-	return send[PushResult](ctx, s.client, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
 }
 
 // --- OAuth connect flow (session-only) ---
@@ -409,7 +409,7 @@ func (s *IntegrationService) StartOAuth(ctx context.Context, provider, label str
 		Provider string `json:"provider"`
 		Label    string `json:"label,omitempty"`
 	}{Provider: provider, Label: label}
-	return send[OAuthStartResult](ctx, s.client, s.client.post, "integrations/oauth/start", body, opts)
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", body, opts)
 }
 
 // FinishOAuth exchanges the authorization code the provider redirected back
@@ -419,13 +419,13 @@ func (s *IntegrationService) FinishOAuth(ctx context.Context, code, state string
 		Code  string `json:"code"`
 		State string `json:"state"`
 	}{Code: code, State: state}
-	return send[IntegrationConnection](ctx, s.client, s.client.post, "integrations/oauth/finish", body, opts)
+	return send[IntegrationConnection](ctx, s.client.post, "integrations/oauth/finish", body, opts)
 }
 
 // ReauthOAuth restarts consent for a connection whose token expired or was
 // revoked, returning a fresh URL to send the user to.
 func (s *IntegrationService) ReauthOAuth(ctx context.Context, id string, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
-	return send[OAuthStartResult](ctx, s.client, s.client.post, "integrations/oauth/reauth/"+url.PathEscape(id), nil, opts)
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/reauth/"+url.PathEscape(id), nil, opts)
 }
 
 // --- meetings ---
@@ -543,7 +543,7 @@ func (s *MeetingService) Summary(ctx context.Context, opts ...RequestOption) (*M
 
 // Create logs a meeting booked outside a connected provider.
 func (s *MeetingService) Create(ctx context.Context, params *MeetingCreateParams, opts ...RequestOption) (*Meeting, *Response, error) {
-	return send[Meeting](ctx, s.client, s.client.post, "meetings", params, opts)
+	return send[Meeting](ctx, s.client.post, "meetings", params, opts)
 }
 
 // Delete removes a meeting record.

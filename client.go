@@ -558,7 +558,7 @@ func isNilBody(body any) bool {
 	}
 	v := reflect.ValueOf(body)
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Interface:
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface:
 		return v.IsNil()
 	default:
 		return false
@@ -604,8 +604,8 @@ func (c *Client) delete(ctx context.Context, path string, opts ...RequestOption)
 
 // deleteBody issues a DELETE carrying a JSON body, which a few bulk endpoints
 // (for example contact bulk delete) require.
-func (c *Client) deleteBody(ctx context.Context, path string, body, out any, opts ...RequestOption) (*Response, error) {
-	return c.call(ctx, http.MethodDelete, path, body, out, opts)
+func (c *Client) deleteBody(ctx context.Context, path string, body any, opts ...RequestOption) (*Response, error) {
+	return c.call(ctx, http.MethodDelete, path, body, nil, opts)
 }
 
 // stream POSTs a request and hands each Server-Sent Event's data payload to fn

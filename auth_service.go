@@ -245,7 +245,7 @@ func (s *AuthService) Login(ctx context.Context, params *LoginParams, opts ...Re
 // the account has two-factor enabled the result carries
 // [Session.TwoFARequired] instead.
 func (s *AuthService) LoginConfirm(ctx context.Context, params *ConfirmParams, opts ...RequestOption) (*Session, *Response, error) {
-	return send[Session](ctx, s.client, s.client.post, "auth/login/confirm", params, opts)
+	return send[Session](ctx, s.client.post, "auth/login/confirm", params, opts)
 }
 
 // Register starts account creation and emails a verification code.
@@ -296,7 +296,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string, opts ...
 	body := struct {
 		RefreshToken string `json:"refresh_token"`
 	}{RefreshToken: refreshToken}
-	return send[Session](ctx, s.client, s.client.post, "auth/refresh", body, opts)
+	return send[Session](ctx, s.client.post, "auth/refresh", body, opts)
 }
 
 // Providers reports which social sign-in options this deployment supports. It
@@ -320,7 +320,7 @@ func (s *AuthService) tokenLogin(ctx context.Context, path, token string, opts [
 	body := struct {
 		IDToken string `json:"id_token"`
 	}{IDToken: token}
-	return send[Session](ctx, s.client, s.client.post, path, body, opts)
+	return send[Session](ctx, s.client.post, path, body, opts)
 }
 
 // Logout revokes the current session.
@@ -358,12 +358,12 @@ func (s *AuthService) Me(ctx context.Context, opts ...RequestOption) (*User, *Re
 
 // UpdateProfile changes the caller's name.
 func (s *AuthService) UpdateProfile(ctx context.Context, params *ProfileUpdateParams, opts ...RequestOption) (*User, *Response, error) {
-	return send[User](ctx, s.client, s.client.patch, "auth/me", params, opts)
+	return send[User](ctx, s.client.patch, "auth/me", params, opts)
 }
 
 // CompleteOnboarding answers the first-run questions.
 func (s *AuthService) CompleteOnboarding(ctx context.Context, params *OnboardingParams, opts ...RequestOption) (*User, *Response, error) {
-	return send[User](ctx, s.client, s.client.patch, "auth/me/onboarding", params, opts)
+	return send[User](ctx, s.client.patch, "auth/me/onboarding", params, opts)
 }
 
 // UploadAvatar sets the caller's profile picture.
@@ -409,7 +409,7 @@ func (s *AuthService) TwoFAStatus(ctx context.Context, opts ...RequestOption) (*
 // EnrollTwoFA begins two-factor setup and returns the shared secret. Confirm it
 // with [AuthService.ConfirmTwoFA] before it takes effect.
 func (s *AuthService) EnrollTwoFA(ctx context.Context, opts ...RequestOption) (*TwoFAEnrollment, *Response, error) {
-	return send[TwoFAEnrollment](ctx, s.client, s.client.post, "auth/2fa/enroll/start", nil, opts)
+	return send[TwoFAEnrollment](ctx, s.client.post, "auth/2fa/enroll/start", nil, opts)
 }
 
 // ConfirmTwoFA finishes setup with a code from the authenticator and returns
@@ -418,7 +418,7 @@ func (s *AuthService) ConfirmTwoFA(ctx context.Context, code string, opts ...Req
 	body := struct {
 		Code string `json:"code"`
 	}{Code: code}
-	return send[TwoFARecoveryCodes](ctx, s.client, s.client.post, "auth/2fa/enroll/confirm", body, opts)
+	return send[TwoFARecoveryCodes](ctx, s.client.post, "auth/2fa/enroll/confirm", body, opts)
 }
 
 // DisableTwoFA turns two-factor off. It requires a current code or a recovery
@@ -427,7 +427,7 @@ func (s *AuthService) DisableTwoFA(ctx context.Context, code string, opts ...Req
 	body := struct {
 		Code string `json:"code"`
 	}{Code: code}
-	return s.client.deleteBody(ctx, "auth/2fa", body, nil, opts...)
+	return s.client.deleteBody(ctx, "auth/2fa", body, opts...)
 }
 
 // VerifyTwoFA completes a sign-in that stopped at the two-factor step, using
@@ -438,7 +438,7 @@ func (s *AuthService) VerifyTwoFA(ctx context.Context, pendingToken, code string
 		PendingToken string `json:"pending_token"`
 		Code         string `json:"code"`
 	}{PendingToken: pendingToken, Code: code}
-	return send[Session](ctx, s.client, s.client.post, "auth/2fa/verify", body, opts)
+	return send[Session](ctx, s.client.post, "auth/2fa/verify", body, opts)
 }
 
 // --- passkeys ---
@@ -465,7 +465,7 @@ func (s *AuthService) BeginPasskeyLogin(ctx context.Context, opts ...RequestOpti
 // FinishPasskeyLogin completes a passkey sign-in with the authenticator's
 // assertion and returns the session.
 func (s *AuthService) FinishPasskeyLogin(ctx context.Context, assertion json.RawMessage, opts ...RequestOption) (*Session, *Response, error) {
-	return send[Session](ctx, s.client, s.client.post, "auth/passkey/login/finish", assertion, opts)
+	return send[Session](ctx, s.client.post, "auth/passkey/login/finish", assertion, opts)
 }
 
 // BeginPasskeyRegistration starts enrolling a passkey on the signed-in account
@@ -477,7 +477,7 @@ func (s *AuthService) BeginPasskeyRegistration(ctx context.Context, opts ...Requ
 // FinishPasskeyRegistration completes enrollment with the authenticator's
 // attestation and returns the stored credential.
 func (s *AuthService) FinishPasskeyRegistration(ctx context.Context, attestation json.RawMessage, opts ...RequestOption) (*PasskeyCredential, *Response, error) {
-	return send[PasskeyCredential](ctx, s.client, s.client.post, "auth/passkey/register/finish", attestation, opts)
+	return send[PasskeyCredential](ctx, s.client.post, "auth/passkey/register/finish", attestation, opts)
 }
 
 func (s *AuthService) passkeyStep(ctx context.Context, path string, body any, opts []RequestOption) (json.RawMessage, *Response, error) {
@@ -494,7 +494,7 @@ func (s *AuthService) RenamePasskey(ctx context.Context, id, name string, opts .
 	body := struct {
 		Name string `json:"name"`
 	}{Name: name}
-	return send[PasskeyCredential](ctx, s.client, s.client.patch, "auth/passkey/credentials/"+url.PathEscape(id), body, opts)
+	return send[PasskeyCredential](ctx, s.client.patch, "auth/passkey/credentials/"+url.PathEscape(id), body, opts)
 }
 
 // DeletePasskey removes a registered credential.
@@ -515,7 +515,7 @@ func (s *AuthService) UpdateNotificationPreferences(ctx context.Context, prefs *
 	body := struct {
 		Preferences *NotificationPreferences `json:"preferences"`
 	}{Preferences: prefs}
-	return send[NotificationPreferencesResult](ctx, s.client, s.client.put, "auth/me/notification-preferences", body, opts)
+	return send[NotificationPreferencesResult](ctx, s.client.put, "auth/me/notification-preferences", body, opts)
 }
 
 // Notifications returns the caller's in-app feed and unread count.
@@ -540,7 +540,7 @@ func (s *AuthService) RegisterDeviceToken(ctx context.Context, token, platform, 
 		Platform    string `json:"platform,omitempty"`
 		Environment string `json:"environment,omitempty"`
 	}{Token: token, Platform: platform, Environment: environment}
-	return send[DeviceToken](ctx, s.client, s.client.post, "auth/me/device-tokens", body, opts)
+	return send[DeviceToken](ctx, s.client.post, "auth/me/device-tokens", body, opts)
 }
 
 // DeleteDeviceToken unregisters a device from push notifications.
@@ -560,7 +560,7 @@ func (s *AuthService) DangerZone(ctx context.Context, opts ...RequestOption) (*D
 // delete. Confirmation must match [DangerZoneStatus.ConfirmationHint], which
 // for an account is their email address.
 func (s *AuthService) ScheduleDeletion(ctx context.Context, params *ScheduleDeletionParams, opts ...RequestOption) (*ScheduledDeletion, *Response, error) {
-	return send[ScheduledDeletion](ctx, s.client, s.client.post, "me/danger-zone/delete", params, opts)
+	return send[ScheduledDeletion](ctx, s.client.post, "me/danger-zone/delete", params, opts)
 }
 
 // CancelDeletion cancels a pending account deletion.
@@ -568,5 +568,5 @@ func (s *AuthService) CancelDeletion(ctx context.Context, reason string, opts ..
 	body := struct {
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
-	return s.client.deleteBody(ctx, "me/danger-zone/delete", body, nil, opts...)
+	return s.client.deleteBody(ctx, "me/danger-zone/delete", body, opts...)
 }

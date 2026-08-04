@@ -593,7 +593,7 @@ func (s *CampaignService) Overview(ctx context.Context, opts ...RequestOption) (
 
 // Create creates a new campaign.
 func (s *CampaignService) Create(ctx context.Context, params *CampaignCreateParams, opts ...RequestOption) (*Campaign, *Response, error) {
-	return send[Campaign](ctx, s.client, s.client.post, "campaigns", params, opts)
+	return send[Campaign](ctx, s.client.post, "campaigns", params, opts)
 }
 
 // Get retrieves a single campaign by ID.
@@ -603,7 +603,7 @@ func (s *CampaignService) Get(ctx context.Context, id string, opts ...RequestOpt
 
 // Update modifies a campaign's settings.
 func (s *CampaignService) Update(ctx context.Context, id string, params *CampaignUpdateParams, opts ...RequestOption) (*Campaign, *Response, error) {
-	return send[Campaign](ctx, s.client, s.client.patch, "campaigns/"+url.PathEscape(id), params, opts)
+	return send[Campaign](ctx, s.client.patch, "campaigns/"+url.PathEscape(id), params, opts)
 }
 
 // Delete permanently removes a campaign.
@@ -613,12 +613,12 @@ func (s *CampaignService) Delete(ctx context.Context, id string, opts ...Request
 
 // Start begins (or resumes) sending for a campaign.
 func (s *CampaignService) Start(ctx context.Context, id string, opts ...RequestOption) (*Campaign, *Response, error) {
-	return send[Campaign](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/start", nil, opts)
+	return send[Campaign](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/start", nil, opts)
 }
 
 // Stop halts sending for a campaign.
 func (s *CampaignService) Stop(ctx context.Context, id string, opts ...RequestOption) (*Campaign, *Response, error) {
-	return send[Campaign](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/stop", nil, opts)
+	return send[Campaign](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/stop", nil, opts)
 }
 
 // Logs returns a page of a campaign's activity log.
@@ -630,23 +630,23 @@ func (s *CampaignService) Logs(ctx context.Context, id string, params *ListOptio
 
 // Preflight runs the pre-launch checks for a campaign without starting it.
 func (s *CampaignService) Preflight(ctx context.Context, id string, opts ...RequestOption) (*PreflightResult, *Response, error) {
-	return send[PreflightResult](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/preflight", nil, opts)
+	return send[PreflightResult](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/preflight", nil, opts)
 }
 
 // SendTestEmail sends a rendered preview of a step to a single address.
 func (s *CampaignService) SendTestEmail(ctx context.Context, id string, params *TestEmailParams, opts ...RequestOption) (*TestEmailResult, *Response, error) {
-	return send[TestEmailResult](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/test-email", params, opts)
+	return send[TestEmailResult](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/test-email", params, opts)
 }
 
 // PreviewTemplate renders campaign copy against a sample contact. It is not
 // scoped to a campaign and sends nothing.
 func (s *CampaignService) PreviewTemplate(ctx context.Context, params *TemplatePreviewParams, opts ...RequestOption) (*TemplatePreviewResult, *Response, error) {
-	return send[TemplatePreviewResult](ctx, s.client, s.client.post, "campaign-template-preview", params, opts)
+	return send[TemplatePreviewResult](ctx, s.client.post, "campaign-template-preview", params, opts)
 }
 
 // VerifyTrackingDomain re-resolves the campaign's tracking-domain override.
 func (s *CampaignService) VerifyTrackingDomain(ctx context.Context, id string, opts ...RequestOption) (*TrackingDomainStatus, *Response, error) {
-	return send[TrackingDomainStatus](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/tracking-domain/verify", nil, opts)
+	return send[TrackingDomainStatus](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/tracking-domain/verify", nil, opts)
 }
 
 // --- sender pool ---
@@ -661,7 +661,7 @@ func (s *CampaignService) ReplaceSenders(ctx context.Context, id string, senders
 	body := struct {
 		Senders []CampaignSenderInput `json:"senders"`
 	}{Senders: senders}
-	return sendData[CampaignSender](ctx, s.client, s.client.put, "campaigns/"+url.PathEscape(id)+"/senders", body, opts)
+	return sendData[CampaignSender](ctx, s.client.put, "campaigns/"+url.PathEscape(id)+"/senders", body, opts)
 }
 
 // --- advanced settings ---
@@ -677,7 +677,7 @@ func (s *CampaignService) UpdateAdvancedSettings(ctx context.Context, id string,
 	body := struct {
 		Overrides *OutreachSettings `json:"overrides"`
 	}{Overrides: overrides}
-	return send[CampaignAdvancedSettings](ctx, s.client, s.client.patch, "campaigns/"+url.PathEscape(id)+"/advanced", body, opts)
+	return send[CampaignAdvancedSettings](ctx, s.client.patch, "campaigns/"+url.PathEscape(id)+"/advanced", body, opts)
 }
 
 // --- steps ---
@@ -690,12 +690,12 @@ func (s *CampaignService) ListSteps(ctx context.Context, id string, opts ...Requ
 // CreateStep appends a blank step to the campaign's sequence. Fill it in with
 // [CampaignService.UpdateStep].
 func (s *CampaignService) CreateStep(ctx context.Context, id string, opts ...RequestOption) (*Step, *Response, error) {
-	return send[Step](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", nil, opts)
+	return send[Step](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", nil, opts)
 }
 
 // UpdateStep modifies a step's content, delay or branching.
 func (s *CampaignService) UpdateStep(ctx context.Context, id, stepID string, params *StepUpdateParams, opts ...RequestOption) (*Step, *Response, error) {
-	return send[Step](ctx, s.client, s.client.patch, "campaigns/"+url.PathEscape(id)+"/steps/"+url.PathEscape(stepID), params, opts)
+	return send[Step](ctx, s.client.patch, "campaigns/"+url.PathEscape(id)+"/steps/"+url.PathEscape(stepID), params, opts)
 }
 
 // DeleteStep removes a step from the campaign's sequence.
@@ -722,12 +722,12 @@ func (s *CampaignService) ListABVariants(ctx context.Context, id string, opts ..
 
 // CreateABVariant adds an A/B variant to the campaign.
 func (s *CampaignService) CreateABVariant(ctx context.Context, id string, params *ABVariantCreateParams, opts ...RequestOption) (*ABVariant, *Response, error) {
-	return send[ABVariant](ctx, s.client, s.client.post, "campaigns/"+url.PathEscape(id)+"/ab-variants", params, opts)
+	return send[ABVariant](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/ab-variants", params, opts)
 }
 
 // UpdateABVariant modifies an A/B variant.
 func (s *CampaignService) UpdateABVariant(ctx context.Context, id, variantID string, params *ABVariantUpdateParams, opts ...RequestOption) (*ABVariant, *Response, error) {
-	return send[ABVariant](ctx, s.client, s.client.patch, "campaigns/"+url.PathEscape(id)+"/ab-variants/"+url.PathEscape(variantID), params, opts)
+	return send[ABVariant](ctx, s.client.patch, "campaigns/"+url.PathEscape(id)+"/ab-variants/"+url.PathEscape(variantID), params, opts)
 }
 
 // DeleteABVariant removes an A/B variant.

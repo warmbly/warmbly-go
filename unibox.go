@@ -402,7 +402,7 @@ func (s *UniboxService) SetThreadLabels(ctx context.Context, threadID string, ca
 		ThreadID    string   `json:"thread_id"`
 		CategoryIDs []string `json:"category_ids"`
 	}{ThreadID: threadID, CategoryIDs: categoryIDs}
-	return sendData[MiniCategory](ctx, s.client, s.client.put, "unibox/thread/labels", body, opts)
+	return sendData[MiniCategory](ctx, s.client.put, "unibox/thread/labels", body, opts)
 }
 
 // MarkSeen marks messages read or unread.
@@ -416,12 +416,12 @@ func (s *UniboxService) MarkSeen(ctx context.Context, emailIDs []string, seen bo
 
 // Reply sends a reply into an existing thread.
 func (s *UniboxService) Reply(ctx context.Context, params *UniboxReplyParams, opts ...RequestOption) (*SendResult, *Response, error) {
-	return send[SendResult](ctx, s.client, s.client.post, "unibox/reply", params, opts)
+	return send[SendResult](ctx, s.client.post, "unibox/reply", params, opts)
 }
 
 // Compose sends a brand-new outbound email.
 func (s *UniboxService) Compose(ctx context.Context, params *UniboxComposeParams, opts ...RequestOption) (*SendResult, *Response, error) {
-	return send[SendResult](ctx, s.client, s.client.post, "unibox/compose", params, opts)
+	return send[SendResult](ctx, s.client.post, "unibox/compose", params, opts)
 }
 
 // ComposeCandidates scores the workspace's mailboxes as senders for one
@@ -442,7 +442,7 @@ func (s *UniboxService) DraftCompose(ctx context.Context, to, subject, instructi
 		Subject     string `json:"subject,omitempty"`
 		Instruction string `json:"instruction,omitempty"`
 	}{To: to, Subject: subject, Instruction: instruction}
-	return send[AIDraft](ctx, s.client, s.client.post, "unibox/compose/draft", body, opts)
+	return send[AIDraft](ctx, s.client.post, "unibox/compose/draft", body, opts)
 }
 
 // DraftReply writes a reply grounded in the thread's history. It spends AI
@@ -452,7 +452,7 @@ func (s *UniboxService) DraftReply(ctx context.Context, threadID, instruction st
 		ThreadID    string `json:"thread_id"`
 		Instruction string `json:"instruction,omitempty"`
 	}{ThreadID: threadID, Instruction: instruction}
-	return send[AIDraft](ctx, s.client, s.client.post, "unibox/reply/draft", body, opts)
+	return send[AIDraft](ctx, s.client.post, "unibox/reply/draft", body, opts)
 }
 
 // --- autosaved compose drafts ---
@@ -490,7 +490,7 @@ func (s *UniboxService) ApproveAgentDraft(ctx context.Context, id, body string, 
 	req := struct {
 		Body string `json:"body,omitempty"`
 	}{Body: body}
-	return send[SendResult](ctx, s.client, s.client.post, "unibox/agent-drafts/"+url.PathEscape(id)+"/approve", req, opts)
+	return send[SendResult](ctx, s.client.post, "unibox/agent-drafts/"+url.PathEscape(id)+"/approve", req, opts)
 }
 
 // DiscardAgentDraft throws an agent draft away unsent.
@@ -511,7 +511,7 @@ func (s *UniboxService) Snooze(ctx context.Context, threadID string, until time.
 		ThreadID     string    `json:"thread_id"`
 		SnoozedUntil time.Time `json:"snoozed_until"`
 	}{ThreadID: threadID, SnoozedUntil: until}
-	return send[UniboxSnooze](ctx, s.client, s.client.post, "unibox/snooze", body, opts)
+	return send[UniboxSnooze](ctx, s.client.post, "unibox/snooze", body, opts)
 }
 
 // Unsnooze returns a snoozed thread to the inbox immediately.

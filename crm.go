@@ -200,7 +200,7 @@ const (
 	TaskStatusPending    = "pending"
 	TaskStatusInProgress = "in_progress"
 	TaskStatusCompleted  = "completed"
-	TaskStatusCancelled  = "cancelled"
+	TaskStatusCancelled  = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 )
 
 // CRMTaskType is a user-defined kind of work, for example Call or Meeting.
@@ -318,7 +318,7 @@ type TasksSummary struct {
 	PendingCount   int64 `json:"pending_count"`
 	InProgress     int64 `json:"in_progress_count"`
 	CompletedCount int64 `json:"completed_count"`
-	CancelledCount int64 `json:"cancelled_count"`
+	CancelledCount int64 `json:"cancelled_count"` //nolint:misspell // wire value: the API sends "cancelled" here
 	OverdueCount   int64 `json:"overdue_count"`
 	HighPriority   int64 `json:"high_priority_count"`
 }
@@ -332,7 +332,7 @@ func (s *CRMService) ListPipelines(ctx context.Context, opts ...RequestOption) (
 
 // CreatePipeline creates a pipeline, optionally seeding its stages.
 func (s *CRMService) CreatePipeline(ctx context.Context, params *PipelineCreateParams, opts ...RequestOption) (*Pipeline, *Response, error) {
-	return send[Pipeline](ctx, s.client, s.client.post, "crm/pipelines", params, opts)
+	return send[Pipeline](ctx, s.client.post, "crm/pipelines", params, opts)
 }
 
 // GetPipeline retrieves a pipeline and its stages.
@@ -342,7 +342,7 @@ func (s *CRMService) GetPipeline(ctx context.Context, id string, opts ...Request
 
 // UpdatePipeline renames a pipeline.
 func (s *CRMService) UpdatePipeline(ctx context.Context, id string, params *PipelineUpdateParams, opts ...RequestOption) (*Pipeline, *Response, error) {
-	return send[Pipeline](ctx, s.client, s.client.patch, "crm/pipelines/"+url.PathEscape(id), params, opts)
+	return send[Pipeline](ctx, s.client.patch, "crm/pipelines/"+url.PathEscape(id), params, opts)
 }
 
 // DeletePipeline removes a pipeline.
@@ -352,12 +352,12 @@ func (s *CRMService) DeletePipeline(ctx context.Context, id string, opts ...Requ
 
 // CreateStage appends a stage to a pipeline.
 func (s *CRMService) CreateStage(ctx context.Context, pipelineID string, params *StageCreateParams, opts ...RequestOption) (*PipelineStage, *Response, error) {
-	return send[PipelineStage](ctx, s.client, s.client.post, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages", params, opts)
+	return send[PipelineStage](ctx, s.client.post, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages", params, opts)
 }
 
 // UpdateStage modifies a pipeline stage.
 func (s *CRMService) UpdateStage(ctx context.Context, pipelineID, stageID string, params *StageUpdateParams, opts ...RequestOption) (*PipelineStage, *Response, error) {
-	return send[PipelineStage](ctx, s.client, s.client.patch, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages/"+url.PathEscape(stageID), params, opts)
+	return send[PipelineStage](ctx, s.client.patch, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages/"+url.PathEscape(stageID), params, opts)
 }
 
 // DeleteStage removes a pipeline stage.
@@ -386,12 +386,12 @@ func (s *CRMService) SearchDeals(ctx context.Context, params *DealSearchParams, 
 
 // DealsSummary aggregates every deal matching the same filter a search takes.
 func (s *CRMService) DealsSummary(ctx context.Context, params *DealSearchParams, opts ...RequestOption) (*DealsSummary, *Response, error) {
-	return send[DealsSummary](ctx, s.client, s.client.post, "crm/deals/summary", params, opts)
+	return send[DealsSummary](ctx, s.client.post, "crm/deals/summary", params, opts)
 }
 
 // CreateDeal opens a new deal.
 func (s *CRMService) CreateDeal(ctx context.Context, params *DealCreateParams, opts ...RequestOption) (*Deal, *Response, error) {
-	return send[Deal](ctx, s.client, s.client.post, "crm/deals", params, opts)
+	return send[Deal](ctx, s.client.post, "crm/deals", params, opts)
 }
 
 // GetDeal retrieves a single deal.
@@ -401,7 +401,7 @@ func (s *CRMService) GetDeal(ctx context.Context, id string, opts ...RequestOpti
 
 // UpdateDeal modifies a deal, including moving it between stages or closing it.
 func (s *CRMService) UpdateDeal(ctx context.Context, id string, params *DealUpdateParams, opts ...RequestOption) (*Deal, *Response, error) {
-	return send[Deal](ctx, s.client, s.client.patch, "crm/deals/"+url.PathEscape(id), params, opts)
+	return send[Deal](ctx, s.client.patch, "crm/deals/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteDeal removes a deal.
@@ -419,12 +419,12 @@ func (s *CRMService) ListTaskTypes(ctx context.Context, opts ...RequestOption) (
 
 // CreateTaskType adds a task type.
 func (s *CRMService) CreateTaskType(ctx context.Context, params *TaskTypeCreateParams, opts ...RequestOption) (*CRMTaskType, *Response, error) {
-	return send[CRMTaskType](ctx, s.client, s.client.post, "crm/task-types", params, opts)
+	return send[CRMTaskType](ctx, s.client.post, "crm/task-types", params, opts)
 }
 
 // UpdateTaskType modifies a task type.
 func (s *CRMService) UpdateTaskType(ctx context.Context, id string, params *TaskTypeUpdateParams, opts ...RequestOption) (*CRMTaskType, *Response, error) {
-	return send[CRMTaskType](ctx, s.client, s.client.patch, "crm/task-types/"+url.PathEscape(id), params, opts)
+	return send[CRMTaskType](ctx, s.client.patch, "crm/task-types/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteTaskType removes a task type. Tasks that used it keep its name.
@@ -453,12 +453,12 @@ func (s *CRMService) SearchTasks(ctx context.Context, params *TaskSearchParams, 
 
 // TasksSummary aggregates every task matching the same filter a search takes.
 func (s *CRMService) TasksSummary(ctx context.Context, params *TaskSearchParams, opts ...RequestOption) (*TasksSummary, *Response, error) {
-	return send[TasksSummary](ctx, s.client, s.client.post, "crm/tasks/summary", params, opts)
+	return send[TasksSummary](ctx, s.client.post, "crm/tasks/summary", params, opts)
 }
 
 // CreateTask opens a new CRM task.
 func (s *CRMService) CreateTask(ctx context.Context, params *CRMTaskCreateParams, opts ...RequestOption) (*CRMTask, *Response, error) {
-	return send[CRMTask](ctx, s.client, s.client.post, "crm/tasks", params, opts)
+	return send[CRMTask](ctx, s.client.post, "crm/tasks", params, opts)
 }
 
 // GetTask retrieves a single CRM task.
@@ -468,7 +468,7 @@ func (s *CRMService) GetTask(ctx context.Context, id string, opts ...RequestOpti
 
 // UpdateTask modifies a CRM task.
 func (s *CRMService) UpdateTask(ctx context.Context, id string, params *CRMTaskUpdateParams, opts ...RequestOption) (*CRMTask, *Response, error) {
-	return send[CRMTask](ctx, s.client, s.client.patch, "crm/tasks/"+url.PathEscape(id), params, opts)
+	return send[CRMTask](ctx, s.client.patch, "crm/tasks/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteTask removes a CRM task.

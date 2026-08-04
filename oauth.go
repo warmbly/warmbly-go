@@ -153,12 +153,12 @@ func (s *OAuthAppService) Get(ctx context.Context, id string, opts ...RequestOpt
 // Create registers a new OAuth application. The returned [OAuthAppWithSecret]
 // is the only time the client secret is available.
 func (s *OAuthAppService) Create(ctx context.Context, params *OAuthAppParams, opts ...RequestOption) (*OAuthAppWithSecret, *Response, error) {
-	return send[OAuthAppWithSecret](ctx, s.client, s.client.post, "oauth/applications", params, opts)
+	return send[OAuthAppWithSecret](ctx, s.client.post, "oauth/applications", params, opts)
 }
 
 // Update replaces an OAuth application's registration. See [OAuthAppParams].
 func (s *OAuthAppService) Update(ctx context.Context, id string, params *OAuthAppParams, opts ...RequestOption) (*OAuthApp, *Response, error) {
-	return send[OAuthApp](ctx, s.client, s.client.patch, "oauth/applications/"+url.PathEscape(id), params, opts)
+	return send[OAuthApp](ctx, s.client.patch, "oauth/applications/"+url.PathEscape(id), params, opts)
 }
 
 // Delete permanently removes an OAuth application, revoking every token issued
@@ -326,5 +326,5 @@ type DynamicClient struct {
 // and unauthenticated but per-IP rate limited, and registration alone grants no
 // access — a human still has to consent.
 func (s *OAuthAppService) RegisterDynamicClient(ctx context.Context, params *DynamicClientParams, opts ...RequestOption) (*DynamicClient, *Response, error) {
-	return send[DynamicClient](ctx, s.client, s.client.post, "oauth/register", params, opts)
+	return send[DynamicClient](ctx, s.client.post, "oauth/register", params, opts)
 }

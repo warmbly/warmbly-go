@@ -335,7 +335,7 @@ func (s *BillingService) Features(ctx context.Context, opts ...RequestOption) (*
 // Checkout starts a hosted checkout for a plan and returns the URL to send the
 // user to.
 func (s *BillingService) Checkout(ctx context.Context, params *CheckoutParams, opts ...RequestOption) (*CheckoutSession, *Response, error) {
-	return send[CheckoutSession](ctx, s.client, s.client.post, "subscription/checkout", params, opts)
+	return send[CheckoutSession](ctx, s.client.post, "subscription/checkout", params, opts)
 }
 
 // Portal opens the payment provider's billing portal and returns its URL.
@@ -428,7 +428,7 @@ func (s *BillingService) BuyCredits(ctx context.Context, pack, successURL, cance
 		SuccessURL string `json:"success_url,omitempty"`
 		CancelURL  string `json:"cancel_url,omitempty"`
 	}{Pack: pack, SuccessURL: successURL, CancelURL: cancelURL}
-	return send[CheckoutSession](ctx, s.client, s.client.post, "subscription/credits/checkout", body, opts)
+	return send[CheckoutSession](ctx, s.client.post, "subscription/credits/checkout", body, opts)
 }
 
 // CreditUsage returns AI spend over the last days, from 1 to 90. Zero uses the
@@ -446,7 +446,7 @@ func (s *BillingService) CreditSettings(ctx context.Context, opts ...RequestOpti
 
 // UpdateCreditSettings saves the AI spend controls.
 func (s *BillingService) UpdateCreditSettings(ctx context.Context, params *CreditSettingsParams, opts ...RequestOption) (*CreditSettings, *Response, error) {
-	return send[CreditSettings](ctx, s.client, s.client.patch, "subscription/credits/settings", params, opts)
+	return send[CreditSettings](ctx, s.client.patch, "subscription/credits/settings", params, opts)
 }
 
 // --- referrals ---
@@ -459,7 +459,7 @@ func (s *BillingService) Referral(ctx context.Context, opts ...RequestOption) (*
 // EnsureReferralCode mints the workspace's referral code if it does not have
 // one yet, and returns it either way.
 func (s *BillingService) EnsureReferralCode(ctx context.Context, opts ...RequestOption) (*ReferralSummary, *Response, error) {
-	return send[ReferralSummary](ctx, s.client, s.client.post, "subscription/referral", nil, opts)
+	return send[ReferralSummary](ctx, s.client.post, "subscription/referral", nil, opts)
 }
 
 // ReferralAttributions returns a page of the workspaces referred, with where

@@ -311,12 +311,12 @@ func (s *APIKeyService) Get(ctx context.Context, id string, opts ...RequestOptio
 // Create provisions a new API key. The returned [APIKeyWithSecret] is the only
 // time the plaintext credential is available.
 func (s *APIKeyService) Create(ctx context.Context, params *APIKeyCreateParams, opts ...RequestOption) (*APIKeyWithSecret, *Response, error) {
-	return send[APIKeyWithSecret](ctx, s.client, s.client.post, "api-keys", params, opts)
+	return send[APIKeyWithSecret](ctx, s.client.post, "api-keys", params, opts)
 }
 
 // Update modifies an existing API key.
 func (s *APIKeyService) Update(ctx context.Context, id string, params *APIKeyUpdateParams, opts ...RequestOption) (*APIKey, *Response, error) {
-	return send[APIKey](ctx, s.client, s.client.patch, "api-keys/"+url.PathEscape(id), params, opts)
+	return send[APIKey](ctx, s.client.patch, "api-keys/"+url.PathEscape(id), params, opts)
 }
 
 // Revoke permanently revokes an API key. The reason is stored on the key and

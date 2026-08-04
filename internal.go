@@ -56,7 +56,7 @@ func fetchData[T any](ctx context.Context, c *Client, path string, opts []Reques
 }
 
 // sendData is [fetchData] for a request that carries a body.
-func sendData[T any](ctx context.Context, c *Client, verb bodyVerb, path string, body any, opts []RequestOption) ([]T, *Response, error) {
+func sendData[T any](ctx context.Context, verb bodyVerb, path string, body any, opts []RequestOption) ([]T, *Response, error) {
 	var env dataEnvelope[T]
 	resp, err := verb(ctx, path, body, &env, opts...)
 	if err != nil {
@@ -69,7 +69,7 @@ func sendData[T any](ctx context.Context, c *Client, verb bodyVerb, path string,
 }
 
 // send calls verb with body and decodes the response into a freshly allocated T.
-func send[T any](ctx context.Context, c *Client, verb bodyVerb, path string, body any, opts []RequestOption) (*T, *Response, error) {
+func send[T any](ctx context.Context, verb bodyVerb, path string, body any, opts []RequestOption) (*T, *Response, error) {
 	out := new(T)
 	resp, err := verb(ctx, path, body, out, opts...)
 	if err != nil {
@@ -79,7 +79,7 @@ func send[T any](ctx context.Context, c *Client, verb bodyVerb, path string, bod
 }
 
 // sendSlice is [send] for endpoints that answer with a bare JSON array.
-func sendSlice[T any](ctx context.Context, c *Client, verb bodyVerb, path string, body any, opts []RequestOption) ([]T, *Response, error) {
+func sendSlice[T any](ctx context.Context, verb bodyVerb, path string, body any, opts []RequestOption) ([]T, *Response, error) {
 	var out []T
 	resp, err := verb(ctx, path, body, &out, opts...)
 	if err != nil {

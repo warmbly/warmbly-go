@@ -229,7 +229,7 @@ func (s *AutomationService) Test(ctx context.Context, id string, data any, opts 
 	body := struct {
 		Data any `json:"data,omitempty"`
 	}{Data: data}
-	return send[AutomationTestResult](ctx, s.client, s.client.post, "automations/"+url.PathEscape(id)+"/test", body, opts)
+	return send[AutomationTestResult](ctx, s.client.post, "automations/"+url.PathEscape(id)+"/test", body, opts)
 }
 
 // Runs returns an automation's recent runs, newest first. A limit of 0 uses the

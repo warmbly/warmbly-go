@@ -351,7 +351,7 @@ type ContactInput struct {
 	LastName  string `json:"last_name,omitempty"`
 	Company   string `json:"company,omitempty"`
 	Phone     string `json:"phone,omitempty"`
-	// Campaigns and Categories are ids to enrol the new contact in.
+	// Campaigns and Categories are ids to enroll the new contact in.
 	Campaigns    []string          `json:"campaigns,omitempty"`
 	Categories   []string          `json:"categories,omitempty"`
 	CustomFields map[string]string `json:"custom_fields,omitempty"`
@@ -499,7 +499,7 @@ type ContactImportPreview struct {
 	Format    string `json:"format"`
 	TotalRows int    `json:"total_rows"`
 	// Columns are the detected headers. For a headerless file the server
-	// synthesises "Column 1", "Column 2" and so on.
+	// synthesizes "Column 1", "Column 2" and so on.
 	Columns   []string `json:"columns"`
 	HasHeader bool     `json:"has_header"`
 	// SampleRows are the first rows verbatim.
@@ -654,17 +654,17 @@ func searchContacts(ctx context.Context, c *Client, params *ContactSearchParams,
 
 // Create adds contacts to the organization and returns the created records.
 func (s *ContactService) Create(ctx context.Context, contacts []ContactInput, opts ...RequestOption) ([]Contact, *Response, error) {
-	return sendSlice[Contact](ctx, s.client, s.client.post, "contacts", contacts, opts)
+	return sendSlice[Contact](ctx, s.client.post, "contacts", contacts, opts)
 }
 
 // BulkUpdate edits many contacts at once and returns the updated records.
 func (s *ContactService) BulkUpdate(ctx context.Context, params *ContactBulkUpdateParams, opts ...RequestOption) ([]Contact, *Response, error) {
-	return sendSlice[Contact](ctx, s.client, s.client.patch, "contacts", params, opts)
+	return sendSlice[Contact](ctx, s.client.patch, "contacts", params, opts)
 }
 
 // BulkDelete permanently removes the given contacts.
 func (s *ContactService) BulkDelete(ctx context.Context, ids []string, opts ...RequestOption) (*Response, error) {
-	return s.client.deleteBody(ctx, "contacts", ids, nil, opts...)
+	return s.client.deleteBody(ctx, "contacts", ids, opts...)
 }
 
 // Get retrieves the hydrated contact 360 view.
@@ -674,7 +674,7 @@ func (s *ContactService) Get(ctx context.Context, id string, opts ...RequestOpti
 
 // Update modifies a single contact.
 func (s *ContactService) Update(ctx context.Context, id string, params *ContactUpdateParams, opts ...RequestOption) (*Contact, *Response, error) {
-	return send[Contact](ctx, s.client, s.client.patch, "contacts/"+url.PathEscape(id), params, opts)
+	return send[Contact](ctx, s.client.patch, "contacts/"+url.PathEscape(id), params, opts)
 }
 
 // Delete permanently removes a contact.
@@ -724,7 +724,7 @@ func (s *ContactService) AddNote(ctx context.Context, id, content string, opts .
 	body := struct {
 		Content string `json:"content"`
 	}{Content: content}
-	return send[ContactNote](ctx, s.client, s.client.post, "contacts/"+url.PathEscape(id)+"/notes", body, opts)
+	return send[ContactNote](ctx, s.client.post, "contacts/"+url.PathEscape(id)+"/notes", body, opts)
 }
 
 // UpdateNote rewrites a CRM note.
@@ -732,7 +732,7 @@ func (s *ContactService) UpdateNote(ctx context.Context, id, noteID, content str
 	body := struct {
 		Content *string `json:"content,omitempty"`
 	}{Content: &content}
-	return send[ContactNote](ctx, s.client, s.client.patch, "contacts/"+url.PathEscape(id)+"/notes/"+url.PathEscape(noteID), body, opts)
+	return send[ContactNote](ctx, s.client.patch, "contacts/"+url.PathEscape(id)+"/notes/"+url.PathEscape(noteID), body, opts)
 }
 
 // DeleteNote removes a CRM note.
@@ -789,7 +789,7 @@ func (s *ContactService) Research(ctx context.Context, id, objective string, opt
 	body := struct {
 		Objective string `json:"objective,omitempty"`
 	}{Objective: objective}
-	return send[ResearchRun](ctx, s.client, s.client.post, "contacts/"+url.PathEscape(id)+"/research", body, opts)
+	return send[ResearchRun](ctx, s.client.post, "contacts/"+url.PathEscape(id)+"/research", body, opts)
 }
 
 // ListResearch returns the contact's most recent research runs, newest first. A

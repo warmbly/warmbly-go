@@ -79,12 +79,12 @@ func (s *WarmupRoutingService) List(ctx context.Context, opts ...RequestOption) 
 
 // Create adds a routing rule.
 func (s *WarmupRoutingService) Create(ctx context.Context, params *WarmupRoutingRuleParams, opts ...RequestOption) (*WarmupRoutingRule, *Response, error) {
-	return send[WarmupRoutingRule](ctx, s.client, s.client.post, "warmup/routing", params, opts)
+	return send[WarmupRoutingRule](ctx, s.client.post, "warmup/routing", params, opts)
 }
 
 // Update replaces a routing rule.
 func (s *WarmupRoutingService) Update(ctx context.Context, id string, params *WarmupRoutingRuleParams, opts ...RequestOption) (*WarmupRoutingRule, *Response, error) {
-	return send[WarmupRoutingRule](ctx, s.client, s.client.patch, "warmup/routing/"+url.PathEscape(id), params, opts)
+	return send[WarmupRoutingRule](ctx, s.client.patch, "warmup/routing/"+url.PathEscape(id), params, opts)
 }
 
 // Delete removes a routing rule.

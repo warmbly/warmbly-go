@@ -83,7 +83,7 @@ type LeadSyncSource struct {
 	ColumnMapping []ImportColumnMapping `json:"column_mapping"`
 	Dedup         string                `json:"dedup"`
 
-	// TargetCampaignID, when set, enrols every new or updated lead in that
+	// TargetCampaignID, when set, enrolls every new or updated lead in that
 	// campaign on each sync.
 	TargetCampaignID  *string  `json:"target_campaign_id,omitempty"`
 	CategoryIDs       []string `json:"category_ids"`
@@ -157,7 +157,7 @@ func (s *LeadSyncService) Spreadsheet(ctx context.Context, connectionID, sheetID
 		ConnectionID string `json:"connection_id"`
 		SheetID      string `json:"sheet_id"`
 	}{ConnectionID: connectionID, SheetID: sheetID}
-	return send[Spreadsheet](ctx, s.client, s.client.post, "lead-sync/google/spreadsheet", body, opts)
+	return send[Spreadsheet](ctx, s.client.post, "lead-sync/google/spreadsheet", body, opts)
 }
 
 // Preview reads the top rows of a tab and returns the same shape as
@@ -168,7 +168,7 @@ func (s *LeadSyncService) Preview(ctx context.Context, connectionID, sheetID, ta
 		SheetID      string `json:"sheet_id"`
 		TabTitle     string `json:"tab_title,omitempty"`
 	}{ConnectionID: connectionID, SheetID: sheetID, TabTitle: tabTitle}
-	return send[ContactImportPreview](ctx, s.client, s.client.post, "lead-sync/google/preview", body, opts)
+	return send[ContactImportPreview](ctx, s.client.post, "lead-sync/google/preview", body, opts)
 }
 
 // Sources returns the workspace's saved sync sources.
@@ -178,7 +178,7 @@ func (s *LeadSyncService) Sources(ctx context.Context, opts ...RequestOption) ([
 
 // Create saves a new sync source.
 func (s *LeadSyncService) Create(ctx context.Context, params *LeadSyncCreateParams, opts ...RequestOption) (*LeadSyncSource, *Response, error) {
-	return send[LeadSyncSource](ctx, s.client, s.client.post, "lead-sync/sources", params, opts)
+	return send[LeadSyncSource](ctx, s.client.post, "lead-sync/sources", params, opts)
 }
 
 // Get retrieves a saved sync source.
@@ -188,7 +188,7 @@ func (s *LeadSyncService) Get(ctx context.Context, id string, opts ...RequestOpt
 
 // Update edits a saved sync source.
 func (s *LeadSyncService) Update(ctx context.Context, id string, params *LeadSyncUpdateParams, opts ...RequestOption) (*LeadSyncSource, *Response, error) {
-	return send[LeadSyncSource](ctx, s.client, s.client.patch, "lead-sync/sources/"+url.PathEscape(id), params, opts)
+	return send[LeadSyncSource](ctx, s.client.patch, "lead-sync/sources/"+url.PathEscape(id), params, opts)
 }
 
 // Delete removes a saved sync source. The contacts it imported stay.
@@ -199,5 +199,5 @@ func (s *LeadSyncService) Delete(ctx context.Context, id string, opts ...Request
 // Sync runs a source now and returns the import counts. It runs in the
 // request, so a large sheet takes a while.
 func (s *LeadSyncService) Sync(ctx context.Context, id string, opts ...RequestOption) (*LeadSyncResult, *Response, error) {
-	return send[LeadSyncResult](ctx, s.client, s.client.post, "lead-sync/sources/"+url.PathEscape(id)+"/sync", nil, opts)
+	return send[LeadSyncResult](ctx, s.client.post, "lead-sync/sources/"+url.PathEscape(id)+"/sync", nil, opts)
 }

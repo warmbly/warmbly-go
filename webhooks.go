@@ -38,8 +38,10 @@ const (
 	// WebhookEventIDHeader carries the event's id, which is stable across
 	// retries and so is the right key for receiver-side deduplication.
 	WebhookEventIDHeader = "X-Warmbly-Event-Id"
-	// WebhookChallengeHeader carries the ownership-verification challenge. Echo
-	// its value back in your response body to confirm the endpoint.
+	// WebhookChallengeHeader is where a receiver echoes the ownership
+	// challenge back. Read the token from the verified [EventEndpointTest]
+	// payload rather than from this header on the request: the header is a
+	// convenience copy an attacker could forge, while the body is signed.
 	WebhookChallengeHeader = "X-Warmbly-Webhook-Challenge"
 )
 
@@ -379,12 +381,12 @@ func (s *WebhookService) List(ctx context.Context, opts ...RequestOption) (*Webh
 // The endpoint receives no real events until it passes verification: call
 // [WebhookService.Verify] and echo the challenge back.
 func (s *WebhookService) Create(ctx context.Context, params *WebhookCreateParams, opts ...RequestOption) (*WebhookWithSecret, *Response, error) {
-	return send[WebhookWithSecret](ctx, s.client, s.client.post, "webhooks", params, opts)
+	return send[WebhookWithSecret](ctx, s.client.post, "webhooks", params, opts)
 }
 
 // Update replaces an endpoint's configuration.
 func (s *WebhookService) Update(ctx context.Context, id string, params *WebhookUpdateParams, opts ...RequestOption) (*Webhook, *Response, error) {
-	return send[Webhook](ctx, s.client, s.client.patch, "webhooks/"+url.PathEscape(id), params, opts)
+	return send[Webhook](ctx, s.client.patch, "webhooks/"+url.PathEscape(id), params, opts)
 }
 
 // Delete permanently removes an endpoint.
@@ -405,9 +407,10 @@ func (s *WebhookService) RotateSecret(ctx context.Context, id string, opts ...Re
 	return out.Secret, resp, nil
 }
 
-// Verify sends an ownership challenge to the endpoint. Echo the value of the
-// [WebhookChallengeHeader] (or the challenge field in the body) back in your
-// response to confirm the endpoint and start receiving events.
+// Verify sends an ownership challenge to the endpoint. The challenge arrives as
+// a signed [EventEndpointTest] delivery; echo the token from its verified
+// payload back — in the [WebhookChallengeHeader] of your response, or in the
+// body — to confirm the endpoint and start receiving events.
 func (s *WebhookService) Verify(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.post(ctx, "webhooks/"+url.PathEscape(id)+"/verify", nil, nil, opts...)
 }

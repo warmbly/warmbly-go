@@ -302,7 +302,9 @@ case err != nil:
 }
 ```
 
-A new endpoint receives nothing until it proves it owns its URL: call `client.Webhooks.Verify`, then echo the `X-Warmbly-Webhook-Challenge` header back from your handler. Deliveries retry, so deduplicate on `event.ID`.
+A new endpoint receives nothing until it proves it owns its URL. Call `client.Webhooks.Verify`; Warmbly then sends a signed `webhook.test` delivery carrying a challenge token, which you echo back in the `X-Warmbly-Webhook-Challenge` response header. Take the token from the *verified payload*, not from the copy in the request header — that copy is attacker-controllable, the signed body is not. See [`examples/webhooks`](examples/webhooks) for the full handler.
+
+Deliveries retry, so deduplicate on `event.ID`.
 
 For lower-level use, `warmbly.VerifyWebhookSignature` and `warmbly.ConstructWebhookEvent` expose the same checks with an explicit tolerance.
 

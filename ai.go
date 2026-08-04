@@ -70,18 +70,18 @@ type AIVariableParams struct {
 
 // Write generates a new piece of copy.
 func (s *GenerationService) Write(ctx context.Context, params *WriteParams, opts ...RequestOption) (*Generation, *Response, error) {
-	return send[Generation](ctx, s.client, s.client.post, "generation/write", params, opts)
+	return send[Generation](ctx, s.client.post, "generation/write", params, opts)
 }
 
 // Edit rewrites a passage according to an instruction.
 func (s *GenerationService) Edit(ctx context.Context, params *EditParams, opts ...RequestOption) (*Generation, *Response, error) {
-	return send[Generation](ctx, s.client, s.client.post, "generation/edit", params, opts)
+	return send[Generation](ctx, s.client.post, "generation/edit", params, opts)
 }
 
 // AIVariable previews an AI variable block against a single contact. A prompt
 // that renders empty against the contact costs nothing.
 func (s *GenerationService) AIVariable(ctx context.Context, params *AIVariableParams, opts ...RequestOption) (*Generation, *Response, error) {
-	return send[Generation](ctx, s.client, s.client.post, "generation/ai-variable", params, opts)
+	return send[Generation](ctx, s.client.post, "generation/ai-variable", params, opts)
 }
 
 // SkillService manages AI skills: workspace playbooks folded into every AI
@@ -130,12 +130,12 @@ func (s *SkillService) List(ctx context.Context, opts ...RequestOption) ([]AISki
 
 // Create adds an AI skill.
 func (s *SkillService) Create(ctx context.Context, params *SkillCreateParams, opts ...RequestOption) (*AISkill, *Response, error) {
-	return send[AISkill](ctx, s.client, s.client.post, "ai/skills", params, opts)
+	return send[AISkill](ctx, s.client.post, "ai/skills", params, opts)
 }
 
 // Update modifies an AI skill.
 func (s *SkillService) Update(ctx context.Context, id string, params *SkillUpdateParams, opts ...RequestOption) (*AISkill, *Response, error) {
-	return send[AISkill](ctx, s.client, s.client.patch, "ai/skills/"+url.PathEscape(id), params, opts)
+	return send[AISkill](ctx, s.client.patch, "ai/skills/"+url.PathEscape(id), params, opts)
 }
 
 // Delete removes an AI skill.

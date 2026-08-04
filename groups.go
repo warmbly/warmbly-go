@@ -46,12 +46,12 @@ type GroupUpdateParams struct {
 
 // Create adds a group, appended to the end of the set.
 func (s *GroupService) Create(ctx context.Context, params *GroupCreateParams, opts ...RequestOption) (*Group, *Response, error) {
-	return send[Group](ctx, s.client, s.client.post, s.name, params, opts)
+	return send[Group](ctx, s.client.post, s.name, params, opts)
 }
 
 // Update renames or recolors a group.
 func (s *GroupService) Update(ctx context.Context, id string, params *GroupUpdateParams, opts ...RequestOption) (*Group, *Response, error) {
-	return send[Group](ctx, s.client, s.client.patch, s.name+"/"+url.PathEscape(id), params, opts)
+	return send[Group](ctx, s.client.patch, s.name+"/"+url.PathEscape(id), params, opts)
 }
 
 // Move reorders a group to the given zero-based position and returns the new
@@ -60,10 +60,10 @@ func (s *GroupService) Move(ctx context.Context, id string, position int32, opts
 	body := struct {
 		Position int32 `json:"position"`
 	}{Position: position}
-	return sendSlice[GroupOrder](ctx, s.client, s.client.patch, s.name+"/"+url.PathEscape(id)+"/move", body, opts)
+	return sendSlice[GroupOrder](ctx, s.client.patch, s.name+"/"+url.PathEscape(id)+"/move", body, opts)
 }
 
-// Delete removes a group. What it labelled keeps existing, unlabelled.
+// Delete removes a group. What it labeled keeps existing, unlabeled.
 func (s *GroupService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, s.name+"/"+url.PathEscape(id), opts...)
 }

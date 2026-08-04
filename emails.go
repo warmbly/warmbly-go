@@ -328,7 +328,7 @@ func (s *EmailService) Get(ctx context.Context, id string, opts ...RequestOption
 
 // Update modifies a mailbox's settings.
 func (s *EmailService) Update(ctx context.Context, id string, params *EmailUpdateParams, opts ...RequestOption) (*Email, *Response, error) {
-	return send[Email](ctx, s.client, s.client.patch, "emails/"+url.PathEscape(id), params, opts)
+	return send[Email](ctx, s.client.patch, "emails/"+url.PathEscape(id), params, opts)
 }
 
 // Delete disconnects and removes a mailbox.
@@ -338,14 +338,14 @@ func (s *EmailService) Delete(ctx context.Context, id string, opts ...RequestOpt
 
 // BulkTag adds and removes tags across many mailboxes in one call.
 func (s *EmailService) BulkTag(ctx context.Context, params *BulkTagParams, opts ...RequestOption) (*BulkTagResult, *Response, error) {
-	return send[BulkTagResult](ctx, s.client, s.client.patch, "emails/tags", params, opts)
+	return send[BulkTagResult](ctx, s.client.patch, "emails/tags", params, opts)
 }
 
 // UpdateTrackingDomain sets the mailbox's custom tracking subdomain (for
 // example "t.acme.com") and re-resolves it. An empty domain clears it.
 func (s *EmailService) UpdateTrackingDomain(ctx context.Context, id, domain string, opts ...RequestOption) (*TrackingDomainStatus, *Response, error) {
 	q := url.Values{"domain": {domain}}
-	return send[TrackingDomainStatus](ctx, s.client, s.client.patch, withQuery("emails/"+url.PathEscape(id)+"/track", q), nil, opts)
+	return send[TrackingDomainStatus](ctx, s.client.patch, withQuery("emails/"+url.PathEscape(id)+"/track", q), nil, opts)
 }
 
 // AuthCheck runs a live SPF/DKIM/DMARC lookup against the mailbox's sending
@@ -360,12 +360,12 @@ func (s *EmailService) Verify(ctx context.Context, email string, opts ...Request
 	body := struct {
 		Email string `json:"email"`
 	}{Email: email}
-	return send[VerifyResult](ctx, s.client, s.client.post, "emails/verify", body, opts)
+	return send[VerifyResult](ctx, s.client.post, "emails/verify", body, opts)
 }
 
 // Send sends a one-off message from the given mailbox.
 func (s *EmailService) Send(ctx context.Context, id string, params *SendEmailParams, opts ...RequestOption) (*SendResult, *Response, error) {
-	return send[SendResult](ctx, s.client, s.client.post, "emails/"+url.PathEscape(id)+"/send", params, opts)
+	return send[SendResult](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/send", params, opts)
 }
 
 // StartWarmup enables warmup for a mailbox, resuming from the existing ramp
@@ -391,7 +391,7 @@ func (s *EmailService) StopWarmup(ctx context.Context, id string, opts ...Reques
 }
 
 func (s *EmailService) warmupLifecycle(ctx context.Context, id, action string, opts []RequestOption) (*Email, *Response, error) {
-	return send[Email](ctx, s.client, s.client.post, "emails/"+url.PathEscape(id)+"/warmup/"+action, nil, opts)
+	return send[Email](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/warmup/"+action, nil, opts)
 }
 
 // WarmupBanStatus reports whether a mailbox has been blocked from the warmup pool.
@@ -401,7 +401,7 @@ func (s *EmailService) WarmupBanStatus(ctx context.Context, id string, opts ...R
 
 // AppealWarmupBan submits an appeal against a mailbox's warmup ban.
 func (s *EmailService) AppealWarmupBan(ctx context.Context, id string, params *WarmupAppealParams, opts ...RequestOption) (*WarmupAppealResult, *Response, error) {
-	return send[WarmupAppealResult](ctx, s.client, s.client.post, "emails/"+url.PathEscape(id)+"/warmup/appeal", params, opts)
+	return send[WarmupAppealResult](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/warmup/appeal", params, opts)
 }
 
 // --- connecting a mailbox ---
@@ -419,7 +419,7 @@ func (s *EmailService) StartOAuth(ctx context.Context, provider string, opts ...
 	body := struct {
 		Provider string `json:"provider"`
 	}{Provider: provider}
-	return send[OAuthStartResult](ctx, s.client, s.client.post, "emails/onboarding/oauth/start", body, opts)
+	return send[OAuthStartResult](ctx, s.client.post, "emails/onboarding/oauth/start", body, opts)
 }
 
 // FinishOAuth exchanges the authorization code for a connected mailbox.
@@ -428,12 +428,12 @@ func (s *EmailService) FinishOAuth(ctx context.Context, code, state string, opts
 		Code  string `json:"code"`
 		State string `json:"state"`
 	}{Code: code, State: state}
-	return send[Email](ctx, s.client, s.client.post, "emails/onboarding/oauth/finish", body, opts)
+	return send[Email](ctx, s.client.post, "emails/onboarding/oauth/finish", body, opts)
 }
 
 // ConnectSMTPIMAP connects a mailbox by its own credentials. The server dials
 // both legs to validate them before storing anything, so a bad password fails
 // here rather than silently at send time.
 func (s *EmailService) ConnectSMTPIMAP(ctx context.Context, params *SMTPIMAPParams, opts ...RequestOption) (*Email, *Response, error) {
-	return send[Email](ctx, s.client, s.client.post, "emails/onboarding/smtp-imap", params, opts)
+	return send[Email](ctx, s.client.post, "emails/onboarding/smtp-imap", params, opts)
 }

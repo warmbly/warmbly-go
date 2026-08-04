@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,14 +62,9 @@ func main() {
 			return
 		}
 
-		// Answer the ownership challenge by echoing it back.
-		if challenge := r.Header.Get(warmbly.WebhookChallengeHeader); challenge != "" {
-			_, _ = w.Write([]byte(challenge))
-			return
-		}
-
-		// Verify before trusting anything in the payload. ConstructEvent also
-		// rejects a stale signature, which defeats replay.
+		// Verify first, always — including the verification ping, which is
+		// signed like any other delivery. ConstructEvent also rejects a stale
+		// signature, which defeats replay.
 		event, err := client.Webhooks.ConstructEvent(body, r.Header.Get(warmbly.WebhookSignatureHeader), secret)
 		switch {
 		case errors.Is(err, warmbly.ErrWebhookSignatureExpired):
@@ -76,6 +72,22 @@ func main() {
 			return
 		case err != nil:
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+
+		// Answer the ownership challenge. Take the token from the verified
+		// payload rather than from the convenience copy in the request header:
+		// the header is attacker-controllable, the signed body is not.
+		if event.EventType == warmbly.EventEndpointTest {
+			var data struct {
+				Challenge string `json:"challenge"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				http.Error(w, "bad challenge", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set(warmbly.WebhookChallengeHeader, data.Challenge)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 

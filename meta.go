@@ -140,5 +140,5 @@ type GatewayTicket struct {
 // GatewayTicket mints a single-use websocket ticket for the current session.
 // This route is session-only.
 func (s *MetaService) GatewayTicket(ctx context.Context, opts ...RequestOption) (*GatewayTicket, *Response, error) {
-	return send[GatewayTicket](ctx, s.client, s.client.post, "getaway", nil, opts)
+	return send[GatewayTicket](ctx, s.client.post, "getaway", nil, opts)
 }

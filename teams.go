@@ -48,7 +48,7 @@ func (s *TeamService) List(ctx context.Context, opts ...RequestOption) ([]Team, 
 
 // Create creates a team.
 func (s *TeamService) Create(ctx context.Context, params *TeamCreateParams, opts ...RequestOption) (*Team, *Response, error) {
-	return send[Team](ctx, s.client, s.client.post, "teams", params, opts)
+	return send[Team](ctx, s.client.post, "teams", params, opts)
 }
 
 // Get retrieves a single team.
@@ -58,7 +58,7 @@ func (s *TeamService) Get(ctx context.Context, id string, opts ...RequestOption)
 
 // Update renames or recolors a team.
 func (s *TeamService) Update(ctx context.Context, id string, params *TeamUpdateParams, opts ...RequestOption) (*Team, *Response, error) {
-	return send[Team](ctx, s.client, s.client.patch, "teams/"+url.PathEscape(id), params, opts)
+	return send[Team](ctx, s.client.patch, "teams/"+url.PathEscape(id), params, opts)
 }
 
 // Delete removes a team. Its members keep their workspace membership.
@@ -71,7 +71,7 @@ func (s *TeamService) AddMember(ctx context.Context, id, userID string, opts ...
 	body := struct {
 		UserID string `json:"user_id"`
 	}{UserID: userID}
-	return send[Team](ctx, s.client, s.client.post, "teams/"+url.PathEscape(id)+"/members", body, opts)
+	return send[Team](ctx, s.client.post, "teams/"+url.PathEscape(id)+"/members", body, opts)
 }
 
 // RemoveMember removes someone from a team.

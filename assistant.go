@@ -182,7 +182,7 @@ func (s *AssistantService) CreateSession(ctx context.Context, page, resource str
 		Page     string `json:"page,omitempty"`
 		Resource string `json:"resource,omitempty"`
 	}{Page: page, Resource: resource}
-	return send[AgentSession](ctx, s.client, s.client.post, "ai/sessions", body, opts)
+	return send[AgentSession](ctx, s.client.post, "ai/sessions", body, opts)
 }
 
 // Sessions returns a page of the caller's conversations, newest first. With
@@ -304,13 +304,13 @@ func (s *AssistantService) MCPServers(ctx context.Context, opts ...RequestOption
 
 // ConnectMCPServer registers an external MCP server and discovers its tools.
 func (s *AssistantService) ConnectMCPServer(ctx context.Context, params *MCPServerParams, opts ...RequestOption) (*MCPServer, *Response, error) {
-	return send[MCPServer](ctx, s.client, s.client.post, "ai/connections", params, opts)
+	return send[MCPServer](ctx, s.client.post, "ai/connections", params, opts)
 }
 
 // UpdateMCPServer changes a connected server's name, credential or enabled
 // state.
 func (s *AssistantService) UpdateMCPServer(ctx context.Context, id string, params *MCPServerUpdateParams, opts ...RequestOption) (*MCPServer, *Response, error) {
-	return send[MCPServer](ctx, s.client, s.client.patch, "ai/connections/"+url.PathEscape(id), params, opts)
+	return send[MCPServer](ctx, s.client.patch, "ai/connections/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteMCPServer disconnects a server and forgets its credential.
@@ -320,5 +320,5 @@ func (s *AssistantService) DeleteMCPServer(ctx context.Context, id string, opts 
 
 // RefreshMCPServer re-discovers a connected server's tools.
 func (s *AssistantService) RefreshMCPServer(ctx context.Context, id string, opts ...RequestOption) (*MCPServer, *Response, error) {
-	return send[MCPServer](ctx, s.client, s.client.post, "ai/connections/"+url.PathEscape(id)+"/refresh", nil, opts)
+	return send[MCPServer](ctx, s.client.post, "ai/connections/"+url.PathEscape(id)+"/refresh", nil, opts)
 }

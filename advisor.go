@@ -266,19 +266,19 @@ func (s *AdvisorService) Summary(ctx context.Context, opts ...RequestOption) (*A
 // Refresh triggers a re-evaluation and returns the summary. The re-run happens
 // in the background, so the summary may still reflect the previous pass.
 func (s *AdvisorService) Refresh(ctx context.Context, opts ...RequestOption) (*AdvisorSummary, *Response, error) {
-	return send[AdvisorSummary](ctx, s.client, s.client.post, "advisor/refresh", nil, opts)
+	return send[AdvisorSummary](ctx, s.client.post, "advisor/refresh", nil, opts)
 }
 
 // Apply performs a finding's one-click remedy and returns the updated finding.
 // It runs as the calling member, so it fails with a 403 if they could not make
 // the same change by hand.
 func (s *AdvisorService) Apply(ctx context.Context, id string, opts ...RequestOption) (*AdvisorFinding, *Response, error) {
-	return send[AdvisorFinding](ctx, s.client, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/apply", nil, opts)
+	return send[AdvisorFinding](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/apply", nil, opts)
 }
 
 // Undo reverts an applied remedy.
 func (s *AdvisorService) Undo(ctx context.Context, id string, opts ...RequestOption) (*AdvisorFinding, *Response, error) {
-	return send[AdvisorFinding](ctx, s.client, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/undo", nil, opts)
+	return send[AdvisorFinding](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/undo", nil, opts)
 }
 
 // AgentFix hands a finding to a bounded agent for the cases a settings change
@@ -287,7 +287,7 @@ func (s *AdvisorService) Undo(ctx context.Context, id string, opts ...RequestOpt
 //
 // This route is session-only: it is not reachable with an API key.
 func (s *AdvisorService) AgentFix(ctx context.Context, id string, opts ...RequestOption) (*AdvisorAgentResult, *Response, error) {
-	return send[AdvisorAgentResult](ctx, s.client, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/agent-fix", nil, opts)
+	return send[AdvisorAgentResult](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/agent-fix", nil, opts)
 }
 
 // Snooze hides a finding for a bounded number of days, from 1 to 90. An
@@ -327,5 +327,5 @@ func (s *AdvisorService) Settings(ctx context.Context, opts ...RequestOption) (*
 // whole workspace is governance, so this route is session-only and needs the
 // manage-settings permission.
 func (s *AdvisorService) UpdateSettings(ctx context.Context, settings *AdvisorSettings, opts ...RequestOption) (*AdvisorSettings, *Response, error) {
-	return send[AdvisorSettings](ctx, s.client, s.client.patch, "advisor/settings", settings, opts)
+	return send[AdvisorSettings](ctx, s.client.patch, "advisor/settings", settings, opts)
 }

@@ -10,7 +10,7 @@ import (
 // registered with [Client.HandleAny].
 type EventName = string
 
-// Client-side lifecycle events. These are synthesised by this package rather
+// Client-side lifecycle events. These are synthesized by this package rather
 // than sent by the server, so a handler can react to the connection itself.
 const (
 	// EventReady fires once the workspace channel is joined and events are
@@ -201,7 +201,7 @@ type Ready struct {
 	Role string `json:"role,omitempty"`
 	// HeartbeatIntervalMS is how often the client must heartbeat, and
 	// ServerTimeoutMS how long the server waits before closing a silent
-	// connection. The client honours both automatically.
+	// connection. The client honors both automatically.
 	HeartbeatIntervalMS int `json:"heartbeat_interval_ms"`
 	ServerTimeoutMS     int `json:"server_timeout_ms"`
 	// Seq is the workspace's current sequence number at join time.

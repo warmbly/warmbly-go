@@ -357,7 +357,7 @@ const (
 	DeletionStatusPending   = "pending"
 	DeletionStatusExecuting = "executing"
 	DeletionStatusCompleted = "completed"
-	DeletionStatusCancelled = "cancelled"
+	DeletionStatusCancelled = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 	DeletionStatusFailed    = "failed"
 )
 
@@ -378,9 +378,9 @@ type ScheduledDeletion struct {
 	// constants.
 	Status string `json:"status"`
 
-	CancelledAt       *time.Time `json:"cancelled_at,omitempty"`
-	CancelledByUserID *string    `json:"cancelled_by_user_id,omitempty"`
-	CancelledReason   *string    `json:"cancelled_reason,omitempty"`
+	CancelledAt       *time.Time `json:"cancelled_at,omitempty"`         //nolint:misspell // wire value: the API sends "cancelled" here
+	CancelledByUserID *string    `json:"cancelled_by_user_id,omitempty"` //nolint:misspell // wire value: the API sends "cancelled" here
+	CancelledReason   *string    `json:"cancelled_reason,omitempty"`     //nolint:misspell // wire value: the API sends "cancelled" here
 
 	ExecutedAt     *time.Time `json:"executed_at,omitempty"`
 	ExecutionError *string    `json:"execution_error,omitempty"`
@@ -396,7 +396,7 @@ type ScheduleDeletionParams struct {
 
 // Create provisions a new workspace and returns it.
 func (s *OrganizationService) Create(ctx context.Context, params *OrganizationCreateParams, opts ...RequestOption) (*Organization, *Response, error) {
-	return send[Organization](ctx, s.client, s.client.post, "organization", params, opts)
+	return send[Organization](ctx, s.client.post, "organization", params, opts)
 }
 
 // List returns the memberships the caller holds across every workspace.
@@ -418,7 +418,7 @@ func (s *OrganizationService) Current(ctx context.Context, opts ...RequestOption
 
 // Update modifies the current workspace.
 func (s *OrganizationService) Update(ctx context.Context, params *OrganizationUpdateParams, opts ...RequestOption) (*Organization, *Response, error) {
-	return send[Organization](ctx, s.client, s.client.patch, "organization/current", params, opts)
+	return send[Organization](ctx, s.client.patch, "organization/current", params, opts)
 }
 
 // Limits returns the workspace's plan ceilings alongside current usage.
@@ -463,7 +463,7 @@ func (s *OrganizationService) Invite(ctx context.Context, params *InviteMemberPa
 
 // UpdateMember replaces a member's assigned roles.
 func (s *OrganizationService) UpdateMember(ctx context.Context, id string, params *UpdateMemberParams, opts ...RequestOption) (*Member, *Response, error) {
-	return send[Member](ctx, s.client, s.client.patch, "organization/members/"+url.PathEscape(id), params, opts)
+	return send[Member](ctx, s.client.patch, "organization/members/"+url.PathEscape(id), params, opts)
 }
 
 // RemoveMember removes a member from the workspace.
@@ -489,12 +489,12 @@ func (s *OrganizationService) Roles(ctx context.Context, opts ...RequestOption) 
 
 // CreateRole adds a custom role.
 func (s *OrganizationService) CreateRole(ctx context.Context, params *RoleCreateParams, opts ...RequestOption) (*Role, *Response, error) {
-	return send[Role](ctx, s.client, s.client.post, "organization/roles", params, opts)
+	return send[Role](ctx, s.client.post, "organization/roles", params, opts)
 }
 
 // UpdateRole edits a custom role. Changes propagate to every member holding it.
 func (s *OrganizationService) UpdateRole(ctx context.Context, id string, params *RoleUpdateParams, opts ...RequestOption) (*Role, *Response, error) {
-	return send[Role](ctx, s.client, s.client.patch, "organization/roles/"+url.PathEscape(id), params, opts)
+	return send[Role](ctx, s.client.patch, "organization/roles/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteRole removes a custom role.
@@ -563,7 +563,7 @@ const (
 	LimitRequestPending   = "pending"
 	LimitRequestApproved  = "approved"
 	LimitRequestRejected  = "rejected"
-	LimitRequestCancelled = "cancelled"
+	LimitRequestCancelled = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 )
 
 // LimitRequest is an ask for a higher plan ceiling, pending review.
@@ -603,7 +603,7 @@ func (s *OrganizationService) LimitRequests(ctx context.Context, orgID string, o
 
 // RequestLimitIncrease files a request to raise one plan ceiling.
 func (s *OrganizationService) RequestLimitIncrease(ctx context.Context, orgID string, params *LimitRequestParams, opts ...RequestOption) (*LimitRequest, *Response, error) {
-	return send[LimitRequest](ctx, s.client, s.client.post, "organization/"+url.PathEscape(orgID)+"/limit-requests", params, opts)
+	return send[LimitRequest](ctx, s.client.post, "organization/"+url.PathEscape(orgID)+"/limit-requests", params, opts)
 }
 
 // CancelLimitRequest withdraws a pending request. Only its submitter may.
@@ -623,7 +623,7 @@ func (s *OrganizationService) DangerZone(ctx context.Context, opts ...RequestOpt
 // owner-only, and Confirmation must match
 // [DangerZoneStatus.ConfirmationHint] — the workspace name.
 func (s *OrganizationService) ScheduleDeletion(ctx context.Context, params *ScheduleDeletionParams, opts ...RequestOption) (*ScheduledDeletion, *Response, error) {
-	return send[ScheduledDeletion](ctx, s.client, s.client.post, "organization/current/danger-zone/delete", params, opts)
+	return send[ScheduledDeletion](ctx, s.client.post, "organization/current/danger-zone/delete", params, opts)
 }
 
 // CancelDeletion cancels a pending workspace deletion.
@@ -631,5 +631,5 @@ func (s *OrganizationService) CancelDeletion(ctx context.Context, reason string,
 	body := struct {
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
-	return s.client.deleteBody(ctx, "organization/current/danger-zone/delete", body, nil, opts...)
+	return s.client.deleteBody(ctx, "organization/current/danger-zone/delete", body, opts...)
 }

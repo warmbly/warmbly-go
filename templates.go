@@ -95,12 +95,12 @@ func (s *TemplateService) Get(ctx context.Context, id string, opts ...RequestOpt
 
 // Create creates a new template, appended to the end of the list.
 func (s *TemplateService) Create(ctx context.Context, params *TemplateCreateParams, opts ...RequestOption) (*Template, *Response, error) {
-	return send[Template](ctx, s.client, s.client.post, "templates", params, opts)
+	return send[Template](ctx, s.client.post, "templates", params, opts)
 }
 
 // Update modifies an existing template.
 func (s *TemplateService) Update(ctx context.Context, id string, params *TemplateUpdateParams, opts ...RequestOption) (*Template, *Response, error) {
-	return send[Template](ctx, s.client, s.client.patch, "templates/"+url.PathEscape(id), params, opts)
+	return send[Template](ctx, s.client.patch, "templates/"+url.PathEscape(id), params, opts)
 }
 
 // Delete permanently deletes a template.
@@ -114,12 +114,12 @@ func (s *TemplateService) Reorder(ctx context.Context, ids []string, opts ...Req
 	body := struct {
 		IDs []string `json:"ids"`
 	}{IDs: ids}
-	return sendData[Template](ctx, s.client, s.client.patch, "templates/reorder", body, opts)
+	return sendData[Template](ctx, s.client.patch, "templates/reorder", body, opts)
 }
 
 // Duplicate copies a template, appending the copy to the end of the list.
 func (s *TemplateService) Duplicate(ctx context.Context, id string, opts ...RequestOption) (*Template, *Response, error) {
-	return send[Template](ctx, s.client, s.client.post, "templates/"+url.PathEscape(id)+"/duplicate", nil, opts)
+	return send[Template](ctx, s.client.post, "templates/"+url.PathEscape(id)+"/duplicate", nil, opts)
 }
 
 // Render fills a template's merge tags from variables and returns the result.
@@ -128,11 +128,11 @@ func (s *TemplateService) Render(ctx context.Context, id string, variables map[s
 	body := struct {
 		Variables map[string]string `json:"variables,omitempty"`
 	}{Variables: variables}
-	return send[TemplateRenderResult](ctx, s.client, s.client.post, "templates/"+url.PathEscape(id)+"/render", body, opts)
+	return send[TemplateRenderResult](ctx, s.client.post, "templates/"+url.PathEscape(id)+"/render", body, opts)
 }
 
 // Score rates arbitrary copy for spam risk. It works on any subject and body,
 // not just a stored template.
 func (s *TemplateService) Score(ctx context.Context, params *TemplateScoreParams, opts ...RequestOption) (*TemplateScore, *Response, error) {
-	return send[TemplateScore](ctx, s.client, s.client.post, "templates/score", params, opts)
+	return send[TemplateScore](ctx, s.client.post, "templates/score", params, opts)
 }
