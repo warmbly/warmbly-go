@@ -72,7 +72,7 @@ func (t *Token) Type() string {
 	if t.TokenType == "" {
 		return "Bearer"
 	}
-	// Normalise common casings to the canonical "Bearer".
+	// Normalize common casings to the canonical "Bearer".
 	switch t.TokenType {
 	case "bearer", "BEARER", "Bearer":
 		return "Bearer"

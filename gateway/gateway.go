@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"runtime"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,30 +17,44 @@ import (
 )
 
 // DefaultURL is the production gateway endpoint.
-const DefaultURL = "wss://gateway.warmbly.com/?v=1&encoding=json"
+const DefaultURL = "wss://realtime.warmbly.com/socket/websocket"
 
+// protocolVersion is the channel wire format this client speaks. Frames are
+// JSON arrays: [join_ref, ref, topic, event, payload].
+const protocolVersion = "2.0.0"
+
+// heartbeatTopic is the reserved topic client heartbeats are sent on.
+const heartbeatTopic = "phoenix"
+
+// Channel control events.
 const (
-	libName    = "warmbly-go"
-	libVersion = "0.1.0"
+	evJoin      = "phx_join"
+	evReply     = "phx_reply"
+	evError     = "phx_error"
+	evClose     = "phx_close"
+	evHeartbeat = "heartbeat"
 )
 
-// Close codes that indicate the client must not keep retrying.
-var fatalCloseCodes = map[int]bool{
-	4004: true, // authentication failed
-	4013: true, // invalid intents
-	4014: true, // disallowed intents
-}
+// ErrUnauthorized is returned by [Client.Open] when the credential is rejected.
+// The client does not retry it: a bad key will not become good.
+var ErrUnauthorized = errors.New("gateway: credential rejected")
 
-// Client is a real-time gateway client. It maintains a persistent connection
-// that authenticates, heartbeats, dispatches typed events to registered
-// handlers, and transparently resumes or reconnects on failure.
+// ErrForbidden is returned by [Client.Open] when the credential is valid but
+// may not join the workspace, which is also not retried.
+var ErrForbidden = errors.New("gateway: not permitted to join this workspace")
+
+// Client is a realtime gateway client. It holds one connection open,
+// heartbeats, dispatches events to registered handlers, and reconnects and
+// replays missed events after a drop.
 //
 // Register handlers with [Client.Handle], [Client.HandleAny] or [On], then call
 // [Client.Open]. A Client must not be reused after [Client.Close].
 type Client struct {
-	token      string
-	url        string
-	intents    Intent
+	token   string
+	orgID   string
+	url     string
+	intents []string
+
 	backoffMin time.Duration
 	backoffMax time.Duration
 	maxMessage int64
@@ -48,13 +64,13 @@ type Client struct {
 	handlers    map[EventName][]HandlerFunc
 	anyHandlers []HandlerFunc
 	conn        *wsconn.Conn
-	sessionID   string
-	seq         int
-	hbInterval  time.Duration
+	lastSeq     int
+	ready       Ready
 	cancel      context.CancelFunc
 	running     bool
 
-	ackPending atomic.Bool
+	ref     atomic.Int64
+	joinRef atomic.Int64
 
 	events chan *Event
 	wg     sync.WaitGroup
@@ -71,24 +87,31 @@ type Client struct {
 // Option configures a [Client].
 type Option func(*Client)
 
-// WithURL overrides the gateway endpoint (default [DefaultURL]). Useful for a
-// self-hosted instance or a staging environment.
-func WithURL(url string) Option {
+// WithURL overrides the gateway endpoint, for a self-hosted instance or a
+// staging environment. It should be the full websocket path, for example
+// "wss://realtime.example.com/socket/websocket".
+func WithURL(rawURL string) Option {
 	return func(c *Client) {
-		if url != "" {
-			c.url = url
+		if rawURL != "" {
+			c.url = rawURL
 		}
 	}
 }
 
-// WithIntents sets the event categories the session subscribes to (default
-// [IntentsDefault]).
-func WithIntents(intents Intent) Option {
-	return func(c *Client) { c.intents = intents }
+// WithIntents narrows the stream to the given event families. Declaring none
+// delivers everything the credential may see. See the Intent* constants.
+func WithIntents(intents ...string) Option {
+	return func(c *Client) {
+		for _, in := range intents {
+			if in = strings.TrimSpace(in); in != "" {
+				c.intents = append(c.intents, in)
+			}
+		}
+	}
 }
 
-// WithLogger sets a logging function for non-fatal diagnostics (reconnects,
-// dropped events). The default discards logs.
+// WithLogger sets a logging function for non-fatal diagnostics such as
+// reconnects and dropped events. The default discards them.
 func WithLogger(logf func(format string, args ...any)) Option {
 	return func(c *Client) {
 		if logf != nil {
@@ -97,8 +120,8 @@ func WithLogger(logf func(format string, args ...any)) Option {
 	}
 }
 
-// WithReconnectBackoff sets the minimum and maximum delay between reconnection
-// attempts. Delays grow exponentially with jitter between these bounds.
+// WithReconnectBackoff sets the bounds on the delay between reconnection
+// attempts. The delay grows exponentially with jitter between them.
 func WithReconnectBackoff(minDelay, maxDelay time.Duration) Option {
 	return func(c *Client) {
 		if minDelay > 0 {
@@ -110,7 +133,9 @@ func WithReconnectBackoff(minDelay, maxDelay time.Duration) Option {
 	}
 }
 
-// WithEventBuffer sets the size of the internal dispatch queue (default 64).
+// WithEventBuffer sets the size of the internal dispatch queue, 64 by default.
+// When the queue fills, further events are dropped and logged rather than
+// stalling the connection, so raise it if your handlers are slow.
 func WithEventBuffer(n int) Option {
 	return func(c *Client) {
 		if n > 0 {
@@ -119,13 +144,25 @@ func WithEventBuffer(n int) Option {
 	}
 }
 
-// New creates a gateway client authenticated with token (a Warmbly API key or
-// OAuth access token). It does not connect; call [Client.Open] to start.
-func New(token string, opts ...Option) *Client {
+// WithResumeFrom starts the session from a known sequence number instead of
+// live, replaying anything after it that is still in the server's buffer. Use
+// it to pick up where a previous process left off.
+func WithResumeFrom(seq int) Option {
+	return func(c *Client) {
+		if seq > 0 {
+			c.lastSeq = seq
+		}
+	}
+}
+
+// New creates a gateway client for one workspace, authenticated with token: an
+// API key holding the realtime-subscribe scope, or a session access token. It
+// does not connect; call [Client.Open].
+func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,
+		orgID:      orgID,
 		url:        DefaultURL,
-		intents:    IntentsDefault,
 		backoffMin: 1 * time.Second,
 		backoffMax: 60 * time.Second,
 		maxMessage: 8 << 20,
@@ -141,14 +178,18 @@ func New(token string, opts ...Option) *Client {
 	return c
 }
 
-// Open connects and runs the session until ctx is canceled or [Client.Close]
-// is called. It blocks until the first session is established (the READY event)
-// or a fatal error occurs, returning that error. Reconnection and resumption
-// happen automatically in the background after Open returns.
+// Open connects and runs the session until ctx is canceled or [Client.Close] is
+// called. It blocks until the workspace channel is joined, or until a
+// credential error ends the attempt, and returns that error. Reconnection and
+// replay continue in the background afterwards.
 func (c *Client) Open(ctx context.Context) error {
 	if c.token == "" {
 		return errors.New("gateway: token is required")
 	}
+	if c.orgID == "" {
+		return errors.New("gateway: organization id is required")
+	}
+
 	c.mu.Lock()
 	if c.running {
 		c.mu.Unlock()
@@ -170,14 +211,13 @@ func (c *Client) Open(ctx context.Context) error {
 		}
 		return c.readyErr
 	case <-sctx.Done():
-		// Canceled before the first READY.
 		c.signalReady(sctx.Err())
 		return sctx.Err()
 	}
 }
 
-// Close shuts the session down and waits briefly for background goroutines to
-// stop. It is safe to call more than once.
+// Close shuts the session down and waits briefly for the background goroutines
+// to stop. It is safe to call more than once.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	cancel := c.cancel
@@ -203,12 +243,34 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// SessionID returns the current session identifier, or "" if no session is
-// established.
-func (c *Client) SessionID() string {
+// LastSeq returns the highest sequence number seen so far. Persist it to resume
+// a later process with [WithResumeFrom].
+func (c *Client) LastSeq() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.sessionID
+	return c.lastSeq
+}
+
+// Ready returns the join details of the current session. It is zero until the
+// channel has been joined.
+func (c *Client) Ready() Ready {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ready
+}
+
+// Done returns a channel closed when the session has permanently stopped:
+// because [Client.Close] was called or the context was canceled, or because the
+// credential was rejected and no further attempt will be made. [Client.Err]
+// then reports the terminal error.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
+// Err returns the terminal error once [Client.Done] is closed: nil for a clean
+// shutdown, or the error that stopped the session. It is nil before then.
+func (c *Client) Err() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.termErr
 }
 
 func (c *Client) signalReady(err error) {
@@ -216,22 +278,6 @@ func (c *Client) signalReady(err error) {
 		c.readyErr = err
 		close(c.readyCh)
 	})
-}
-
-// Done returns a channel that is closed when the session has permanently
-// stopped — because [Client.Close] was called or the context was canceled, or
-// because a fatal error (such as an authentication failure) ended it and no
-// further reconnection will be attempted. After it is closed, [Client.Err]
-// reports the terminal error, if any.
-func (c *Client) Done() <-chan struct{} { return c.done }
-
-// Err returns the terminal error after [Client.Done] is closed: nil for a clean
-// shutdown (Close or context cancellation), or the fatal error that stopped the
-// session. It returns nil before the session stops.
-func (c *Client) Err() error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.termErr
 }
 
 func (c *Client) finish(err error) {
@@ -243,36 +289,35 @@ func (c *Client) finish(err error) {
 	})
 }
 
-// manage runs the connect/reconnect loop for the lifetime of the session.
+// manage runs the connect and reconnect loop for the session's lifetime.
 func (c *Client) manage(ctx context.Context) {
 	defer c.wg.Done()
 	var termErr error
 	defer func() { c.finish(termErr) }()
+
 	var attempt int
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		resumable, hadReady, err := c.runOnce(ctx)
+		joined, err := c.runOnce(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		if hadReady {
+		if joined {
 			attempt = 0
 		}
 		if err != nil {
-			if isFatalClose(err) {
-				c.logf("gateway: fatal close, not reconnecting: %v", err)
+			// A rejected credential will not become valid on retry.
+			if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrForbidden) {
+				c.logf("gateway: %v; not reconnecting", err)
 				termErr = err
 				c.signalReady(err)
+				c.emitLifecycle(EventDisconnected, Disconnected{Err: err.Error()})
 				return
 			}
-			c.logf("gateway: connection ended: %v (resumable=%v)", err, resumable)
-		}
-		if !resumable {
-			c.mu.Lock()
-			c.sessionID, c.seq = "", 0
-			c.mu.Unlock()
+			c.logf("gateway: connection ended: %v", err)
+			c.emitLifecycle(EventDisconnected, Disconnected{Err: err.Error(), Reconnecting: true})
 		}
 
 		delay := c.backoff(attempt)
@@ -286,18 +331,28 @@ func (c *Client) manage(ctx context.Context) {
 	}
 }
 
-// runOnce establishes a single connection and reads until it ends. It reports
-// whether the disconnect is resumable and whether the session reached READY.
-func (c *Client) runOnce(ctx context.Context) (resumable bool, hadReady bool, err error) {
+// runOnce dials, joins the workspace channel and reads until the connection
+// ends. It reports whether the channel was successfully joined.
+func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.url, nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
 	if derr != nil {
-		return true, false, fmt.Errorf("dial: %w", derr)
+		// The socket refuses the upgrade with 403 when the token is bad, so a
+		// dial failure can be terminal rather than transient.
+		if resp != nil {
+			_ = resp.Body.Close()
+			switch resp.StatusCode {
+			case 401:
+				return false, ErrUnauthorized
+			case 403:
+				return false, ErrForbidden
+			}
+		}
+		return false, fmt.Errorf("dial: %w", derr)
 	}
 	if resp != nil {
-		// The 101 response carries no body; close it to satisfy linters.
 		_ = resp.Body.Close()
 	}
 	conn.SetMaxMessage(c.maxMessage)
@@ -307,157 +362,193 @@ func (c *Client) runOnce(ctx context.Context) (resumable bool, hadReady bool, er
 		c.setConn(nil)
 	}()
 
-	// The first frame must be Hello.
-	hello, herr := c.readHello(connCtx, conn)
-	if herr != nil {
-		return true, false, herr
-	}
-	interval := time.Duration(hello.HeartbeatInterval) * time.Millisecond
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	c.setHeartbeatInterval(interval)
-	c.ackPending.Store(false)
-
-	// Resume an existing session if we have one, otherwise identify afresh.
-	c.mu.RLock()
-	sid, seq := c.sessionID, c.seq
-	c.mu.RUnlock()
-	if sid != "" {
-		err = c.send(connCtx, OpResume, resumeData{Token: c.token, SessionID: sid, Seq: seq})
-	} else {
-		err = c.send(connCtx, OpIdentify, identifyData{Token: c.token, Intents: c.intents, Properties: c.props()})
-	}
-	if err != nil {
-		return true, false, fmt.Errorf("handshake: %w", err)
+	joinRef := strconv.FormatInt(c.joinRef.Add(1), 10)
+	if err := c.sendJoin(connCtx, conn, joinRef); err != nil {
+		return false, fmt.Errorf("join: %w", err)
 	}
 
-	// Heartbeat on its own goroutine, tied to this connection.
-	hbDone := make(chan struct{})
-	go c.heartbeatLoop(connCtx, conn, interval, hbDone)
+	// Heartbeats start only once the join is acknowledged, since the reply
+	// carries the cadence the server expects.
+	var hbDone chan struct{}
 	defer func() {
 		cancel()
-		<-hbDone
+		if hbDone != nil {
+			<-hbDone
+		}
 	}()
 
 	for {
 		_, data, rerr := conn.ReadMessage(connCtx)
 		if rerr != nil {
-			return isResumable(rerr), hadReady, rerr
+			return joined, rerr
 		}
-		ready, perr := c.process(ctx, data)
-		if ready {
-			hadReady = true
-		}
+
+		msg, perr := decodeFrame(data)
 		if perr != nil {
-			return isResumable(perr), hadReady, perr
+			c.logf("gateway: skipping malformed frame: %v", perr)
+			continue
+		}
+
+		// A reply to our join either starts the session or ends the attempt.
+		if msg.Event == evReply && msg.JoinRef == joinRef && !joined {
+			ready, jerr := c.handleJoinReply(msg)
+			if jerr != nil {
+				return false, jerr
+			}
+			joined = true
+			c.mu.Lock()
+			c.ready = ready
+			c.mu.Unlock()
+			c.signalReady(nil)
+			c.emitLifecycle(EventReady, ready)
+
+			hbDone = make(chan struct{})
+			go c.heartbeatLoop(connCtx, conn, heartbeatInterval(ready), hbDone)
+			continue
+		}
+
+		if err := c.handleFrame(msg); err != nil {
+			return joined, err
 		}
 	}
 }
 
-func (c *Client) readHello(ctx context.Context, conn *wsconn.Conn) (*helloData, error) {
-	_, data, err := conn.ReadMessage(ctx)
+// socketURL builds the dial URL, carrying the credential and wire version.
+func (c *Client) socketURL() string {
+	u, err := url.Parse(c.url)
 	if err != nil {
-		return nil, fmt.Errorf("read hello: %w", err)
+		return c.url
 	}
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		return nil, fmt.Errorf("decode hello: %w", err)
-	}
-	if env.Op != OpHello {
-		return nil, fmt.Errorf("expected Hello, got %s", env.Op)
-	}
-	hello := new(helloData)
-	if len(env.Data) > 0 {
-		if err := json.Unmarshal(env.Data, hello); err != nil {
-			return nil, fmt.Errorf("decode hello payload: %w", err)
-		}
-	}
-	return hello, nil
+	q := u.Query()
+	q.Set("token", c.token)
+	q.Set("vsn", protocolVersion)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
-// process handles a single received frame. It reports whether the frame put the
-// session into the ready state and returns a non-nil error to end the
-// connection (triggering reconnect).
-func (c *Client) process(ctx context.Context, data []byte) (ready bool, err error) {
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		c.logf("gateway: skipping malformed frame: %v", err)
-		return false, nil
+// sendJoin joins the workspace channel, declaring intents and, when resuming,
+// the last sequence seen.
+func (c *Client) sendJoin(ctx context.Context, conn *wsconn.Conn, joinRef string) error {
+	params := map[string]any{}
+	if len(c.intents) > 0 {
+		params["intents"] = c.intents
 	}
-	if env.Seq != nil {
+	c.mu.RLock()
+	seq := c.lastSeq
+	c.mu.RUnlock()
+	if seq > 0 {
+		params["resume"] = map[string]any{"last_seq": seq}
+	}
+	body, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	return c.write(ctx, conn, frame{
+		JoinRef: joinRef,
+		Ref:     c.nextRef(),
+		Topic:   c.topic(),
+		Event:   evJoin,
+		Payload: body,
+	})
+}
+
+func (c *Client) handleJoinReply(msg *frame) (Ready, error) {
+	var reply struct {
+		Status   string          `json:"status"`
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(msg.Payload, &reply); err != nil {
+		return Ready{}, fmt.Errorf("decode join reply: %w", err)
+	}
+	if reply.Status != "ok" {
+		return Ready{}, joinError(reply.Response)
+	}
+	var ready Ready
+	if err := json.Unmarshal(reply.Response, &ready); err != nil {
+		return Ready{}, fmt.Errorf("decode join response: %w", err)
+	}
+	return ready, nil
+}
+
+// joinError maps a rejected join to a typed error, so the caller can tell a
+// permission problem from a transient one.
+func joinError(payload json.RawMessage) error {
+	var e struct {
+		Code   int    `json:"code"`
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(payload, &e)
+	reason := e.Reason
+	if reason == "" {
+		reason = "join rejected"
+	}
+	switch e.Code {
+	case 4001, 4004:
+		return fmt.Errorf("%w: %s", ErrUnauthorized, reason)
+	case 4003, 4005:
+		return fmt.Errorf("%w: %s", ErrForbidden, reason)
+	}
+	return fmt.Errorf("gateway: %s", reason)
+}
+
+// handleFrame processes a non-join frame, returning an error to end the
+// connection and trigger a reconnect.
+func (c *Client) handleFrame(msg *frame) error {
+	switch msg.Event {
+	case evReply:
+		// Heartbeat and other acknowledgements need no action.
+		return nil
+	case evError:
+		return errors.New("gateway: channel error")
+	case evClose:
+		return errors.New("gateway: channel closed by server")
+	}
+
+	// Everything else is a workspace event.
+	seq := extractSeq(msg.Payload)
+	if seq > 0 {
 		c.mu.Lock()
-		c.seq = *env.Seq
+		if seq > c.lastSeq {
+			c.lastSeq = seq
+		}
 		c.mu.Unlock()
 	}
-
-	switch env.Op {
-	case OpHeartbeat:
-		// Server asked for an immediate heartbeat.
-		c.mu.RLock()
-		seq := c.seq
-		c.mu.RUnlock()
-		_ = c.send(ctx, OpHeartbeat, seq)
-		return false, nil
-	case OpHeartbeatACK:
-		c.ackPending.Store(false)
-		return false, nil
-	case OpReconnect:
-		return false, &disconnectError{resumable: true, reason: "server requested reconnect"}
-	case OpInvalidSession:
-		var resumable bool
-		_ = json.Unmarshal(env.Data, &resumable)
-		return false, &disconnectError{resumable: resumable, reason: "invalid session"}
-	case OpDispatch:
-		return c.dispatch(&env), nil
-	default:
-		c.logf("gateway: ignoring unexpected op %s", env.Op)
-		return false, nil
-	}
+	c.emit(&Event{
+		Type: msg.Event,
+		Seq:  seq,
+		Raw:  append(json.RawMessage(nil), msg.Payload...),
+	})
+	return nil
 }
 
-func (c *Client) dispatch(env *envelope) (ready bool) {
-	name := EventName(env.Type)
-	seq := 0
-	if env.Seq != nil {
-		seq = *env.Seq
-	}
-	if name == EventReady {
-		var r Ready
-		if err := json.Unmarshal(env.Data, &r); err == nil && r.SessionID != "" {
-			c.mu.Lock()
-			c.sessionID = r.SessionID
-			c.mu.Unlock()
-		}
-		c.signalReady(nil)
-		ready = true
-	}
-	if name == EventResumed {
-		c.signalReady(nil)
-		ready = true
-	}
-
-	ev := &Event{Type: name, Seq: seq, Raw: append(json.RawMessage(nil), env.Data...)}
-	// Never block the read loop on a slow consumer: a blocked send would stop
-	// us reading heartbeat ACKs and trip false zombie detection. Drop (and log)
-	// when the buffer is full instead. Increase it with [WithEventBuffer].
+// emit queues an event for the dispatch goroutine. It never blocks the read
+// loop: a stalled send would stop us reading heartbeat replies and trip a false
+// timeout, so a full queue drops the event instead.
+func (c *Client) emit(ev *Event) {
 	select {
 	case c.events <- ev:
 	default:
-		c.logf("gateway: event buffer full; dropping %s event", string(name))
+		c.logf("gateway: event buffer full; dropping %s", ev.Type)
 	}
-	return ready
 }
 
-// heartbeatLoop sends periodic heartbeats and detects a zombied connection: if
-// the previous heartbeat went unacknowledged, it closes the connection to force
-// a reconnect.
+// emitLifecycle queues a client-side lifecycle event.
+func (c *Client) emitLifecycle(name EventName, payload any) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	c.emit(&Event{Type: name, Raw: raw})
+}
+
+// heartbeatLoop keeps the connection alive at the cadence the server asked for.
+// The server closes a connection that goes silent past its own timeout, so a
+// failed heartbeat closes the connection immediately to reconnect sooner.
 func (c *Client) heartbeatLoop(ctx context.Context, conn *wsconn.Conn, interval time.Duration, done chan<- struct{}) {
 	defer close(done)
 
-	// Jitter the first beat to avoid synchronized reconnect storms.
-	first := time.Duration(float64(interval) * rand.Float64())
-	timer := time.NewTimer(first)
+	// Jitter the first beat so a fleet of clients does not synchronize.
+	timer := time.NewTimer(time.Duration(float64(interval) * rand.Float64()))
 	defer timer.Stop()
 
 	for {
@@ -467,20 +558,15 @@ func (c *Client) heartbeatLoop(ctx context.Context, conn *wsconn.Conn, interval 
 		case <-timer.C:
 		}
 
-		if c.ackPending.Load() {
-			c.logf("gateway: heartbeat not acknowledged; forcing reconnect")
-			_ = conn.Close(1001, "heartbeat timeout")
-			return
-		}
-
-		c.mu.RLock()
-		seq := c.seq
-		c.mu.RUnlock()
-		c.ackPending.Store(true)
-		if err := c.send(ctx, OpHeartbeat, seq); err != nil {
+		err := c.write(ctx, conn, frame{
+			Ref:   c.nextRef(),
+			Topic: heartbeatTopic,
+			Event: evHeartbeat,
+		})
+		if err != nil {
 			if ctx.Err() == nil {
-				c.logf("gateway: heartbeat send failed: %v", err)
-				_ = conn.Close(1001, "heartbeat send failed")
+				c.logf("gateway: heartbeat failed: %v", err)
+				_ = conn.Close(1001, "heartbeat failed")
 			}
 			return
 		}
@@ -514,6 +600,7 @@ func (c *Client) fire(ctx context.Context, ev *Event) {
 	}
 }
 
+// safeCall isolates a panicking handler so it cannot take the session down.
 func (c *Client) safeCall(ctx context.Context, h HandlerFunc, ev *Event) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -523,33 +610,19 @@ func (c *Client) safeCall(ctx context.Context, h HandlerFunc, ev *Event) {
 	h(ctx, ev)
 }
 
-// send marshals and writes a frame. Writes are serialized by the underlying
-// connection, so send is safe to call from multiple goroutines.
-func (c *Client) send(ctx context.Context, op Opcode, data any) error {
-	var raw json.RawMessage
-	if data != nil {
-		b, err := json.Marshal(data)
-		if err != nil {
-			return err
-		}
-		raw = b
-	}
-	b, err := json.Marshal(envelope{Op: op, Data: raw})
+func (c *Client) write(ctx context.Context, conn *wsconn.Conn, f frame) error {
+	b, err := f.encode()
 	if err != nil {
 		return err
-	}
-	conn := c.getConn()
-	if conn == nil {
-		return errors.New("gateway: not connected")
 	}
 	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return conn.WriteMessage(wctx, wsconn.MessageText, b)
 }
 
-func (c *Client) props() properties {
-	return properties{OS: runtime.GOOS, Lib: libName, Version: libVersion}
-}
+func (c *Client) topic() string { return "org:" + c.orgID }
+
+func (c *Client) nextRef() string { return strconv.FormatInt(c.ref.Add(1), 10) }
 
 func (c *Client) backoff(attempt int) time.Duration {
 	d := c.backoffMin << attempt
@@ -569,50 +642,70 @@ func (c *Client) setConn(conn *wsconn.Conn) {
 	c.mu.Unlock()
 }
 
-func (c *Client) getConn() *wsconn.Conn {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.conn
-}
-
-func (c *Client) setHeartbeatInterval(d time.Duration) {
-	c.mu.Lock()
-	c.hbInterval = d
-	c.mu.Unlock()
-}
-
-// disconnectError signals a protocol-level disconnect from a received control
-// op, carrying whether the session may be resumed.
-type disconnectError struct {
-	resumable bool
-	reason    string
-}
-
-func (e *disconnectError) Error() string { return "gateway: " + e.reason }
-
-// isResumable reports whether err represents a disconnect after which the
-// session can be resumed (rather than re-identified).
-func isResumable(err error) bool {
-	var de *disconnectError
-	if errors.As(err, &de) {
-		return de.resumable
+// heartbeatInterval picks the cadence from the join reply, falling back to a
+// safe default when the server did not advertise one.
+func heartbeatInterval(r Ready) time.Duration {
+	if r.HeartbeatIntervalMS > 0 {
+		return time.Duration(r.HeartbeatIntervalMS) * time.Millisecond
 	}
-	var ce *wsconn.CloseError
-	if errors.As(err, &ce) {
-		// Normal/away closures and most application codes are resumable;
-		// the explicitly fatal codes are not.
-		return !fatalCloseCodes[ce.Code]
-	}
-	// Network errors are resumable.
-	return true
+	return 25 * time.Second
 }
 
-// isFatalClose reports whether err is a close that must stop the client (for
-// example an authentication failure), so it should not keep retrying.
-func isFatalClose(err error) bool {
-	var ce *wsconn.CloseError
-	if errors.As(err, &ce) {
-		return fatalCloseCodes[ce.Code]
+// extractSeq pulls the sequence number out of an event payload without
+// decoding the whole thing.
+func extractSeq(payload json.RawMessage) int {
+	var probe struct {
+		Seq int `json:"seq"`
 	}
-	return false
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return 0
+	}
+	return probe.Seq
+}
+
+// frame is one channel message. On the wire it is a five-element JSON array:
+// [join_ref, ref, topic, event, payload], where the first two may be null.
+type frame struct {
+	JoinRef string
+	Ref     string
+	Topic   string
+	Event   string
+	Payload json.RawMessage
+}
+
+func (f frame) encode() ([]byte, error) {
+	// join_ref and ref are null when the frame does not correlate to a reply.
+	var joinRef, ref any
+	if f.JoinRef != "" {
+		joinRef = f.JoinRef
+	}
+	if f.Ref != "" {
+		ref = f.Ref
+	}
+	payload := f.Payload
+	if len(payload) == 0 {
+		payload = json.RawMessage("{}")
+	}
+	return json.Marshal([]any{joinRef, ref, f.Topic, f.Event, payload})
+}
+
+func decodeFrame(data []byte) (*frame, error) {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) != 5 {
+		return nil, fmt.Errorf("expected 5 frame elements, got %d", len(raw))
+	}
+	f := &frame{Payload: raw[4]}
+	// The first two elements are null on a server push.
+	_ = json.Unmarshal(raw[0], &f.JoinRef)
+	_ = json.Unmarshal(raw[1], &f.Ref)
+	if err := json.Unmarshal(raw[2], &f.Topic); err != nil {
+		return nil, fmt.Errorf("decode topic: %w", err)
+	}
+	if err := json.Unmarshal(raw[3], &f.Event); err != nil {
+		return nil, fmt.Errorf("decode event: %w", err)
+	}
+	return f, nil
 }

@@ -1,5 +1,5 @@
-// Command analytics reads aggregate analytics over the last 30 days: the
-// account dashboard and warmup health.
+// Command analytics reads aggregate analytics: the workspace dashboard,
+// deliverability health over the last 30 days, and per-mailbox status.
 //
 //	WARMBLY_API_KEY=wmbly_... go run ./examples/analytics
 package main
@@ -21,23 +21,43 @@ func main() {
 	}
 	ctx := context.Background()
 
+	dash, _, err := client.Analytics.Dashboard(ctx, warmbly.Period30Days)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := dash.OverallStats
+	fmt.Printf("sent=%d opens=%d (machine %d) clicks=%d replies=%d bounces=%d\n",
+		s.TotalEmailsSent, s.TotalOpens, s.MachineOpens, s.TotalClicks, s.TotalReplies, s.TotalBounces)
+	fmt.Printf("open=%.1f%% reply=%.1f%% bounce=%.1f%%  active campaigns=%d\n",
+		s.OpenRate*100, s.ReplyRate*100, s.BounceRate*100, s.ActiveCampaigns)
+
+	// Deliverability health tells you whether the sending itself is in trouble,
+	// which the engagement numbers alone will not.
 	to := time.Now()
 	from := to.AddDate(0, 0, -30)
-	window := &warmbly.AnalyticsRange{From: &from, To: &to, Granularity: "day"}
-
-	dash, _, err := client.Analytics.Dashboard(ctx, window)
+	deliv, _, err := client.Analytics.Deliverability(ctx, from, to)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("sent=%d delivered=%d opens=%d replies=%d bounces=%d\n",
-		dash.EmailsSent, dash.Delivered, dash.Opens, dash.Replies, dash.Bounces)
-	fmt.Printf("open rate=%.1f%%  reply rate=%.1f%%  active campaigns=%d\n",
-		dash.OpenRate*100, dash.ReplyRate*100, dash.ActiveCampaigns)
+	fmt.Printf("band=%s bounce=%.2f%% complaint=%.2f%% inbox placement=%.1f%%\n",
+		deliv.Band, deliv.BounceRate*100, deliv.ComplaintRate*100, deliv.InboxPlacementRate*100)
+	for _, mb := range deliv.ByMailbox {
+		if mb.Band != warmbly.BandHealthy {
+			fmt.Printf("  %s is %s (%.2f%% bounces over %d sends)\n",
+				mb.Email, mb.Band, mb.BounceRate*100, mb.Sent)
+		}
+	}
 
-	warmup, _, err := client.Analytics.Warmup(ctx, window)
+	// Per-mailbox operational status: health score, recent errors, and how much
+	// of today's allowance is spent.
+	accounts, _, err := client.Analytics.Accounts(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("warming=%d  health=%.2f  inbox=%.1f%%  spam=%.1f%%\n",
-		warmup.AccountsWarming, warmup.HealthScore, warmup.InboxRate*100, warmup.SpamRate*100)
+	for _, a := range accounts {
+		fmt.Printf("%s: health=%s(%d) campaign %d/%d warmup %d/%d\n",
+			a.Email, a.Health.Status, a.Health.Score,
+			a.DailyUsage.CampaignSent, a.DailyUsage.CampaignLimit,
+			a.DailyUsage.WarmupSent, a.DailyUsage.WarmupLimit)
+	}
 }

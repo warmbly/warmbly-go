@@ -1,5 +1,5 @@
-// Command contacts demonstrates importing contacts, searching them (a POST with
-// manual cursor pagination), and applying a bulk update.
+// Command contacts demonstrates adding contacts, searching them with the
+// faceted filter, reading the contact 360 view, and applying a bulk update.
 //
 //	WARMBLY_API_KEY=wmbly_... go run ./examples/contacts
 package main
@@ -20,38 +20,62 @@ func main() {
 	}
 	ctx := context.Background()
 
-	// Import a couple of contacts.
-	res, _, err := client.Contacts.Create(ctx, []warmbly.ContactInput{
-		{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com", Company: "Analytical Engines", Tags: []string{"vip"}},
+	created, _, err := client.Contacts.Create(ctx, []warmbly.ContactInput{
+		{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com", Company: "Analytical Engines"},
 		{FirstName: "Alan", LastName: "Turing", Email: "alan@example.com"},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("created=%d updated=%d skipped=%d\n", res.Created, res.Updated, res.Skipped)
+	fmt.Printf("created %d contacts\n", len(created))
 
-	// Search is a POST; paginate by carrying the cursor forward.
-	params := &warmbly.ContactSearchParams{Query: "example.com", Limit: 50}
-	for {
-		page, err := client.Contacts.Search(ctx, params)
+	// Search takes its filters in the body and pages like every other list. The
+	// first page also carries workspace-wide facet counts.
+	page, err := client.Contacts.Search(ctx, &warmbly.ContactSearchParams{
+		ListOptions: warmbly.ListOptions{Limit: 50},
+		Query:       "example.com",
+		Subscribed:  warmbly.Bool(true),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if page.Counts != nil {
+		fmt.Printf("%d contacts total, %d subscribed\n", page.Counts.Total, page.Counts.Subscribed)
+	}
+	for c, err := range page.All(ctx) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		for _, c := range page.Data {
-			fmt.Printf("%s %s <%s> [%s]\n", c.FirstName, c.LastName, c.Email, c.VerificationStatus)
-		}
-		if !page.HasMore() {
-			break
-		}
-		params.Cursor = page.NextCursor()
+		fmt.Printf("%s %s <%s> [%s]\n", c.FirstName, c.LastName, c.Email, c.VerificationStatus)
 	}
 
-	// Bulk subscribe a set of contacts and tag them.
-	subscribed := true
-	if _, err := client.Contacts.BulkUpdate(ctx, &warmbly.ContactBulkUpdateParams{
-		IDs:        []string{"ct_1", "ct_2"},
-		Subscribed: &subscribed,
-		AddTags:    []string{"newsletter"},
+	if len(created) == 0 {
+		return
+	}
+
+	// The 360 view bundles the contact with its engagement rollup and
+	// suppression state in one round trip.
+	detail, _, err := client.Contacts.Get(ctx, created[0].ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s: %d sent, %d replied\n",
+		detail.Email, detail.Engagement.TotalSent, detail.Engagement.TotalReplied)
+	if detail.Suppression != nil {
+		fmt.Printf("  suppressed (%s): %s\n", detail.Suppression.Source, detail.Suppression.Reason)
+	}
+
+	// Bulk edits take contact ids plus the changes to apply.
+	ids := make([]string, len(created))
+	for i, c := range created {
+		ids[i] = c.ID
+	}
+	if _, _, err := client.Contacts.BulkUpdate(ctx, &warmbly.ContactBulkUpdateParams{
+		Contacts:  ids,
+		Subscribe: warmbly.Bool(true),
+		Fields: []warmbly.ContactFieldEdit{
+			{Type: warmbly.FieldOpAdd, Key: "source", Value: "sdk-example"},
+		},
 	}); err != nil {
 		log.Fatal(err)
 	}
