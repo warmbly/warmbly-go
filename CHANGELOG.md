@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-05
 
 Reconciled the SDK with the current v1 API. The previous release was written
 against an earlier draft of the API and had drifted: several models, query
@@ -129,5 +129,6 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0
