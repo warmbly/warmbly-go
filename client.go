@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the SDK version, reported in the default User-Agent.
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 const (
 	defaultBaseURL   = "https://api.warmbly.com/v1/"

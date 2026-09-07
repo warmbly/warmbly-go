@@ -265,6 +265,65 @@ func TestCampaignStatusChangeDecode(t *testing.T) {
 	}
 }
 
+// TestCampaignStartWaitingForLeads covers the start response's waiting_for_leads
+// flag. A campaign whose every lead has finished no longer re-completes: the
+// start turns continuous on and parks it active and idle, and the flag is how a
+// caller learns that without a second fetch.
+func TestCampaignStartWaitingForLeads(t *testing.T) {
+	t.Run("waiting", func(t *testing.T) {
+		c := campaignSyncClient(t, http.StatusOK, `{"status":"started","waiting_for_leads":true}`, nil)
+		got, _, err := c.Campaigns.Start(context.Background(), "camp_1")
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if got.Status != "started" {
+			t.Errorf("status = %q, want started", got.Status)
+		}
+		if !got.WaitingForLeads {
+			t.Error("WaitingForLeads = false, want true")
+		}
+	})
+
+	t.Run("sending", func(t *testing.T) {
+		c := campaignSyncClient(t, http.StatusOK, `{"status":"started","waiting_for_leads":false}`, nil)
+		got, _, err := c.Campaigns.Start(context.Background(), "camp_1")
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if got.WaitingForLeads {
+			t.Error("WaitingForLeads = true, want false")
+		}
+	})
+
+	// A stop never reports the flag; the field must stay false rather than
+	// carrying over from a decode of the shared type.
+	t.Run("stop", func(t *testing.T) {
+		c := campaignSyncClient(t, http.StatusOK, `{"status":"stopped"}`, nil)
+		got, _, err := c.Campaigns.Stop(context.Background(), "camp_1")
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		if got.WaitingForLeads {
+			t.Error("WaitingForLeads = true on a stop, want false")
+		}
+	})
+}
+
+// TestCampaignStartNoLeadsCode covers the refusal a campaign that has never had
+// a lead answers when continuous is off, which is distinct from one whose leads
+// have all finished (that one starts and waits).
+func TestCampaignStartNoLeadsCode(t *testing.T) {
+	c := campaignSyncClient(t, http.StatusBadRequest, `{"error":"bad_request","message":"add contacts first","code":"no_leads"}`, nil)
+	_, _, err := c.Campaigns.Start(context.Background(), "camp_1")
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %T (%v), want *Error", err, err)
+	}
+	if !apiErr.HasCode(ErrCodeNoLeads) {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeNoLeads)
+	}
+}
+
 // TestCampaignStartRefusalCode checks the bounce-risk refusal surfaces its
 // stable code, since that is what a caller branches on before retrying with
 // AcknowledgeListRisk.
