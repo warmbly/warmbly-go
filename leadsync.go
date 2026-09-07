@@ -81,7 +81,8 @@ type LeadSyncSource struct {
 	// ColumnMapping and Dedup are the contact-importer settings the rows flow
 	// through, so a sheet sync behaves exactly like a file import.
 	ColumnMapping []ImportColumnMapping `json:"column_mapping"`
-	Dedup         string                `json:"dedup"`
+	// Dedup is one of the ImportDedup* constants.
+	Dedup string `json:"dedup"`
 
 	// TargetCampaignID, when set, enrolls every new or updated lead in that
 	// campaign on each sync.
@@ -101,7 +102,8 @@ type LeadSyncSource struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// LeadSyncCreateParams saves a new source.
+// LeadSyncCreateParams saves a new source. ConnectionID, SheetID and a
+// non-empty ColumnMapping are required.
 type LeadSyncCreateParams struct {
 	ConnectionID string `json:"connection_id"`
 	SheetID      string `json:"sheet_id"`
@@ -109,6 +111,10 @@ type LeadSyncCreateParams struct {
 	TabTitle     string `json:"tab_title,omitempty"`
 	HasHeader    bool   `json:"has_header"`
 
+	// ColumnMapping is validated when the source is saved, with the same
+	// rules as a file import: it must be non-empty and map an email column,
+	// and every target must be a known one. A bad mapping is a 400 here
+	// rather than a failed sync later.
 	ColumnMapping []ImportColumnMapping `json:"column_mapping"`
 	// Dedup is one of the ImportDedup* constants.
 	Dedup string `json:"dedup,omitempty"`
@@ -126,6 +132,8 @@ type LeadSyncUpdateParams struct {
 	TabTitle   *string `json:"tab_title,omitempty"`
 	HasHeader  *bool   `json:"has_header,omitempty"`
 
+	// ColumnMapping, when non-nil, replaces the mapping and is validated like
+	// on create; an empty mapping is a 400.
 	ColumnMapping *[]ImportColumnMapping `json:"column_mapping,omitempty"`
 	Dedup         *string                `json:"dedup,omitempty"`
 
@@ -174,6 +182,13 @@ func (s *LeadSyncService) Preview(ctx context.Context, connectionID, sheetID, ta
 // Sources returns the workspace's saved sync sources.
 func (s *LeadSyncService) Sources(ctx context.Context, opts ...RequestOption) ([]LeadSyncSource, *Response, error) {
 	return fetchData[LeadSyncSource](ctx, s.client, "lead-sync/sources", opts)
+}
+
+// SourcesForCampaign returns the saved sync sources that enroll their leads
+// in the given campaign.
+func (s *LeadSyncService) SourcesForCampaign(ctx context.Context, campaignID string, opts ...RequestOption) ([]LeadSyncSource, *Response, error) {
+	q := url.Values{"campaign_id": {campaignID}}
+	return fetchData[LeadSyncSource](ctx, s.client, withQuery("lead-sync/sources", q), opts)
 }
 
 // Create saves a new sync source.

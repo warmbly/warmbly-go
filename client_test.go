@@ -159,7 +159,7 @@ func TestPaginationAutoPaging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, 3)
 	for camp, err := range page.All(context.Background()) {
 		if err != nil {
 			t.Fatalf("iterating: %v", err)

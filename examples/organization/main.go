@@ -30,24 +30,33 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	session, _, err := anon.Auth.Login(ctx, &warmbly.LoginParams{
+	step, _, err := anon.Auth.Login(ctx, &warmbly.LoginParams{
 		Email:    os.Getenv("WARMBLY_EMAIL"),
 		Password: os.Getenv("WARMBLY_PASSWORD"),
 	})
 	if err != nil {
 		log.Fatalf("login: %v", err)
 	}
-	fmt.Print("emailed verification code: ")
-	code, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 
-	tokens, _, err := anon.Auth.LoginConfirm(ctx, &warmbly.ConfirmParams{
-		Session: session,
-		Code:    strings.TrimSpace(code),
-	})
-	if err != nil {
-		log.Fatalf("confirm: %v", err)
+	// Whether a code step follows is the deployment's choice, and it is skipped
+	// on a device this account has signed in from before. Branch on the answer
+	// rather than assuming it.
+	tokens := step.Token
+	if step.CodeRequired {
+		fmt.Print("emailed verification code: ")
+		code, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+
+		tokens, _, err = anon.Auth.LoginConfirm(ctx, &warmbly.ConfirmParams{
+			Session: step.Session,
+			Code:    strings.TrimSpace(code),
+		})
+		if err != nil {
+			log.Fatalf("confirm: %v", err)
+		}
+	} else if step.TwoFARequired {
+		log.Fatal("this account has two-factor enabled; finish with Auth.VerifyTwoFA")
 	}
-	if tokens.TwoFARequired {
+	if tokens == nil || tokens.TwoFARequired {
 		log.Fatal("this account has two-factor enabled; finish with Auth.VerifyTwoFA")
 	}
 

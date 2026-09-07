@@ -2,13 +2,16 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"time"
 )
 
 // OrganizationService manages the organization (workspace): its settings and
-// AI voice profile, its members, custom roles and invitations, plan limits, and
-// the danger zone.
+// AI voice profile, its members, custom roles and invitations, plan limits and
+// sending posture, whole-workspace export and import, and the danger zone.
 //
 // These routes are session-only. They accept a JWT obtained from
 // [AuthService.Login] (pass it with [WithAccessToken] or [WithTokenSource]) and
@@ -171,8 +174,8 @@ type OrganizationWithLimits struct {
 	Counts *OrganizationCounts `json:"counts,omitempty"`
 }
 
-// OrganizationLimits are the effective plan ceilings. A nil field is
-// unlimited.
+// OrganizationLimits are the ceilings the server actually enforces: the plan's,
+// raised by any approved limit increase. A nil field is unlimited.
 type OrganizationLimits struct {
 	MaxCampaigns       *int `json:"max_campaigns,omitempty"`
 	MaxActiveCampaigns *int `json:"max_active_campaigns,omitempty"`
@@ -192,10 +195,56 @@ type OrganizationCounts struct {
 	EmailsSentToday int `json:"emails_sent_today"`
 }
 
-// LimitsAndCounts pairs the plan ceilings with current usage.
+// LimitsAndCounts pairs the enforced ceilings with current usage, plus the two
+// meters that have no plan column of their own: the mailbox allowance and
+// attachment storage.
 type LimitsAndCounts struct {
 	Limits *OrganizationLimits `json:"limits"`
 	Counts *OrganizationCounts `json:"counts"`
+	// Mailboxes is how many mailboxes the workspace may hold and why.
+	Mailboxes *MailboxAllowance `json:"mailboxes,omitempty"`
+	// Storage is attachment storage against its quota.
+	Storage *StorageUsage `json:"storage,omitempty"`
+}
+
+// StorageUsage is attachment storage used against the workspace's quota. A
+// workspace that dropped to a smaller plan can be over quota with no upload
+// refused yet, which is what OverQuota reports.
+type StorageUsage struct {
+	UsedBytes  int64 `json:"used_bytes"`
+	LimitBytes int64 `json:"limit_bytes"`
+	OverQuota  bool  `json:"over_quota"`
+}
+
+// The MailboxAllowance* constants and [MailboxAllowance] are declared in
+// emails.go, alongside [EmailService.Allowance] which returns them.
+
+// Sending postures returned in [OrgRisk.State].
+const (
+	// OrgRiskTrusted is the default: nothing is restricted.
+	OrgRiskTrusted = "trusted"
+	// OrgRiskWatch changes nothing the workspace can feel; evidence is
+	// accumulating.
+	OrgRiskWatch = "watch"
+	// OrgRiskRestricted lowers send caps and confines warmup to the free
+	// pool.
+	OrgRiskRestricted = "restricted"
+	// OrgRiskSuspended stops sending entirely, pending review.
+	OrgRiskSuspended = "suspended"
+)
+
+// OrgRisk is the workspace's sending posture: whether its volume is capped or
+// stopped, and the plain-language reason. The detector evidence behind it is
+// deliberately not returned.
+type OrgRisk struct {
+	// State is one of the OrgRisk* constants.
+	State string `json:"state"`
+	// Restricted is true for restricted and suspended; volume is reduced.
+	Restricted bool `json:"restricted"`
+	// Suspended is true when sending is stopped entirely.
+	Suspended bool `json:"suspended"`
+	// Reason is the sentence a dashboard banner shows, when there is one.
+	Reason string `json:"reason,omitempty"`
 }
 
 // MemberRole is a lightweight role reference for rendering the roles a member
@@ -299,6 +348,25 @@ type Invitation struct {
 // Expired reports whether the invitation has lapsed.
 func (i *Invitation) Expired() bool { return timeNow().After(i.ExpiresAt) }
 
+// InvitationPreview is the public view of an invitation, resolved from its
+// token before the recipient commits to joining. It deliberately carries only
+// what a human needs to decide: no ids, no permission bitmask, and not the
+// token itself.
+type InvitationPreview struct {
+	OrganizationName   string `json:"organization_name"`
+	OrganizationAvatar string `json:"organization_avatar,omitempty"`
+	// InviterName is who sent it, when the API knows.
+	InviterName string `json:"inviter_name,omitempty"`
+	// Email is the address the invitation was issued to; only that address can
+	// accept it.
+	Email string `json:"email"`
+	// Roles are the roles the invitee would land in.
+	Roles []MemberRole `json:"roles"`
+	// Expired is true when the invitation has lapsed and can no longer be
+	// accepted.
+	Expired bool `json:"expired"`
+}
+
 // OrganizationCreateParams creates a workspace.
 type OrganizationCreateParams struct {
 	Name string `json:"name"`
@@ -394,6 +462,238 @@ type ScheduleDeletionParams struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
+// --- workspace archives ---
+
+// Workspace archive job states returned in [OrgExportJob.Status] and
+// [OrgImportJob.Status].
+const (
+	OrgTransferQueued    = "queued"
+	OrgTransferRunning   = "running"
+	OrgTransferCompleted = "completed"
+	OrgTransferFailed    = "failed"
+	// OrgTransferExpired is export-only: the archive was deleted after its
+	// retention window and the row survives as history.
+	OrgTransferExpired = "expired"
+)
+
+// orgTransferTerminal reports whether a job has stopped moving.
+func orgTransferTerminal(status string) bool {
+	switch status {
+	case OrgTransferCompleted, OrgTransferFailed, OrgTransferExpired:
+		return true
+	}
+	return false
+}
+
+// Data groups an archive can carry, in [OrgExportParams.Groups],
+// [OrgImportParams.Groups] and [OrgDataGroupInfo.Key]. Read the live catalog
+// with [OrganizationService.TransferGroups]; these are the keys it uses.
+const (
+	// OrgDataGroupCore is the workspace itself and is always included.
+	OrgDataGroupCore        = "core"
+	OrgDataGroupContacts    = "contacts"
+	OrgDataGroupCampaigns   = "campaigns"
+	OrgDataGroupCRM         = "crm"
+	OrgDataGroupAutomations = "automations"
+	OrgDataGroupAI          = "ai"
+	OrgDataGroupWarmup      = "warmup"
+	OrgDataGroupInbox       = "inbox"
+	OrgDataGroupSending     = "sending"
+	OrgDataGroupEvents      = "events"
+	OrgDataGroupLogs        = "logs"
+	// OrgDataGroupBilling is exported but never applied verbatim on import:
+	// the destination instance owns billing.
+	OrgDataGroupBilling = "billing"
+)
+
+// What to do with a row the destination already has, in
+// [OrgImportParams.ConflictStrategy].
+const (
+	// OrgImportSkip keeps the row that is already there. The safe default: an
+	// import never destroys data that was not in the archive.
+	OrgImportSkip = "skip"
+	// OrgImportOverwrite replaces the existing row with the archive's.
+	OrgImportOverwrite = "overwrite"
+)
+
+// OrgDataGroupInfo describes one data group from the server's own catalog, so
+// a picker renders from it rather than from a copy that drifts.
+type OrgDataGroupInfo struct {
+	// Key is one of the OrgDataGroup* constants.
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	// Required groups cannot be switched off.
+	Required bool `json:"required"`
+	// Heavy marks the groups that dominate archive size on a busy workspace.
+	Heavy bool `json:"heavy"`
+	// Requires names the groups this one cannot travel without. Selecting a
+	// group selects these too, on the server as well.
+	Requires []string `json:"requires,omitempty"`
+}
+
+// OrgTransferCatalog is what an archive can carry and the rules around it.
+type OrgTransferCatalog struct {
+	Groups []OrgDataGroupInfo `json:"groups"`
+	// FormatVersion is the archive layout this instance writes and reads.
+	FormatVersion int `json:"format_version"`
+	// MinPassphrase is the shortest secrets passphrase accepted.
+	MinPassphrase int `json:"min_passphrase"`
+	// RetentionDays is how long a finished export stays downloadable.
+	RetentionDays int `json:"retention_days"`
+}
+
+// OrgExportJob is one archive build. Poll [OrganizationService.Export] until
+// [OrgExportJob.Terminal]; a completed job can be downloaded until ExpiresAt.
+type OrgExportJob struct {
+	ID             string  `json:"id"`
+	OrganizationID string  `json:"organization_id"`
+	RequestedBy    *string `json:"requested_by,omitempty"`
+	// Status is one of the OrgTransfer* constants.
+	Status string `json:"status"`
+
+	// Groups are the data groups the archive carries; IncludeSecrets whether
+	// credentials were re-sealed into it.
+	Groups         []string `json:"groups"`
+	IncludeSecrets bool     `json:"include_secrets"`
+	FormatVersion  int      `json:"format_version"`
+
+	ProgressPercent int    `json:"progress_percent"`
+	ProgressStage   string `json:"progress_stage"`
+
+	// ArchiveBytes and ArchiveSHA256 describe the finished file; RowCounts is
+	// per-table.
+	ArchiveBytes  *int64           `json:"archive_bytes,omitempty"`
+	ArchiveSHA256 *string          `json:"archive_sha256,omitempty"`
+	RowCounts     map[string]int64 `json:"row_counts"`
+
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	// ExpiresAt is when the archive is deleted from storage.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// Terminal reports whether the job has stopped moving.
+func (j *OrgExportJob) Terminal() bool { return orgTransferTerminal(j.Status) }
+
+// TotalRows sums every table's row count.
+func (j *OrgExportJob) TotalRows() int64 {
+	var total int64
+	for _, n := range j.RowCounts {
+		total += n
+	}
+	return total
+}
+
+// OrgImportJob is one archive application. Poll [OrganizationService.Import]
+// until [OrgImportJob.Terminal].
+type OrgImportJob struct {
+	ID             string  `json:"id"`
+	OrganizationID string  `json:"organization_id"`
+	RequestedBy    *string `json:"requested_by,omitempty"`
+	// Status is one of the OrgTransfer* constants.
+	Status string `json:"status"`
+
+	ArchiveBytes  *int64  `json:"archive_bytes,omitempty"`
+	ArchiveSHA256 *string `json:"archive_sha256,omitempty"`
+	// SourceManifest summarizes the archive that was applied.
+	SourceManifest *OrgArchiveInfo `json:"source_manifest,omitempty"`
+
+	Groups []string `json:"groups"`
+	// ConflictStrategy is [OrgImportSkip] or [OrgImportOverwrite].
+	ConflictStrategy string `json:"conflict_strategy"`
+
+	ProgressPercent int    `json:"progress_percent"`
+	ProgressStage   string `json:"progress_stage"`
+
+	RowCounts map[string]int64 `json:"row_counts"`
+	Warnings  []string         `json:"warnings"`
+
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// Terminal reports whether the job has stopped moving.
+func (j *OrgImportJob) Terminal() bool { return orgTransferTerminal(j.Status) }
+
+// OrgArchiveInfo is the safe-to-show summary of an archive's manifest.
+type OrgArchiveInfo struct {
+	FormatVersion    int              `json:"format_version"`
+	SourceInstance   string           `json:"source_instance"`
+	SourceAppVersion string           `json:"source_app_version"`
+	OrganizationID   string           `json:"organization_id"`
+	OrganizationName string           `json:"organization_name"`
+	ExportedAt       time.Time        `json:"exported_at"`
+	Groups           []string         `json:"groups"`
+	HasSecrets       bool             `json:"has_secrets"`
+	RowCounts        map[string]int64 `json:"row_counts"`
+	BlobCount        int              `json:"blob_count"`
+	Members          []OrgArchiveUser `json:"members"`
+}
+
+// OrgArchiveUser is a member carried by an archive. The importer matches
+// these to destination accounts by email; there is no password material, so
+// an archive can never mint a login.
+type OrgArchiveUser struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Role      string `json:"role"`
+	IsOwner   bool   `json:"is_owner"`
+}
+
+// OrgExportParams starts an archive build.
+type OrgExportParams struct {
+	// Groups to include (OrgDataGroup* constants). Empty means every group;
+	// [OrgDataGroupCore] is always included, and a group's requirements are
+	// pulled in with it.
+	Groups []string `json:"groups,omitempty"`
+	// IncludeSecrets re-seals mailbox and integration credentials into the
+	// archive under Passphrase, so the destination brings mailboxes back
+	// without everyone reconnecting. It requires Passphrase.
+	IncludeSecrets bool `json:"include_secrets,omitempty"`
+	// Passphrase protects the secrets bundle; at least
+	// [OrgTransferCatalog.MinPassphrase] characters. It is never stored: lose
+	// it and the credentials in that archive are unrecoverable.
+	Passphrase string `json:"passphrase,omitempty"`
+}
+
+// OrgImportParams applies an archive.
+type OrgImportParams struct {
+	// Groups to apply. Empty means every group present in the archive.
+	Groups []string `json:"groups,omitempty"`
+	// ConflictStrategy is [OrgImportSkip] (the default) or
+	// [OrgImportOverwrite].
+	ConflictStrategy string `json:"conflict_strategy,omitempty"`
+	// Passphrase unseals the archive's secrets bundle. Omit it and the import
+	// still runs; mailboxes and integrations just arrive needing a reconnect.
+	Passphrase string `json:"-"`
+}
+
+// OrgImportPreflight is what an archive would do, without writing anything.
+type OrgImportPreflight struct {
+	Archive *OrgArchiveInfo `json:"archive"`
+	// SecretsUnsealed reports whether the passphrase actually opened the
+	// secrets bundle, so mailboxes will reconnect on their own.
+	SecretsUnsealed bool `json:"secrets_unsealed"`
+	// Conflicts is the per-table count of rows already present here.
+	Conflicts map[string]int64 `json:"conflicts"`
+	// UnknownMembers have no account on this instance; they are imported as
+	// pending invitations.
+	UnknownMembers []OrgArchiveUser `json:"unknown_members"`
+	// SkippedTables are in the archive but unknown here, usually because it
+	// came from a newer release.
+	SkippedTables []string `json:"skipped_tables"`
+	Warnings      []string `json:"warnings"`
+}
+
 // Create provisions a new workspace and returns it.
 func (s *OrganizationService) Create(ctx context.Context, params *OrganizationCreateParams, opts ...RequestOption) (*Organization, *Response, error) {
 	return send[Organization](ctx, s.client.post, "organization", params, opts)
@@ -421,19 +721,24 @@ func (s *OrganizationService) Update(ctx context.Context, params *OrganizationUp
 	return send[Organization](ctx, s.client.patch, "organization/current", params, opts)
 }
 
-// Limits returns the workspace's plan ceilings alongside current usage.
+// Limits returns the ceilings the server enforces for the workspace alongside
+// current usage, the mailbox allowance and attachment storage.
 func (s *OrganizationService) Limits(ctx context.Context, opts ...RequestOption) (*LimitsAndCounts, *Response, error) {
 	return fetch[LimitsAndCounts](ctx, s.client, "organization/current/limits", opts)
 }
 
-// UploadAvatar sets the workspace logo.
-func (s *OrganizationService) UploadAvatar(ctx context.Context, file *FileUpload, opts ...RequestOption) (*Organization, *Response, error) {
-	out := new(Organization)
-	resp, err := s.client.postMultipart(ctx, "organization/avatar", "avatar", file, nil, out, opts...)
-	if err != nil {
-		return nil, resp, err
+// UploadAvatar sets the workspace logo and returns the URL it is now served
+// from. The image must be a PNG or JPEG, at most 2 MB and 1024 pixels on a
+// side; anything else is refused. The previous logo is deleted.
+func (s *OrganizationService) UploadAvatar(ctx context.Context, file *FileUpload, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		AvatarURL string `json:"avatar_url"`
 	}
-	return out, resp, nil
+	resp, err := s.client.postMultipart(ctx, "organization/avatar", "file", file, nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.AvatarURL, resp, nil
 }
 
 // DeleteAvatar removes the workspace logo.
@@ -535,10 +840,11 @@ func (s *OrganizationService) MyInvitations(ctx context.Context, opts ...Request
 
 // PreviewInvitation resolves an invite token to the workspace it points at,
 // before the caller commits to joining. It needs no credentials: the token is
-// the capability.
-func (s *OrganizationService) PreviewInvitation(ctx context.Context, token string, opts ...RequestOption) (*Invitation, *Response, error) {
+// the capability. The answer is the safe public view — see [InvitationPreview]
+// — not the workspace-side [Invitation] row.
+func (s *OrganizationService) PreviewInvitation(ctx context.Context, token string, opts ...RequestOption) (*InvitationPreview, *Response, error) {
 	q := url.Values{"token": {token}}
-	return fetch[Invitation](ctx, s.client, withQuery("invitations/lookup", q), opts)
+	return fetch[InvitationPreview](ctx, s.client, withQuery("invitations/lookup", q), opts)
 }
 
 // AcceptInvitation joins the workspace an invite token points at.
@@ -566,12 +872,23 @@ const (
 	LimitRequestCancelled = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 )
 
+// Ceilings a limit increase can be requested for, in
+// [LimitRequestParams.Field] and [LimitRequest.Field].
+const (
+	LimitFieldMaxCampaigns       = "max_campaigns"
+	LimitFieldMaxActiveCampaigns = "max_active_campaigns"
+	LimitFieldMaxTeamMembers     = "max_team_members"
+	LimitFieldMaxEmailAccounts   = "max_email_accounts"
+	LimitFieldMaxContacts        = "max_contacts"
+	LimitFieldDailyCampaignLimit = "daily_campaign_limit"
+)
+
 // LimitRequest is an ask for a higher plan ceiling, pending review.
 type LimitRequest struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
-	// Field names the ceiling being raised, matching a key of
-	// [OrganizationLimits] such as "max_email_accounts".
+	// Field names the ceiling being raised: one of the LimitField*
+	// constants.
 	Field string `json:"field"`
 	// CurrentEffective is what the limit was when the request was filed, so a
 	// reviewer sees what the asker was looking at.
@@ -588,8 +905,10 @@ type LimitRequest struct {
 	ReviewNotes string     `json:"review_notes,omitempty"`
 }
 
-// LimitRequestParams asks for a higher ceiling. Requested must exceed the
-// current effective limit, and Field must name a real one.
+// LimitRequestParams asks for a higher ceiling. Field is one of the
+// LimitField* constants, Requested must exceed the current effective limit,
+// and Reason (up to 2000 characters) is required. A mailbox request on a
+// workspace whose allowance is unlimited is refused.
 type LimitRequestParams struct {
 	Field     string `json:"field"`
 	Requested int    `json:"requested"`
@@ -609,6 +928,124 @@ func (s *OrganizationService) RequestLimitIncrease(ctx context.Context, orgID st
 // CancelLimitRequest withdraws a pending request. Only its submitter may.
 func (s *OrganizationService) CancelLimitRequest(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "limit-requests/"+url.PathEscape(id), opts...)
+}
+
+// Risk returns the workspace's sending posture: whether volume is capped or
+// stopped, and why. Any member may read it; a workspace whose sending is
+// limited should be able to see that it is.
+func (s *OrganizationService) Risk(ctx context.Context, opts ...RequestOption) (*OrgRisk, *Response, error) {
+	return fetch[OrgRisk](ctx, s.client, "organization/current/risk", opts)
+}
+
+// --- workspace archives ---
+//
+// A workspace archive is one file holding everything a workspace owns, for
+// moving it between instances. Every route here is owner-only: an export with
+// credentials holds every mailbox password in the workspace, and an import
+// rewrites the workspace wholesale, so both sit at the level of deleting it.
+// A non-owner gets 403. On an instance without the transfer service the
+// exports and imports lists are empty and everything else is 400 or 404.
+
+// TransferGroups returns the data groups an archive can carry and the rules
+// around one: format version, passphrase floor, export retention.
+func (s *OrganizationService) TransferGroups(ctx context.Context, opts ...RequestOption) (*OrgTransferCatalog, *Response, error) {
+	return fetch[OrgTransferCatalog](ctx, s.client, "organization/current/transfer/groups", opts)
+}
+
+// CreateExport starts an archive build in the background and returns the job
+// (202). Poll it with [OrganizationService.Export] until
+// [OrgExportJob.Terminal], then fetch the file with
+// [OrganizationService.DownloadExport]. Owner-only.
+func (s *OrganizationService) CreateExport(ctx context.Context, params *OrgExportParams, opts ...RequestOption) (*OrgExportJob, *Response, error) {
+	if params == nil {
+		params = &OrgExportParams{}
+	}
+	return send[OrgExportJob](ctx, s.client.post, "organization/current/export", params, opts)
+}
+
+// Exports returns the workspace's recent archive builds, including expired
+// ones. Owner-only.
+func (s *OrganizationService) Exports(ctx context.Context, opts ...RequestOption) ([]OrgExportJob, *Response, error) {
+	return fetchData[OrgExportJob](ctx, s.client, "organization/current/export", opts)
+}
+
+// Export returns one archive build, for progress polling. Owner-only.
+func (s *OrganizationService) Export(ctx context.Context, id string, opts ...RequestOption) (*OrgExportJob, *Response, error) {
+	return fetch[OrgExportJob](ctx, s.client, "organization/current/export/"+url.PathEscape(id), opts)
+}
+
+// DownloadExport streams a completed archive (a zip) into w. The response
+// carries the size in Content-Length and the digest in X-Archive-SHA256, so
+// the copy can be verified against [OrgExportJob.ArchiveSHA256]. A job that
+// has not completed, or whose archive has expired, answers 404. Owner-only,
+// and audited. The download is not retried, so a failure mid-stream leaves w
+// partially written.
+func (s *OrganizationService) DownloadExport(ctx context.Context, id string, w io.Writer, opts ...RequestOption) (*Response, error) {
+	if w == nil {
+		return nil, errors.New("warmbly: a writer is required to download an export")
+	}
+	return s.client.get(ctx, "organization/current/export/"+url.PathEscape(id)+"/download", w, opts...)
+}
+
+// DeleteExport removes an archive and its stored file. Owner-only.
+func (s *OrganizationService) DeleteExport(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "organization/current/export/"+url.PathEscape(id), opts...)
+}
+
+// PreflightImport uploads an archive and reports what applying it would do —
+// what it holds, which rows conflict, which members are unknown — without
+// writing anything. Pass the passphrase the archive was exported with to
+// learn whether its secrets unseal; an empty one is fine. The upload is
+// multipart and buffered in memory. Owner-only.
+func (s *OrganizationService) PreflightImport(ctx context.Context, file *FileUpload, passphrase string, opts ...RequestOption) (*OrgImportPreflight, *Response, error) {
+	fields := map[string]string{}
+	if passphrase != "" {
+		fields["passphrase"] = passphrase
+	}
+	out := new(OrgImportPreflight)
+	resp, err := s.client.postMultipart(ctx, "organization/current/import/preflight", "file", file, fields, out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
+}
+
+// CreateImport uploads an archive and applies it to the current workspace in
+// the background, returning the job (202). Poll it with
+// [OrganizationService.Import]. Run [OrganizationService.PreflightImport]
+// first: an import is irreversible. The upload is multipart (the archive as
+// the file, the options as a JSON form field) and buffered in memory.
+// Owner-only.
+func (s *OrganizationService) CreateImport(ctx context.Context, file *FileUpload, params *OrgImportParams, opts ...RequestOption) (*OrgImportJob, *Response, error) {
+	fields := map[string]string{}
+	if params != nil {
+		if params.Passphrase != "" {
+			fields["passphrase"] = params.Passphrase
+		}
+		if len(params.Groups) > 0 || params.ConflictStrategy != "" {
+			raw, err := json.Marshal(params)
+			if err != nil {
+				return nil, nil, err
+			}
+			fields["options"] = string(raw)
+		}
+	}
+	out := new(OrgImportJob)
+	resp, err := s.client.postMultipart(ctx, "organization/current/import", "file", file, fields, out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
+}
+
+// Imports returns the workspace's recent imports. Owner-only.
+func (s *OrganizationService) Imports(ctx context.Context, opts ...RequestOption) ([]OrgImportJob, *Response, error) {
+	return fetchData[OrgImportJob](ctx, s.client, "organization/current/import", opts)
+}
+
+// Import returns one import, for progress polling. Owner-only.
+func (s *OrganizationService) Import(ctx context.Context, id string, opts ...RequestOption) (*OrgImportJob, *Response, error) {
+	return fetch[OrgImportJob](ctx, s.client, "organization/current/import/"+url.PathEscape(id), opts)
 }
 
 // --- danger zone ---

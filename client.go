@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the SDK version, reported in the default User-Agent.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 const (
 	defaultBaseURL   = "https://api.warmbly.com/v1/"
@@ -58,6 +58,12 @@ type Client struct {
 	Campaigns *CampaignService
 	// Contacts manages contacts, their CRM notes and import and export.
 	Contacts *ContactService
+	// Segments are saved contact audiences evaluated live.
+	Segments *SegmentService
+	// Suppressions is the workspace's do-not-contact list.
+	Suppressions *SuppressionService
+	// Forms are hosted lead-capture forms and their submissions.
+	Forms *FormService
 	// Unibox is the unified inbox: reading, replying and composing.
 	Unibox *UniboxService
 	// Templates manages reusable reply templates.
@@ -87,6 +93,9 @@ type Client struct {
 	Skills *SkillService
 	// Assistant drives the AI assistant and its connected MCP servers.
 	Assistant *AssistantService
+	// AgentTools is the AI tool registry over plain HTTP, for function-calling
+	// agents that do not speak MCP.
+	AgentTools *AgentToolService
 
 	// Webhooks manages webhook endpoints and their delivery log.
 	Webhooks *WebhookService
@@ -123,6 +132,14 @@ type Client struct {
 	Organization *OrganizationService
 	// Billing manages the subscription, AI credits and referrals.
 	Billing *BillingService
+	// WebsiteTracking configures the website tracking snippet (session-only).
+	WebsiteTracking *WebsiteTrackingService
+	// PoolLink manages self-hosted instances linked to this workspace's warmup
+	// pool (session-only).
+	PoolLink *PoolLinkService
+	// CloudLink is a self-hosted instance's side of the warmup pool link
+	// (session-only).
+	CloudLink *CloudLinkService
 }
 
 // service is embedded (by conversion) into every resource service so they all
@@ -166,6 +183,9 @@ func New(opts ...Option) (*Client, error) {
 	c.Emails = (*EmailService)(&c.common)
 	c.Campaigns = (*CampaignService)(&c.common)
 	c.Contacts = (*ContactService)(&c.common)
+	c.Segments = (*SegmentService)(&c.common)
+	c.Suppressions = (*SuppressionService)(&c.common)
+	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
 	c.Templates = (*TemplateService)(&c.common)
 	c.Analytics = (*AnalyticsService)(&c.common)
@@ -182,6 +202,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Generation = (*GenerationService)(&c.common)
 	c.Skills = (*SkillService)(&c.common)
 	c.Assistant = (*AssistantService)(&c.common)
+	c.AgentTools = (*AgentToolService)(&c.common)
 
 	c.Webhooks = (*WebhookService)(&c.common)
 	c.APIKeys = (*APIKeyService)(&c.common)
@@ -202,6 +223,9 @@ func New(opts ...Option) (*Client, error) {
 	c.Auth = (*AuthService)(&c.common)
 	c.Organization = (*OrganizationService)(&c.common)
 	c.Billing = (*BillingService)(&c.common)
+	c.WebsiteTracking = (*WebsiteTrackingService)(&c.common)
+	c.PoolLink = (*PoolLinkService)(&c.common)
+	c.CloudLink = (*CloudLinkService)(&c.common)
 
 	return c, nil
 }

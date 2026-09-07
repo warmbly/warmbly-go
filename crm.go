@@ -133,6 +133,31 @@ type DealUpdateParams struct {
 	AssignedTo        *string    `json:"assigned_to,omitempty"`
 }
 
+// DealListParams filters and paginates the plain deal list. Every filter is
+// optional and matches a single value; use [DealSearchParams] with
+// [CRMService.SearchDeals] when you need several values per facet, a value
+// range or an exact total.
+type DealListParams struct {
+	ListOptions
+	// PipelineID and StageID narrow to one pipeline or one of its columns.
+	PipelineID string
+	StageID    string
+	// Status is [DealStatusOpen], [DealStatusWon] or [DealStatusLost].
+	Status string
+}
+
+func (p *DealListParams) values() url.Values {
+	q := make(url.Values)
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	setNonEmpty(q, "pipeline_id", p.PipelineID)
+	setNonEmpty(q, "stage_id", p.StageID)
+	setNonEmpty(q, "status", p.Status)
+	return q
+}
+
 // DealSearchParams is the faceted filter shared by [CRMService.SearchDeals] and
 // [CRMService.DealsSummary]. Every facet is optional; an empty body matches
 // every deal in the organization. Slice facets match any of their values.
@@ -280,6 +305,34 @@ type CRMTaskUpdateParams struct {
 	Status         *string    `json:"status,omitempty"`
 }
 
+// CRMTaskListParams filters and paginates the plain task list. Every filter is
+// optional and matches a single value; use [TaskSearchParams] with
+// [CRMService.SearchTasks] when you need several values per facet, due-date
+// bounds or an exact total.
+type CRMTaskListParams struct {
+	ListOptions
+	// ContactID and DealID narrow to the tasks hanging off one record.
+	ContactID string
+	DealID    string
+	// AssignedTo is an assignee user id.
+	AssignedTo string
+	// Status is one of the TaskStatus* constants.
+	Status string
+}
+
+func (p *CRMTaskListParams) values() url.Values {
+	q := make(url.Values)
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	setNonEmpty(q, "contact_id", p.ContactID)
+	setNonEmpty(q, "deal_id", p.DealID)
+	setNonEmpty(q, "assigned_to", p.AssignedTo)
+	setNonEmpty(q, "status", p.Status)
+	return q
+}
+
 // TaskSearchParams is the faceted filter shared by [CRMService.SearchTasks] and
 // [CRMService.TasksSummary]. Every facet is optional; slice facets match any of
 // their values.
@@ -367,14 +420,15 @@ func (s *CRMService) DeleteStage(ctx context.Context, pipelineID, stageID string
 
 // --- deals ---
 
-// ListDeals returns a page of deals.
-func (s *CRMService) ListDeals(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[Deal], error) {
-	q := make(url.Values)
-	params.apply(q)
-	return listJSON[Deal](ctx, s.client, "crm/deals", q, opts...)
+// ListDeals returns a page of deals, optionally narrowed to one pipeline,
+// stage or status. Rows carry their joined contact and stage.
+func (s *CRMService) ListDeals(ctx context.Context, params *DealListParams, opts ...RequestOption) (*Page[Deal], error) {
+	return listJSON[Deal](ctx, s.client, "crm/deals", params.values(), opts...)
 }
 
-// SearchDeals returns a page of deals matching a faceted filter.
+// SearchDeals returns a page of deals matching a faceted filter. Its page
+// limit is capped at 200, twice what [CRMService.ListDeals] allows, and
+// [Pagination.Total] is an exact count over the whole matching set.
 func (s *CRMService) SearchDeals(ctx context.Context, params *DealSearchParams, opts ...RequestOption) (*Page[Deal], error) {
 	if params == nil {
 		params = &DealSearchParams{}
@@ -434,14 +488,15 @@ func (s *CRMService) DeleteTaskType(ctx context.Context, id string, opts ...Requ
 
 // --- tasks ---
 
-// ListTasks returns a page of CRM tasks.
-func (s *CRMService) ListTasks(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[CRMTask], error) {
-	q := make(url.Values)
-	params.apply(q)
-	return listJSON[CRMTask](ctx, s.client, "crm/tasks", q, opts...)
+// ListTasks returns a page of CRM tasks, optionally narrowed to one contact,
+// deal, assignee or status.
+func (s *CRMService) ListTasks(ctx context.Context, params *CRMTaskListParams, opts ...RequestOption) (*Page[CRMTask], error) {
+	return listJSON[CRMTask](ctx, s.client, "crm/tasks", params.values(), opts...)
 }
 
-// SearchTasks returns a page of tasks matching a faceted filter.
+// SearchTasks returns a page of tasks matching a faceted filter. Its page
+// limit is capped at 200, twice what [CRMService.ListTasks] allows, and
+// [Pagination.Total] is an exact count over the whole matching set.
 func (s *CRMService) SearchTasks(ctx context.Context, params *TaskSearchParams, opts ...RequestOption) (*Page[CRMTask], error) {
 	if params == nil {
 		params = &TaskSearchParams{}

@@ -76,6 +76,10 @@ type Plan struct {
 
 	// MonthlyCredits is the AI credit grant included each month.
 	MonthlyCredits int `json:"monthly_credits"`
+	// ReferralRewardPercent is the share of this plan's month-equivalent
+	// price a referrer earns when an invitee converts to it; 100 is a full
+	// month.
+	ReferralRewardPercent int `json:"referral_reward_percent"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
@@ -95,7 +99,8 @@ func (s *MetaService) Identity(ctx context.Context, opts ...RequestOption) (*Ide
 	return fetch[Identity](ctx, s.client, "me", opts)
 }
 
-// Plans returns the plan catalog.
+// Plans returns the public plan catalog. On a deployment without a billing
+// provider ([AuthConfig.BillingEnabled] false) the route is absent.
 func (s *MetaService) Plans(ctx context.Context, opts ...RequestOption) ([]Plan, *Response, error) {
 	var out struct {
 		Plans []Plan `json:"plans"`

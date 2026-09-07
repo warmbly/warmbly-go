@@ -23,6 +23,19 @@
 // [Client.Open] blocks until the workspace channel is joined, then returns.
 // Reconnection, heartbeats and resumption run in the background from there.
 //
+// # Topics
+//
+// The workspace channel carries the org-scoped stream. Several families are
+// only ever delivered on a member's personal channel — the task lifecycle,
+// meetings, notifications and bulk-operation progress — so join it alongside:
+//
+//	client := gateway.New(apiKey, orgID,
+//		gateway.WithTopics(gateway.UserTopic(userID)))
+//
+// [Event.Topic] tells a handler which channel an event arrived on. An extra
+// topic that is refused raises [EventJoinFailed] and leaves the rest of the
+// session running; a workspace channel that is refused ends it.
+//
 // # Delivery guarantees
 //
 // Every event carries a monotonic per-workspace sequence number. The client

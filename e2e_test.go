@@ -247,6 +247,53 @@ func TestE2E(t *testing.T) {
 			}
 			return fmt.Sprintf("%d timezones", len(tz)), nil
 		}},
+		{"Segments.List", func() (string, error) {
+			segs, _, err := c.Segments.List(ctx)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d segments", len(segs)), nil
+		}},
+		{"Segments.Fields", func() (string, error) {
+			fields, _, err := c.Segments.Fields(ctx)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d filterable fields", len(fields)), nil
+		}},
+		{"Suppressions.List", func() (string, error) {
+			p, err := c.Suppressions.List(ctx, &warmbly.SuppressionListParams{
+				ListOptions: warmbly.ListOptions{Limit: 10},
+			})
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d suppressed recipients (has_more=%v)", len(p.Data), p.HasMore()), nil
+		}},
+		{"Forms.List", func() (string, error) {
+			forms, _, err := c.Forms.List(ctx)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d forms", len(forms)), nil
+		}},
+		{"AgentTools.List", func() (string, error) {
+			tools, _, err := c.AgentTools.List(ctx)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d agent tools", len(tools)), nil
+		}},
+		{"Emails.Allowance", func() (string, error) {
+			a, _, err := c.Emails.Allowance(ctx)
+			if err != nil {
+				return "", err
+			}
+			if a.Unlimited() {
+				return fmt.Sprintf("%d used, unlimited (%s)", a.Used, a.Basis), nil
+			}
+			return fmt.Sprintf("%d of %d used (%s)", a.Used, *a.Allowance, a.Basis), nil
+		}},
 	}
 
 	for _, r := range reads {

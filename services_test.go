@@ -295,6 +295,19 @@ func TestServiceRouting(t *testing.T) {
 		{"billing.Credits", func() error { _, _, e := c.Billing.Credits(ctx); return e }, "GET", "/v1/subscription/credits"},
 		{"billing.CreditUsage", func() error { _, _, e := c.Billing.CreditUsage(ctx, 30); return e }, "GET", "/v1/subscription/credits/usage"},
 		{"billing.Referral", func() error { _, _, e := c.Billing.Referral(ctx); return e }, "GET", "/v1/subscription/referral"},
+
+		// Audiences, the do-not-contact list and hosted forms.
+		{"segments.List", func() error { _, _, e := c.Segments.List(ctx); return e }, "GET", "/v1/segments"},
+		{"suppressions.List", func() error { _, e := c.Suppressions.List(ctx, nil); return e }, "GET", "/v1/suppressions"},
+		{"forms.List", func() error { _, _, e := c.Forms.List(ctx); return e }, "GET", "/v1/forms"},
+
+		// The AI tool registry over plain HTTP.
+		{"agentTools.List", func() error { _, _, e := c.AgentTools.List(ctx); return e }, "GET", "/v1/ai/tools"},
+
+		// Session-only workspace surfaces.
+		{"websiteTracking.Settings", func() error { _, _, e := c.WebsiteTracking.Settings(ctx); return e }, "GET", "/v1/website-tracking/settings"},
+		{"poolLink.ListInstances", func() error { _, _, e := c.PoolLink.ListInstances(ctx); return e }, "GET", "/v1/pool-link/instances"},
+		{"cloudLink.Status", func() error { _, _, e := c.CloudLink.Status(ctx); return e }, "GET", "/v1/cloud-link"},
 	}
 
 	for _, tc := range cases {
