@@ -71,6 +71,15 @@
 // ([ErrNotFound], [ErrRateLimited] and the rest) rather than comparing status
 // codes by hand.
 //
+// A sentinel matches on the status alone, which several distinct refusals
+// share. When the remedy differs, branch on the stable code instead, using the
+// ErrCode constants and [Error.HasCode]:
+//
+//	var apiErr *warmbly.Error
+//	if errors.As(err, &apiErr) && apiErr.HasCode(warmbly.ErrCodeStorageLimitReached) {
+//		// Free some attachment storage; retrying will not help.
+//	}
+//
 // # Reaching something new
 //
 // The API ships faster than this SDK. [Client.Do] issues a request against any

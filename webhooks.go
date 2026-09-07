@@ -154,14 +154,18 @@ type WebhookEventName = string
 // Webhook event keys.
 const (
 	// Mailbox lifecycle and health.
-	EventEmailAccountConnected     WebhookEventName = "email_account.connected"
-	EventEmailAccountRemoved       WebhookEventName = "email_account.removed"
-	EventEmailAccountDisconnected  WebhookEventName = "email_account.disconnected"
-	EventEmailAccountError         WebhookEventName = "email_account.error"
+	EventEmailAccountConnected    WebhookEventName = "email_account.connected"
+	EventEmailAccountRemoved      WebhookEventName = "email_account.removed"
+	EventEmailAccountDisconnected WebhookEventName = "email_account.disconnected"
+	EventEmailAccountError        WebhookEventName = "email_account.error"
+	// EventEmailAccountSynced is a firehose event: one per completed sync
+	// pass, so subscribe to it explicitly or not at all.
 	EventEmailAccountSynced        WebhookEventName = "email_account.synced"
 	EventEmailAccountHealthChanged WebhookEventName = "email_account.health_changed"
 
-	// Campaign send pipeline.
+	// Campaign send pipeline. Everything up to and including the click is a
+	// firehose event: one per message, excluded from the "all events" wildcard
+	// and delivered only to an endpoint that lists it explicitly.
 	EventCampaignEmailSent      WebhookEventName = "campaign.email_sent"
 	EventCampaignEmailDelivered WebhookEventName = "campaign.email_delivered"
 	EventCampaignEmailOpened    WebhookEventName = "campaign.email_opened"
@@ -184,7 +188,8 @@ const (
 	// EventCampaignAction fires from a notify action node in a sequence.
 	EventCampaignAction WebhookEventName = "campaign.action"
 
-	// Warmup.
+	// Warmup. EventWarmupEmailSent is a firehose event: one per warmup
+	// message, which is the highest-volume family the platform emits.
 	EventWarmupEmailSent       WebhookEventName = "warmup.email_sent"
 	EventWarmupHealthChanged   WebhookEventName = "warmup.health_changed"
 	EventWarmupPlacementInSpam WebhookEventName = "warmup.placement_in_spam"
@@ -207,9 +212,19 @@ const (
 	EventInboxReplyReceived WebhookEventName = "inbox.reply_received"
 
 	// Contacts.
+	//
+	// EventContactCreated carries a payload of its own
+	// ([ContactCreatedPayload]) rather than the generic audit shape the other
+	// two use, and it is deliberately quiet: see the payload's documentation
+	// for when it does not fire.
 	EventContactCreated WebhookEventName = "contact.created"
 	EventContactUpdated WebhookEventName = "contact.updated"
 	EventContactDeleted WebhookEventName = "contact.deleted"
+
+	// EventFormSubmitted fires when a hosted form receives a submission. It is
+	// categorized under Contact, not a form category of its own, because lead
+	// capture is what it is for. Payload: [FormSubmittedPayload].
+	EventFormSubmitted WebhookEventName = "form.submitted"
 
 	// Bulk import and export.
 	EventBulkOperationStarted   WebhookEventName = "bulk_operation.started"
@@ -319,6 +334,104 @@ type WebhookEvent struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// Into decodes the event's [WebhookEvent.Data] into v, which should be a
+// pointer to the payload type for [WebhookEvent.EventType]. Most events carry
+// the ids of what changed rather than the resource itself: refetch it over the
+// REST API when you need its current state.
+func (e *WebhookEvent) Into(v any) error {
+	if len(e.Data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(e.Data, v)
+}
+
+// ContactCreatedPayload is the [EventContactCreated] body: the contact's own
+// fields plus where it came from, flat, so an automation template can read
+// {{.contact_email}} without digging into a nested object.
+//
+// It does not fire for every row that lands in the workspace. A write that
+// matched an existing contact is an update, not a creation, and stays silent;
+// so does a bulk arrival — a file import or a sheet sync — and so does any
+// single write of more than 100 contacts, on the grounds that one upload should
+// not flood an endpoint with thousands of deliveries. Reconcile bulk arrivals
+// from the bulk_operation events or a list refetch instead.
+type ContactCreatedPayload struct {
+	ContactID string `json:"contact_id"`
+	// ContactEmail is the address, named for the template variable rather than
+	// the column.
+	ContactEmail string `json:"contact_email"`
+	FirstName    string `json:"first_name,omitempty"`
+	LastName     string `json:"last_name,omitempty"`
+	Company      string `json:"company,omitempty"`
+	Phone        string `json:"phone,omitempty"`
+	// Subscribed is the marketing-consent flag. A new contact defaults to
+	// true unless the creating call said otherwise.
+	Subscribed bool `json:"subscribed"`
+	// CustomFields is the contact's custom column values, empty rather than
+	// null when it has none.
+	CustomFields map[string]string `json:"custom_fields,omitempty"`
+	// Source is the first-touch origin, one of the ContactSource* constants,
+	// and SourceDetail names the specific origin: the file name for an import,
+	// the API key's name for an API write, the form for a submission.
+	Source       string `json:"source"`
+	SourceDetail string `json:"source_detail,omitempty"`
+	// CampaignIDs and CategoryIDs are the campaigns and lists the contact was
+	// created into, when it was created into any.
+	CampaignIDs []string  `json:"campaign_ids,omitempty"`
+	CategoryIDs []string  `json:"category_ids,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// FormSubmittedPayload is the [EventFormSubmitted] body.
+//
+// Unlike the realtime gateway's form event, which carries ids only, the webhook
+// carries the answers: the delivery is already authenticated to one endpoint by
+// its signature, so there is no permission left to enforce at read time.
+type FormSubmittedPayload struct {
+	FormID   string `json:"form_id"`
+	FormName string `json:"form_name"`
+	// SubmissionID is the stored submission, which the forms REST endpoint
+	// serves verbatim.
+	SubmissionID string `json:"submission_id"`
+	// Data is the answers keyed by field id. Values keep the type the field
+	// collected, so a multi-select arrives as a list and a number as a number.
+	Data map[string]any `json:"data"`
+	// SourceURL is the page the form was submitted from, when the embed
+	// reported one.
+	SourceURL string `json:"source_url,omitempty"`
+
+	// ContactID is set when the submission carried a usable email and so
+	// created or matched a contact. The mapped contact columns ride alongside
+	// it, flat, so an automation reads {{.contact_email}} without walking
+	// Data.
+	ContactID    string `json:"contact_id,omitempty"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	FirstName    string `json:"first_name,omitempty"`
+	LastName     string `json:"last_name,omitempty"`
+	Company      string `json:"company,omitempty"`
+	Phone        string `json:"phone,omitempty"`
+	// CampaignID is the campaign the form enrolls submitters into, when it
+	// does.
+	CampaignID string `json:"campaign_id,omitempty"`
+}
+
+// WebhookChallengePayload is the [EventEndpointTest] body, delivered only to
+// the endpoint being verified. Echo [WebhookChallengePayload.Challenge] back —
+// in your response body, or in the [WebhookChallengeHeader] — to confirm the
+// endpoint and start receiving real events.
+//
+// Take the token from here, after verifying the signature, rather than from the
+// request header: the header is an unsigned convenience copy.
+type WebhookChallengePayload struct {
+	Challenge string `json:"challenge"`
+	// EndpointID identifies which of your endpoints is being verified, for a
+	// handler serving several.
+	EndpointID string `json:"endpoint_id"`
+	// Message is human-readable instructions, for someone reading the delivery
+	// in a log.
+	Message string `json:"message,omitempty"`
+}
+
 // WebhookCreateParams registers a webhook endpoint.
 type WebhookCreateParams struct {
 	// URL is the HTTPS endpoint that will receive deliveries. Private and
@@ -408,9 +521,13 @@ func (s *WebhookService) RotateSecret(ctx context.Context, id string, opts ...Re
 }
 
 // Verify sends an ownership challenge to the endpoint. The challenge arrives as
-// a signed [EventEndpointTest] delivery; echo the token from its verified
-// payload back — in the [WebhookChallengeHeader] of your response, or in the
-// body — to confirm the endpoint and start receiving events.
+// a signed [EventEndpointTest] delivery carrying a [WebhookChallengePayload];
+// echo the token from its verified payload back — in the
+// [WebhookChallengeHeader] of your response, or in the body — to confirm the
+// endpoint and start receiving events.
+//
+// It returns as soon as the challenge is queued, not once it lands: the
+// endpoint's OwnershipConfirmed flag is what says it worked.
 func (s *WebhookService) Verify(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.post(ctx, "webhooks/"+url.PathEscape(id)+"/verify", nil, nil, opts...)
 }

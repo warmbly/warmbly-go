@@ -60,15 +60,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Pinned rather than "stable" on purpose. golangci-lint type-checks
+      # imported packages from source with the go/types it was built against,
+      # so it cannot read a standard library newer than its own toolchain: on
+      # Go 1.27 it dies with "file requires newer Go version go1.27
+      # (application built with go1.26)" before running a single linter. Every
+      # released v2 is built with Go 1.26 or older, so this tracks whatever the
+      # pinned golangci-lint below can actually parse. Raise both together.
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version: "1.26"
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.12.2
+          version: v2.13.2
 
   gofmt:
     name: gofmt

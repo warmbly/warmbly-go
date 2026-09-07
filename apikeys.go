@@ -25,7 +25,8 @@ const (
 	PermReadEmails uint64 = 1 << iota
 	// PermReadCampaigns grants reading campaigns and their steps.
 	PermReadCampaigns
-	// PermReadContacts grants reading contacts, notes and activities.
+	// PermReadContacts grants reading contacts, segments, notes and
+	// activities.
 	PermReadContacts
 	// PermReadUnibox grants reading the unified inbox.
 	PermReadUnibox
@@ -36,8 +37,8 @@ const (
 	PermWriteEmails
 	// PermWriteCampaigns grants creating and editing campaigns and steps.
 	PermWriteCampaigns
-	// PermWriteContacts grants creating and editing contacts, notes and
-	// activities.
+	// PermWriteContacts grants creating and editing contacts, segments, notes
+	// and activities.
 	PermWriteContacts
 	// PermWriteUnibox grants marking messages seen and sending replies.
 	PermWriteUnibox
@@ -127,7 +128,8 @@ type APIKey struct {
 	// AllowedEmailAccounts restricts the key to specific mailbox ids. Empty
 	// means every mailbox in the organization.
 	AllowedEmailAccounts []string `json:"allowed_email_accounts,omitempty"`
-	// RateLimitPerMinute is the per-key request ceiling.
+	// RateLimitPerMinute is the per-key request ceiling, enforced as a
+	// sliding window. Zero means the server default (60).
 	RateLimitPerMinute int `json:"rate_limit_per_minute"`
 	// Status is [APIKeyStatusActive], [APIKeyStatusRevoked] or
 	// [APIKeyStatusExpired].
@@ -161,20 +163,48 @@ type APIKeyWithSecret struct {
 	Secret string `json:"secret"`
 }
 
-// APIKeyCreateParams provisions an API key. Name and Permissions are required.
+// APIKeyCreateParams provisions an API key. Name (at most 255 characters) and
+// Permissions are required.
 type APIKeyCreateParams struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// Permissions is the scope bitmask, for example
-	// [PermReadOnly] or PermReadCampaigns|PermSendCampaigns.
-	Permissions          uint64     `json:"permissions"`
-	AllowedIPs           []string   `json:"allowed_ips,omitempty"`
-	AllowedEmailAccounts []string   `json:"allowed_email_accounts,omitempty"`
-	RateLimitPerMinute   int        `json:"rate_limit_per_minute,omitempty"`
-	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	// [PermReadOnly] or PermReadCampaigns|PermSendCampaigns. It must name at
+	// least one scope, and only scopes the server knows: a mask carrying an
+	// unrecognized bit is refused rather than silently narrowed, so a stale
+	// client cannot grant a scope it does not understand.
+	Permissions uint64 `json:"permissions"`
+	// AllowedIPs restricts the key to these IPs or CIDR ranges (at most
+	// [MaxAllowedIPs]); AllowedEmailAccounts to these mailbox ids (at most
+	// [MaxAllowedEmailAccounts]). Empty means no restriction.
+	AllowedIPs           []string `json:"allowed_ips,omitempty"`
+	AllowedEmailAccounts []string `json:"allowed_email_accounts,omitempty"`
+	// RateLimitPerMinute caps requests per minute for this key, between
+	// [MinRateLimitPerMinute] and [MaxRateLimitPerMinute]; zero keeps the
+	// server default of [DefaultRateLimitPerMinute].
+	RateLimitPerMinute int        `json:"rate_limit_per_minute,omitempty"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
 }
 
-// APIKeyUpdateParams updates an API key. Nil fields are left unchanged.
+// Bounds the server enforces on [APIKeyCreateParams] and
+// [APIKeyUpdateParams].
+const (
+	// MinRateLimitPerMinute and MaxRateLimitPerMinute bound an explicit
+	// per-key request ceiling; DefaultRateLimitPerMinute is what a key gets
+	// when it names none.
+	MinRateLimitPerMinute     = 1
+	MaxRateLimitPerMinute     = 10000
+	DefaultRateLimitPerMinute = 60
+	// MaxAllowedIPs is the most entries an IP allow-list may hold, and
+	// MaxAllowedEmailAccounts the most mailboxes a key may be pinned to.
+	MaxAllowedIPs           = 64
+	MaxAllowedEmailAccounts = 128
+)
+
+// APIKeyUpdateParams updates an API key. Nil fields are left unchanged; an
+// empty (non-nil) AllowedIPs or AllowedEmailAccounts clears the restriction.
+// Permissions is validated the same way as on create: non-zero, and only
+// scopes the server knows.
 type APIKeyUpdateParams struct {
 	Name                 *string   `json:"name,omitempty"`
 	Description          *string   `json:"description,omitempty"`
@@ -230,10 +260,14 @@ const (
 
 // APIKeyAnalyticsParams selects the window and granularity of a usage report.
 type APIKeyAnalyticsParams struct {
-	// From defaults to 24 hours before To; To defaults to now.
+	// From defaults to 24 hours before To; To defaults to now. The window may
+	// not exceed 90 days.
 	From time.Time
 	To   time.Time
-	// Interval is [IntervalMinute], [IntervalHour] or [IntervalDay].
+	// Interval is [IntervalMinute], [IntervalHour] or [IntervalDay]. Leave it
+	// empty to let the server pick from the window's span: minutes up to two
+	// hours, hours up to a week, days beyond that. The interval it settled on
+	// comes back in [APIKeyAnalytics.Interval].
 	Interval string
 }
 
@@ -327,6 +361,18 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
 }
 
+// RevokeSelf revokes the key this client is authenticated with. It is the one
+// key route that needs no scope: a credential must always be able to end
+// itself, which is what a CLI logout promises. The reason is stored on the key
+// and may be empty (the server records that the key revoked itself). A session
+// caller gets a 400 — there is no key in that request to end; use
+// [AuthService.Logout]. Every request after this one fails with 401.
+func (s *APIKeyService) RevokeSelf(ctx context.Context, reason string, opts ...RequestOption) (*Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "reason", reason)
+	return s.client.delete(ctx, withQuery("api-keys/self", q), opts...)
+}
+
 // Permissions lists every scope bit the API exposes, together with the preset
 // masks.
 func (s *APIKeyService) Permissions(ctx context.Context, opts ...RequestOption) (*PermissionCatalog, *Response, error) {
@@ -349,7 +395,8 @@ func (s *APIKeyService) Analytics(ctx context.Context, id string, params *APIKey
 	return fetch[APIKeyAnalytics](ctx, s.client, withQuery("api-keys/"+url.PathEscape(id)+"/analytics", params.values()), opts)
 }
 
-// Logs returns a page of individual requests made with a key.
+// Logs returns a page of individual requests made with a key, most recent
+// first. The server caps [ListOptions.Limit] at 200 and defaults to 50.
 func (s *APIKeyService) Logs(ctx context.Context, id string, params *ListOptions, opts ...RequestOption) (*Page[APIKeyUsageLog], error) {
 	q := make(url.Values)
 	params.apply(q)

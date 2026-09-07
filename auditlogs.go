@@ -11,16 +11,53 @@ import (
 // never read another's.
 type AuditLogService service
 
-// Common values for [AuditLog.Action].
+// Values for [AuditLog.Action]. The trail is append-only and the vocabulary
+// grows, so treat an action you do not recognize as informational rather than
+// failing on it.
 const (
-	AuditActionCreate = "create"
-	AuditActionUpdate = "update"
-	AuditActionDelete = "delete"
-	AuditActionSend   = "send"
-	AuditActionRevoke = "revoke"
+	AuditActionCreate    = "create"
+	AuditActionUpdate    = "update"
+	AuditActionDelete    = "delete"
+	AuditActionDuplicate = "duplicate"
+	AuditActionSend      = "send"
+
+	// Lifecycle actions on a campaign or a mailbox's warmup.
+	AuditActionStart  = "start"
+	AuditActionStop   = "stop"
+	AuditActionPause  = "pause"
+	AuditActionResume = "resume"
+
+	// Credentials and connections.
+	AuditActionRevoke     = "revoke"
+	AuditActionRotate     = "rotate"
+	AuditActionRotateKeys = "rotate_keys"
+	AuditActionConnect    = "connect"
+	AuditActionDisconnect = "disconnect"
+	AuditActionTest       = "test"
+
+	// Membership and ownership.
+	AuditActionInvite   = "invite"
+	AuditActionRemove   = "remove"
+	AuditActionAssign   = "assign"
+	AuditActionTransfer = "transfer"
+
+	// Bulk movement of data in and out of the workspace.
+	AuditActionExport = "export"
+	AuditActionImport = "import"
+
+	// AuditActionAPICall records a call made with an API key, when the key is
+	// configured to log its requests.
+	AuditActionAPICall = "api_call"
+	// AuditActionApply records an advisor recommendation being applied.
+	AuditActionApply = "apply"
 )
 
-// Common values for [AuditLog.EntityType].
+// Values for [AuditLog.EntityType]. As with actions, the vocabulary grows;
+// branch on the ones you care about and pass the rest through.
+//
+// The platform's own entities (workers, releases, instance settings) are
+// audited too, but on the operator's trail rather than any organization's, so
+// they never appear here.
 const (
 	AuditEntityCampaign     = "campaign"
 	AuditEntityContact      = "contact"
@@ -28,8 +65,69 @@ const (
 	AuditEntityAPIKey       = "api_key"
 	AuditEntityWebhook      = "webhook"
 	AuditEntityTemplate     = "template"
-	AuditEntitySequence     = "sequence"
+	// AuditEntitySequence is a step within a campaign's sequence. The wire
+	// value is "step".
+	AuditEntitySequence     = "step"
 	AuditEntityOrganization = "organization"
+	AuditEntityUser         = "user"
+
+	// Audiences and the do-not-contact list.
+	AuditEntitySegment     = "segment"
+	AuditEntityForm        = "form"
+	AuditEntitySuppression = "suppression"
+
+	// Labels.
+	AuditEntityFolder   = "folder"
+	AuditEntityTag      = "tag"
+	AuditEntityCategory = "category"
+
+	// Team and access.
+	AuditEntityOrganizationMember = "organization_member"
+	AuditEntityInvitation         = "invitation"
+	AuditEntityRole               = "role"
+	AuditEntityTeam               = "team"
+
+	// CRM.
+	AuditEntityCRMPipeline = "crm_pipeline"
+	AuditEntityCRMStage    = "crm_stage"
+	AuditEntityCRMDeal     = "crm_deal"
+	AuditEntityCRMTask     = "crm_task"
+	AuditEntityCRMNote     = "crm_note"
+
+	// Connections and flows.
+	AuditEntityIntegration    = "integration"
+	AuditEntityAutomation     = "automation"
+	AuditEntityLeadSyncSource = "lead_sync_source"
+	AuditEntityMeeting        = "meeting"
+	AuditEntityUnibox         = "unibox"
+
+	// Warmup and sending posture.
+	AuditEntityWarmupRoutingRule = "warmup_routing_rule"
+	// AuditEntityOrgRisk is a change in the workspace's sending posture.
+	AuditEntityOrgRisk = "org_risk"
+
+	// AI.
+	AuditEntityAISession      = "ai_session"
+	AuditEntityAISkill        = "ai_skill"
+	AuditEntityMCPServer      = "mcp_server"
+	AuditEntityAdvisorFinding = "advisor_finding"
+
+	// Billing.
+	AuditEntitySubscription   = "subscription"
+	AuditEntityReferral       = "referral"
+	AuditEntityReferralCredit = "referral_credit"
+	AuditEntityCreditPurchase = "credit_purchase"
+	AuditEntityCreditGrant    = "credit_grant"
+
+	// Workspace settings and the archives used to move a workspace between
+	// instances.
+	AuditEntitySettings   = "settings"
+	AuditEntityOrgArchive = "org_archive"
+
+	// The self-hosted warmup pool link, from the cloud side
+	// ([AuditEntityPoolLink]) and the instance side ([AuditEntityCloudLink]).
+	AuditEntityPoolLink  = "pool_link"
+	AuditEntityCloudLink = "cloud_link"
 )
 
 // AuditActor is the member who performed an audited action.

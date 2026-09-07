@@ -3,6 +3,110 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [0.3.0] - 2026-09-07
+
+Reconciled the SDK with the current v1 API, covering the 484 server commits
+since the 0.2.0 sync. Whole resources landed on the server in that window and
+several existing shapes moved underneath the SDK. This release also fixes a
+handful of methods that could never have worked.
+
+Breaking changes are made directly rather than deprecated, as there is still no
+public release. Expect to touch call sites.
+
+### Added
+
+- New services for resources the API grew: `client.Segments` (saved contact
+  audiences, evaluated live, with per-contact overrides), `client.Suppressions`
+  (the workspace do-not-contact list), `client.Forms` (hosted lead-capture
+  forms, their submissions, assets and custom domain), `client.AgentTools` (the
+  AI tool registry over plain HTTP, for function-calling agents that do not
+  speak MCP), `client.WebsiteTracking`, and `client.PoolLink` /
+  `client.CloudLink` for the self-hosted warmup pool link.
+- Mailboxes: `Allowance` reports how many mailboxes a workspace may hold and
+  why; `Hold` and `Release` take a mailbox in and out of campaign rotation;
+  `SyncStatus` exposes the backfill and fair-use throttle state; `Behavior`,
+  `UpdateBehavior` and `BehaviorPlan` drive humanlike sending; `RefreshAuthCheck`
+  records a domain verdict rather than only reading one; `GetTrackingDomain` and
+  `VerifyTrackingDomain` complete the custom tracking domain flow; bulk
+  SMTP/IMAP connect and the two reconnect routes.
+- Campaigns: `Estimate` projects recipients, capacity and finish date before a
+  launch; `Duplicate`; `Forms`; `ListSegments` and `SetSegments`;
+  `StartWithOptions` carries the acknowledgement that clears a list-risk
+  refusal.
+- Contacts: address verification (`VerificationOverview`, `RequestVerification`),
+  `CampaignStates`, `Segments`, and a cursor-paginated `ListTimeline`.
+- Sign-in: the browser single-sign-on start and exchange, the first-run claim,
+  deployment capabilities via `AuthConfig`, instance version reporting, and the
+  full CLI device-code flow with a `WaitForCLIAuth` helper.
+- `APIKeys.RevokeSelf`, so a credential can always end itself.
+- Workspace archives: export and import, with the download streaming to an
+  `io.Writer`, plus the workspace risk posture.
+- `Error.HasCode` and the `ErrCode*` constants, so a caller can branch on the
+  specific refusal rather than on a status several refusals share.
+- Gateway: typed `JoinError` with the server's code and reason slug, a
+  `Permanent` method separating retryable refusals from final ones, automatic
+  retry of a rate-limited join on the same socket, topic builders and
+  `WithTopics`, a heartbeat watchdog, and the `CAMPAIGN_IDLE`,
+  `ACCOUNT_SYNC_STATE`, `PAGE_HIT` and `FORM_SUBMISSION_CREATED` events.
+- Webhooks: the `form.submitted` event, the richer dedicated `contact.created`
+  payload, the `webhook.test` challenge payload, and `WebhookEvent.Into`.
+
+### Fixed
+
+- **`gateway.IntentAI` was `"AI"`**, which is a substring of `EMAIL` and
+  `CAMPAIGN`. Intent matching is a substring test, so anyone filtering for AI
+  events received nearly the entire stream. It is now `"AI_"`.
+- **Gateway join-refusal codes were mapped wrongly.** 4003 and 4005 both
+  resolved to `ErrForbidden`, and 4001, which the server never sends, was
+  mapped at all. Corrected against the gateway's own `error_code/1`.
+- **A client could get permanently stuck after a failed resume.** The
+  `resume_failed` path left the sequence at the evicted position, so every
+  later resume failed too. It now advances to the server's current sequence.
+- **`Meetings.Create` decoded nothing.** The endpoint answers a wrapped
+  envelope, so every field of the returned meeting was silently zero.
+- **`Billing.Cancel` was unusable.** The endpoint binds a JSON body and the SDK
+  sent none, so every call was refused with a 400.
+- **Avatar uploads were wrong twice over.** Both endpoints read a part named
+  `file`, not `avatar`, and answer a bare URL rather than the object.
+- `EnsureReferralCode`, `PreviewInvitation` and `RegisterDeviceToken` each
+  decoded a type the endpoint does not return.
+- `ReferralEarning` carried invented fields; it now matches the wire.
+- `Campaigns.UpdateAdvancedSettings` sent the wrong body key, so it silently
+  changed nothing.
+- The audit catalogue was badly stale: 5 actions and 8 entity types against the
+  server's 30 and 49, with `AuditEntitySequence` carrying the wrong value.
+
+### Changed
+
+- **`Campaigns.Start` and `Campaigns.Stop`** return a `*CampaignStatusChange`.
+  The endpoints answer a status envelope, never a campaign, so the previous
+  `*Campaign` was always zero.
+- **`Campaigns.UpdateAdvancedSettings` and `Outreach.Update`** return only a
+  `*Response`; both endpoints answer 204 with no body.
+- **`Email.LastSyncedAt` is now `*time.Time`.** It is null until the first sync,
+  which previously failed to decode.
+- **`Auth.Login` and `Auth.Register` return an `*AuthStep`.** Whether an emailed
+  code step follows is the deployment's choice and is skipped on a known device,
+  so the flow can finish in one call. Branch on `CodeRequired`.
+- **`CRM.ListDeals` and `CRM.ListTasks`** take their own parameter types,
+  exposing the pipeline, stage, status, contact, deal and assignee filters the
+  server always accepted and the SDK never sent.
+- `Billing.ValidateDiscount`, `PreviewPlanChange` and `AppliedDiscounts` return
+  typed results instead of `map[string]any`.
+- `Auth.UploadAvatar` and `Organization.UploadAvatar` return the avatar URL.
+- Campaigns carry continuous sending (`Continuous`, `IdleSince`), guardrails,
+  UTM tagging, unsubscribe mode and a `kind`; a campaign that runs out of leads
+  now stays active and idle rather than finishing.
+- Contact search and export filter by segment, engagement and verification
+  status; the timeline carries page hits, link clicks with UTM parameters, and
+  the client, device and location an engagement came from.
+- Mailboxes carry `SaveToSent`, and the sending-domain authentication gate is
+  modelled with `AuthFailingSince` and the `AuthState*` constants.
+
+### Removed
+
+- `DeviceToken`, which no route ever returned.
+
 ## [0.2.0] - 2026-08-05
 
 Reconciled the SDK with the current v1 API. The previous release was written

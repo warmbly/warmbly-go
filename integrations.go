@@ -31,6 +31,13 @@ const (
 	ProviderCalendly     = "calendly"
 	ProviderCalCom       = "cal_com"
 	ProviderGoogleSheets = "google_sheets"
+	// ProviderMillionVerifier is a pay-as-you-go address verifier connected
+	// by API key. While it has credits it replaces the built-in check for
+	// every contact you import; when they run out the built-in check takes
+	// over. The key is validated against the provider before it is stored, so
+	// a mistyped key fails [IntegrationService.Connect] rather than silently
+	// leaving every contact on the built-in check.
+	ProviderMillionVerifier = "millionverifier"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -57,7 +64,7 @@ type IntegrationCatalogEntry struct {
 	Name     string `json:"name"`
 	Tagline  string `json:"tagline,omitempty"`
 	// Category groups the provider: "crm", "automation", "notifications",
-	// "meetings" or "data".
+	// "meetings", "data" or "verification".
 	Category string `json:"category,omitempty"`
 	DocsURL  string `json:"docs_url,omitempty"`
 	// AuthMethod is "oauth", "api_key" or "webhook".
@@ -518,12 +525,17 @@ func (p *MeetingListParams) values() url.Values {
 
 // MeetingCreateParams logs a meeting that was booked outside a connected
 // provider. It is matched to a contact by InviteeEmail unless ContactID says
-// otherwise.
+// otherwise. At least one of InviteeName and InviteeEmail is required, as is a
+// parseable ScheduledFor; Title defaults to "Call".
+//
+// A meeting logged this way is recorded with source "manual" and does not fire
+// the "meeting booked" automations a provider booking would, so logging your
+// own call never alerts you about it.
 type MeetingCreateParams struct {
 	Title        string `json:"title,omitempty"`
 	InviteeName  string `json:"invitee_name,omitempty"`
 	InviteeEmail string `json:"invitee_email"`
-	// ScheduledFor is an RFC 3339 timestamp.
+	// ScheduledFor is an RFC 3339 timestamp and is required.
 	ScheduledFor    string `json:"scheduled_for,omitempty"`
 	DurationMinutes int    `json:"duration_minutes,omitempty"`
 	Location        string `json:"location,omitempty"`
@@ -543,7 +555,14 @@ func (s *MeetingService) Summary(ctx context.Context, opts ...RequestOption) (*M
 
 // Create logs a meeting booked outside a connected provider.
 func (s *MeetingService) Create(ctx context.Context, params *MeetingCreateParams, opts ...RequestOption) (*Meeting, *Response, error) {
-	return send[Meeting](ctx, s.client.post, "meetings", params, opts)
+	var out struct {
+		Meeting *Meeting `json:"meeting"`
+	}
+	resp, err := s.client.post(ctx, "meetings", params, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Meeting, resp, nil
 }
 
 // Delete removes a meeting record.

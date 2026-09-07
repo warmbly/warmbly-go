@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -10,9 +11,35 @@ import (
 // UniboxService is the unified inbox: every connected mailbox's mail in one
 // place, plus replying, composing, snoozing, conversation labels, scheduled
 // sends, autosaved drafts and the AI drafting surfaces.
+//
+// List rows are previews: they carry a snippet, never the body. Read a single
+// message with [UniboxService.Get] to receive its plain-text body and a
+// sanitized HTML body.
 type UniboxService service
 
-// UniboxThread is one conversation in the unified inbox list.
+// Canonical mail folders. Every message is filed in exactly one, derived from
+// where the provider placed it at sync time. They are accepted by
+// [UniboxListParams.Folder] and [UniboxService.MarkFolderSeen], and reported in
+// [UniboxMessage.Folder] and [UniboxOverview.Folders].
+const (
+	FolderInbox   = "inbox"
+	FolderSent    = "sent"
+	FolderDrafts  = "drafts"
+	FolderArchive = "archive"
+	FolderSpam    = "spam"
+	FolderTrash   = "trash"
+)
+
+// Message directions accepted by [UniboxListParams.Direction].
+const (
+	// DirectionSent matches messages sent from the workspace's own mailboxes.
+	DirectionSent = "sent"
+	// DirectionReceived matches everything else.
+	DirectionReceived = "received"
+)
+
+// UniboxThread is one conversation in the unified inbox list. It is a preview
+// row: Snippet is the only body text it carries.
 type UniboxThread struct {
 	ID       string   `json:"id"`
 	EmailID  string   `json:"email_id"`
@@ -31,12 +58,21 @@ type UniboxThread struct {
 	Labels []MiniCategory `json:"labels,omitempty"`
 }
 
-// UniboxMessage is a single message inside a thread.
+// UniboxMessage is a single message, as returned by [UniboxService.Get] and by
+// the rows of [UniboxService.Thread].
+//
+// The two endpoints spell the envelope differently on the wire (the single
+// read uses "from", "to" and "date"; thread rows use "from_addr", "to_addr" and
+// "sent_date"). The SDK accepts both and exposes one shape. Bodies are only
+// present on a single read; thread rows carry the snippet.
 type UniboxMessage struct {
 	ID      string `json:"id"`
 	EmailID string `json:"email_id"`
 	// Mailbox is the provider-side folder id.
-	Mailbox   int      `json:"mailbox,omitempty"`
+	Mailbox int `json:"mailbox,omitempty"`
+	// Folder is the canonical folder the message is filed in: one of the
+	// Folder* constants. Empty on mail synced before folder tracking.
+	Folder    string   `json:"folder,omitempty"`
 	ThreadID  string   `json:"thread_id"`
 	MessageID string   `json:"message_id,omitempty"`
 	GmailID   string   `json:"gmail_id,omitempty"`
@@ -58,15 +94,53 @@ type UniboxMessage struct {
 	SentDate     time.Time `json:"sent_date,omitempty"`
 	Snippet      string    `json:"snippet,omitempty"`
 	Seen         bool      `json:"seen"`
-	BodyPlain    string    `json:"body_plain,omitempty"`
-	BodyHTML     string    `json:"body_html,omitempty"`
+
+	// BodyPlain is the plain-text body. BodyHTML is sanitized for display:
+	// scripts, event handlers and unsafe URL schemes are stripped before it
+	// leaves the API.
+	BodyPlain string `json:"body_plain,omitempty"`
+	BodyHTML  string `json:"body_html,omitempty"`
+	// BodyTruncated is true when the stored body could not be read, in which
+	// case BodyPlain holds only the preview snippet. Show a notice rather than
+	// presenting the partial text as the whole message.
+	BodyTruncated bool `json:"body_truncated,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
+// UnmarshalJSON accepts both envelope spellings the API uses for a message; see
+// the type comment.
+func (m *UniboxMessage) UnmarshalJSON(data []byte) error {
+	type plain UniboxMessage
+	var aux struct {
+		plain
+		From    []string   `json:"from"`
+		To      []string   `json:"to"`
+		Date    *time.Time `json:"date"`
+		ReplyTo []string   `json:"ReplyTo"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*m = UniboxMessage(aux.plain)
+	if len(m.FromAddr) == 0 {
+		m.FromAddr = aux.From
+	}
+	if len(m.ToAddr) == 0 {
+		m.ToAddr = aux.To
+	}
+	if len(m.ReplyTo) == 0 {
+		m.ReplyTo = aux.ReplyTo
+	}
+	if m.SentDate.IsZero() && aux.Date != nil {
+		m.SentDate = *aux.Date
+	}
+	return nil
+}
+
 // UniboxOverview is the inbox sidebar: totals across the workspace, and per
-// mailbox and per label.
+// folder, per mailbox and per label.
 type UniboxOverview struct {
 	Total         int `json:"total"`
 	Unread        int `json:"unread"`
@@ -74,11 +148,17 @@ type UniboxOverview struct {
 	Week          int `json:"week"`
 	Snoozed       int `json:"snoozed"`
 	AwaitingReply int `json:"awaiting_reply"`
+	// AwaitingAgentDraft counts threads with a pending inbox-agent draft
+	// waiting for review; see [UniboxService.AgentDrafts].
+	AwaitingAgentDraft int `json:"awaiting_agent_draft"`
 	// ScheduledPending is how many sends are queued but not yet out, capped
 	// for display at ScheduledPendingMax.
 	ScheduledPending    int `json:"scheduled_pending"`
 	ScheduledPendingMax int `json:"scheduled_pending_max,omitempty"`
 
+	// Folders always lists all six canonical folders, zero-filled, in sidebar
+	// order.
+	Folders    []UniboxFolderCount  `json:"folders,omitempty"`
 	Mailboxes  []UniboxMailboxCount `json:"mailboxes,omitempty"`
 	Tags       []UniboxLabelCount   `json:"tags,omitempty"`
 	Categories []UniboxLabelCount   `json:"categories,omitempty"`
@@ -86,6 +166,14 @@ type UniboxOverview struct {
 	GeneratedAt      time.Time `json:"generated_at,omitempty"`
 	WindowTodayStart time.Time `json:"window_today_start,omitempty"`
 	WindowWeekStart  time.Time `json:"window_week_start,omitempty"`
+}
+
+// UniboxFolderCount is one canonical folder's thread counts.
+type UniboxFolderCount struct {
+	// Folder is one of the Folder* constants.
+	Folder string `json:"folder"`
+	Unread int    `json:"unread"`
+	Total  int    `json:"total"`
 }
 
 // UniboxMailboxCount is one mailbox's share of the inbox.
@@ -126,9 +214,13 @@ type ScheduledSend struct {
 	AccountEmail string    `json:"account_email,omitempty"`
 	AccountName  string    `json:"account_name,omitempty"`
 	To           []string  `json:"to,omitempty"`
+	CC           []string  `json:"cc,omitempty"`
+	BCC          []string  `json:"bcc,omitempty"`
 	Subject      string    `json:"subject"`
 	Snippet      string    `json:"snippet,omitempty"`
-	ThreadID     string    `json:"thread_id,omitempty"`
+	// ThreadID is the conversation the message will land in, when it was
+	// queued as a reply.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 // UniboxListParams filters and paginates the unified inbox.
@@ -137,13 +229,28 @@ type UniboxListParams struct {
 	// From and Subject are substring filters.
 	From    string
 	Subject string
+	// Address matches conversations with one person in either direction: mail
+	// they sent, and mail sent to them.
+	Address string
+	// Direction is [DirectionSent] or [DirectionReceived]. Empty returns both.
+	Direction string
+	// Folder narrows to one canonical folder (a Folder* constant). Empty
+	// searches every folder except spam and trash; an unknown value is a 400.
+	Folder string
 	// Unseen restricts to threads with unread messages.
 	Unseen *bool
 	// AwaitingReply restricts to threads whose latest message you sent.
 	AwaitingReply *bool
+	// AgentDrafts restricts to threads with a pending inbox-agent draft.
+	AgentDrafts *bool
+	// Uncategorized restricts to threads carrying no conversation labels.
+	Uncategorized *bool
 	// Snoozed set to true returns only snoozed threads. Leave it nil to
-	// exclude snoozed threads entirely.
-	Snoozed *bool
+	// exclude snoozed threads, which is the default; the server ignores an
+	// explicit false. Set SnoozedAny to include snoozed and unsnoozed threads
+	// alike.
+	Snoozed    *bool
+	SnoozedAny bool
 	// Since and Until bound the thread date.
 	Since time.Time
 	Until time.Time
@@ -163,9 +270,18 @@ func (p *UniboxListParams) values() url.Values {
 	p.apply(q)
 	setNonEmpty(q, "from", p.From)
 	setNonEmpty(q, "subject", p.Subject)
+	setNonEmpty(q, "address", p.Address)
+	setNonEmpty(q, "direction", p.Direction)
+	setNonEmpty(q, "folder", p.Folder)
 	setBool(q, "unseen", p.Unseen)
 	setBool(q, "awaiting_reply", p.AwaitingReply)
-	setBool(q, "snoozed", p.Snoozed)
+	setBool(q, "agent_drafts", p.AgentDrafts)
+	setBool(q, "uncategorized", p.Uncategorized)
+	if p.SnoozedAny {
+		q.Set("snoozed", "any")
+	} else {
+		setBool(q, "snoozed", p.Snoozed)
+	}
 	setNonEmpty(q, "since", formatDay(p.Since))
 	setNonEmpty(q, "until", formatDay(p.Until))
 	setNonEmpty(q, "email_id", p.EmailID)
@@ -184,7 +300,9 @@ type UniboxReplyParams struct {
 	BodyHTML       string   `json:"body_html,omitempty"`
 	BodyPlain      string   `json:"body_plain,omitempty"`
 	// InReplyTo holds the Message-IDs being replied to, and ThreadID keeps the
-	// message in the provider's conversation.
+	// message in the provider's conversation. When InReplyTo is empty and
+	// ThreadID is set, the server fills InReplyTo with the thread's latest
+	// Message-ID so the reply nests in the recipient's client too.
 	InReplyTo []string `json:"in_reply_to,omitempty"`
 	ThreadID  string   `json:"thread_id,omitempty"`
 	// SendMode is [SendModeInstant] (the default), [SendModeSmart] or
@@ -194,7 +312,9 @@ type UniboxReplyParams struct {
 }
 
 // UniboxComposeParams sends a brand-new outbound email. Unlike a reply it is
-// checked against the workspace suppression list before being queued.
+// checked against the workspace suppression list before being queued: a
+// suppressed recipient anywhere in To, CC or BCC fails the whole call with a
+// 400.
 type UniboxComposeParams struct {
 	// EmailAccountID picks the sending mailbox. Leave it empty (or set it to
 	// "auto") to let the server choose the best mailbox for the first
@@ -213,6 +333,20 @@ type UniboxComposeParams struct {
 	// [SendModeScheduled].
 	SendMode    string     `json:"send_mode,omitempty"`
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+}
+
+// ComposeResult is returned when a composed message has been accepted for
+// delivery. Beyond the queued send it reports which mailbox was used, which
+// matters when the server picked it.
+type ComposeResult struct {
+	SendResult
+	// AccountID and AccountEmail identify the sending mailbox.
+	AccountID    string `json:"account_id"`
+	AccountEmail string `json:"account_email"`
+	// Auto is true when the server chose the mailbox, in which case
+	// PickedReason explains the choice in words.
+	Auto         bool   `json:"auto"`
+	PickedReason string `json:"picked_reason,omitempty"`
 }
 
 // ComposeCandidates is the compose mailbox picker: every active mailbox scored
@@ -272,8 +406,10 @@ type ComposeDraft struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// ComposeDraftParams is the body of an autosave.
+// ComposeDraftParams is the body of an autosave. The server rejects a draft
+// over 100,000 body bytes, 1,000 subject bytes or 100 recipients per field.
 type ComposeDraftParams struct {
+	// EmailAccountID is the chosen mailbox; empty or "auto" stores none.
 	EmailAccountID string   `json:"email_account_id,omitempty"`
 	To             []string `json:"to,omitempty"`
 	CC             []string `json:"cc,omitempty"`
@@ -305,7 +441,8 @@ type AIDraft struct {
 type AIDraftGrounding struct {
 	// Contact is true when a contact record was found for the recipient.
 	Contact bool `json:"contact"`
-	// History is how many prior messages with the address were included.
+	// History is how many prior messages with the address were included. The
+	// model reads their stored text, not just the preview lines.
 	History int `json:"history"`
 	// VoiceProfile is true when the workspace voice profile was applied.
 	VoiceProfile bool `json:"voice_profile"`
@@ -348,7 +485,8 @@ type AgentDraft struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// List returns a page of inbox threads, newest first.
+// List returns a page of inbox threads, newest first. Rows are previews; see
+// [UniboxService.Get] for bodies.
 func (s *UniboxService) List(ctx context.Context, params *UniboxListParams, opts ...RequestOption) (*Page[UniboxThread], error) {
 	return listJSON[UniboxThread](ctx, s.client, "unibox", params.values(), opts...)
 }
@@ -374,7 +512,8 @@ func (s *UniboxService) Overview(ctx context.Context, opts ...RequestOption) (*U
 }
 
 // Thread returns a page of the messages in one conversation, oldest first.
-// Pass an empty emailID to search every mailbox.
+// Pass an empty emailID to search every mailbox. Rows carry the snippet, not
+// the body.
 func (s *UniboxService) Thread(ctx context.Context, threadID, emailID string, params *ListOptions, opts ...RequestOption) (*Page[UniboxMessage], error) {
 	q := make(url.Values)
 	params.apply(q)
@@ -383,7 +522,9 @@ func (s *UniboxService) Thread(ctx context.Context, threadID, emailID string, pa
 	return listJSON[UniboxMessage](ctx, s.client, "unibox/thread", q, opts...)
 }
 
-// Get returns a single message by id, including its bodies.
+// Get returns a single message by id, including its plain-text body and a
+// sanitized HTML body. Check [UniboxMessage.BodyTruncated] before treating
+// BodyPlain as the whole message.
 func (s *UniboxService) Get(ctx context.Context, id string, opts ...RequestOption) (*UniboxMessage, *Response, error) {
 	return fetch[UniboxMessage](ctx, s.client, "unibox/"+url.PathEscape(id), opts)
 }
@@ -405,7 +546,8 @@ func (s *UniboxService) SetThreadLabels(ctx context.Context, threadID string, ca
 	return sendData[MiniCategory](ctx, s.client.put, "unibox/thread/labels", body, opts)
 }
 
-// MarkSeen marks messages read or unread.
+// MarkSeen marks up to 500 messages read or unread by id. To sweep a whole
+// folder use [UniboxService.MarkFolderSeen].
 func (s *UniboxService) MarkSeen(ctx context.Context, emailIDs []string, seen bool, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		EmailIDs []string `json:"email_ids"`
@@ -414,14 +556,26 @@ func (s *UniboxService) MarkSeen(ctx context.Context, emailIDs []string, seen bo
 	return s.client.patch(ctx, "unibox/seen", body, nil, opts...)
 }
 
+// MarkFolderSeen marks every message in one canonical folder (a Folder*
+// constant) read or unread, workspace-wide. A folder sweep and an id list are
+// different requests: the server rejects a body that carries both, which is
+// why this is a separate method from [UniboxService.MarkSeen].
+func (s *UniboxService) MarkFolderSeen(ctx context.Context, folder string, seen bool, opts ...RequestOption) (*Response, error) {
+	body := struct {
+		Folder string `json:"folder"`
+		Seen   bool   `json:"seen"`
+	}{Folder: folder, Seen: seen}
+	return s.client.patch(ctx, "unibox/seen", body, nil, opts...)
+}
+
 // Reply sends a reply into an existing thread.
 func (s *UniboxService) Reply(ctx context.Context, params *UniboxReplyParams, opts ...RequestOption) (*SendResult, *Response, error) {
 	return send[SendResult](ctx, s.client.post, "unibox/reply", params, opts)
 }
 
-// Compose sends a brand-new outbound email.
-func (s *UniboxService) Compose(ctx context.Context, params *UniboxComposeParams, opts ...RequestOption) (*SendResult, *Response, error) {
-	return send[SendResult](ctx, s.client.post, "unibox/compose", params, opts)
+// Compose sends a brand-new outbound email and reports which mailbox sent it.
+func (s *UniboxService) Compose(ctx context.Context, params *UniboxComposeParams, opts ...RequestOption) (*ComposeResult, *Response, error) {
+	return send[ComposeResult](ctx, s.client.post, "unibox/compose", params, opts)
 }
 
 // ComposeCandidates scores the workspace's mailboxes as senders for one
@@ -445,8 +599,8 @@ func (s *UniboxService) DraftCompose(ctx context.Context, to, subject, instructi
 	return send[AIDraft](ctx, s.client.post, "unibox/compose/draft", body, opts)
 }
 
-// DraftReply writes a reply grounded in the thread's history. It spends AI
-// credits and never sends.
+// DraftReply writes a reply grounded in the thread's stored message text. It
+// spends AI credits and never sends.
 func (s *UniboxService) DraftReply(ctx context.Context, threadID, instruction string, opts ...RequestOption) (*AIDraft, *Response, error) {
 	body := struct {
 		ThreadID    string `json:"thread_id"`
@@ -485,7 +639,8 @@ func (s *UniboxService) AgentDrafts(ctx context.Context, opts ...RequestOption) 
 
 // ApproveAgentDraft sends an agent draft through the normal reply path,
 // optionally replacing its body first. Approval is claimed before the send, so
-// two concurrent approvals can never double-send; the loser gets a 409.
+// two concurrent approvals can never double-send; the loser gets a 409. If the
+// send itself fails the draft returns to pending so it can be retried.
 func (s *UniboxService) ApproveAgentDraft(ctx context.Context, id, body string, opts ...RequestOption) (*SendResult, *Response, error) {
 	req := struct {
 		Body string `json:"body,omitempty"`
@@ -505,7 +660,8 @@ func (s *UniboxService) Snoozes(ctx context.Context, opts ...RequestOption) ([]U
 	return fetchData[UniboxSnooze](ctx, s.client, "unibox/snoozes", opts)
 }
 
-// Snooze hides a thread until the given time.
+// Snooze hides a thread until the given time. Snoozing an already snoozed
+// thread moves its wake-up time.
 func (s *UniboxService) Snooze(ctx context.Context, threadID string, until time.Time, opts ...RequestOption) (*UniboxSnooze, *Response, error) {
 	body := struct {
 		ThreadID     string    `json:"thread_id"`
@@ -514,7 +670,8 @@ func (s *UniboxService) Snooze(ctx context.Context, threadID string, until time.
 	return send[UniboxSnooze](ctx, s.client.post, "unibox/snooze", body, opts)
 }
 
-// Unsnooze returns a snoozed thread to the inbox immediately.
+// Unsnooze returns a snoozed thread to the inbox immediately. It is
+// idempotent: unsnoozing a thread that is not snoozed still succeeds.
 func (s *UniboxService) Unsnooze(ctx context.Context, threadID string, opts ...RequestOption) (*Response, error) {
 	q := url.Values{"thread_id": {threadID}}
 	return s.client.delete(ctx, withQuery("unibox/snooze", q), opts...)

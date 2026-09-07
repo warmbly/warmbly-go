@@ -163,7 +163,10 @@ fmt.Println(created.ID)
 | --- | --- |
 | `client.Emails` | Connected mailboxes, warmup lifecycle, domain authentication, address verification, one-off sends |
 | `client.Campaigns` | Campaigns, sequence steps, A/B variants, attachments, senders, preflight, template preview |
-| `client.Contacts` | Contacts and the 360 view, faceted search, CRM notes, import and export, AI research |
+| `client.Contacts` | Contacts and the 360 view, faceted search, address verification, CRM notes, import and export, AI research |
+| `client.Segments` | Saved contact audiences, evaluated live, with per-contact overrides |
+| `client.Suppressions` | The workspace do-not-contact list |
+| `client.Forms` | Hosted lead-capture forms, their submissions and their custom domain |
 | `client.Unibox` | Unified inbox: reading, replying, composing, labels, snoozes, scheduled sends, AI drafts |
 | `client.Templates` | Reply templates, spam scoring, rendering, ordering |
 | `client.Analytics` | Dashboard, per-campaign engagement, warmup progress, deliverability health, plan usage |
@@ -176,6 +179,7 @@ fmt.Println(created.ID)
 | `client.LeadSync` | Google Sheets to contacts sync |
 | `client.Generation` | AI writing and rewriting |
 | `client.Skills` | Workspace AI playbooks that steer it |
+| `client.AgentTools` | The AI tool registry over plain HTTP, for function-calling agents |
 | `client.Webhooks` | Endpoints, the event catalog, and the delivery log |
 | `client.APIKeys` | Keys, scopes and usage analytics |
 | `client.OAuthApps` | OAuth 2.1 application registration and the consent flow |
@@ -189,8 +193,11 @@ fmt.Println(created.ID)
 | `client.Auth` | Sign-in, sessions, profile, two-factor, passkeys, notifications |
 | `client.Organization` | Workspace settings, members, roles, invitations, danger zone |
 | `client.Billing` | Subscription, plan changes, AI credits, referrals |
+| `client.WebsiteTracking` | The website tracking snippet's consent, precision, hosts and retention |
+| `client.PoolLink` | Self-hosted instances linked to this workspace's warmup pool |
+| `client.CloudLink` | A self-hosted instance's own side of that link |
 
-`Auth`, `Organization` and `Billing` are session-only; see [Session tokens](#session-tokens).
+`Auth`, `Organization`, `Billing`, `WebsiteTracking`, `PoolLink` and `CloudLink` are session-only; see [Session tokens](#session-tokens).
 
 ### Reaching something new
 
@@ -250,6 +257,18 @@ if errors.As(err, &apiErr) {
 
 Key sentinels include `warmbly.ErrNotFound`, `warmbly.ErrUnauthorized`, and `warmbly.ErrRateLimited`.
 
+Sentinels match on the status code, which is often not specific enough to act on: several distinct refusals share a `403`. Every error also carries a stable machine-readable code, so branch on that when the remedy differs:
+
+```go
+var apiErr *warmbly.Error
+if errors.As(err, &apiErr) && apiErr.HasCode(warmbly.ErrCodeMailboxAllowanceReached) {
+    // The workspace holds its whole mailbox allowance. Request an increase
+    // rather than retrying, which will keep failing.
+}
+```
+
+The codes are declared as `warmbly.ErrCode*` constants.
+
 ## Retries & rate limits
 
 The client automatically retries transient failures using exponential backoff with jitter, and honours the `Retry-After` header when the server sends one. Rate-limit headers from each response are parsed and exposed on the returned `*Response` (`resp.RateLimit`) so you can observe your remaining quota. Tune retry behaviour with the `warmbly.WithMaxRetries` option:
@@ -284,7 +303,9 @@ defer g.Close()
 
 Every event carries a monotonic per-workspace sequence number. The client replays the gap after a reconnect, so a brief drop loses nothing; replay is at-least-once, so deduplicate on `Event.Seq` if your handler is not idempotent. A disconnect that outlasts the server's buffer surfaces as `EventResumeFailed`, your cue to resync from the REST API.
 
-Intents only ever narrow the stream — a credential without unibox access receives no inbox events however it asks. The underlying transport is the dependency-free RFC 6455 implementation in `internal/wsconn`, so the gateway adds no third-party packages either.
+A refused channel join surfaces as a `*gateway.JoinError` carrying the server's code and reason slug. Its `Permanent` method separates the refusals worth retrying from the ones that will never succeed: a topic you may not see, or an id that does not resolve, is final. A join refused for rate limiting is retried automatically on the same socket once the server's `retry_after_ms` elapses, so no reconnect is spent on it.
+
+Intents only ever narrow the stream — a credential without unibox access receives no inbox events however it asks. Matching is a substring test against the event type, so an intent must be specific enough not to catch its neighbours. The underlying transport is the dependency-free RFC 6455 implementation in `internal/wsconn`, so the gateway adds no third-party packages either.
 
 ## Webhooks
 

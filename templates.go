@@ -20,7 +20,7 @@ type Template struct {
 	Subject        string `json:"subject"`
 	BodyHTML       string `json:"body_html"`
 	BodyPlain      string `json:"body_plain"`
-	// Position is the template's zero-based index in the organization's list.
+	// Position is the template's place in the organization's ordered list.
 	Position  int       `json:"position"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -108,8 +108,8 @@ func (s *TemplateService) Delete(ctx context.Context, id string, opts ...Request
 	return s.client.delete(ctx, "templates/"+url.PathEscape(id), opts...)
 }
 
-// Reorder sets the template order to exactly the given ids and returns the
-// reordered list.
+// Reorder repositions the given templates in the listed order and returns the
+// full reordered list. Templates not in ids keep their positions.
 func (s *TemplateService) Reorder(ctx context.Context, ids []string, opts ...RequestOption) ([]Template, *Response, error) {
 	body := struct {
 		IDs []string `json:"ids"`
