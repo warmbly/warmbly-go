@@ -86,6 +86,17 @@ const (
 	// refused by address verification. The campaign is parked at
 	// [CampaignStatusPausedUndeliverable].
 	ErrCodeLeadsUndeliverable = "leads_undeliverable"
+	// ErrCodeNoLeads is returned (400) when a campaign that has never had a
+	// lead is started with [CampaignUpdateParams.Continuous] off. Add contacts,
+	// or set Continuous so it starts empty and waits for them. A campaign whose
+	// leads have all finished is a different case: it starts and waits, with
+	// [CampaignStatusChange.WaitingForLeads] set.
+	ErrCodeNoLeads = "no_leads"
+	// ErrCodeNoRemainingLeads is returned (400) only to a platform-initiated
+	// restart of a campaign with nothing left to send and Continuous off; the
+	// campaign returns to [CampaignStatusCompleted]. A start you request never
+	// answers this, because it turns Continuous on and waits instead.
+	ErrCodeNoRemainingLeads = "no_remaining_leads"
 )
 
 // TimeInterval is one sending window inside a day, in minutes since local
@@ -204,8 +215,10 @@ type Campaign struct {
 	// Continuous keeps the campaign active when it runs out of leads: instead
 	// of completing it waits, with IdleSince set, and sends the sequence to
 	// each lead as they arrive (from a linked segment, a form, the API or an
-	// automation). Linking a segment turns it on. A continuous campaign can be
-	// started with no leads at all; only its end date finishes it.
+	// automation). Anything that feeds it leads turns it on: linking a segment
+	// or a form, an automation that enrolls into it, or starting a campaign
+	// whose every lead has finished. A continuous campaign can be started with
+	// no leads at all; only its end date finishes it.
 	Continuous bool `json:"continuous"`
 	// IdleSince is set while a continuous campaign is waiting for leads and
 	// cleared as soon as it has something to send again.
@@ -437,6 +450,14 @@ type CampaignStartParams struct {
 // "stopped"; fetch the campaign for its resulting state.
 type CampaignStatusChange struct {
 	Status string `json:"status"`
+	// WaitingForLeads is true when a start found nothing left to send: the
+	// campaign is [CampaignStatusActive] with [Campaign.IdleSince] set, waiting
+	// for leads rather than finishing. Starting a campaign whose every lead has
+	// completed the sequence turns [CampaignUpdateParams.Continuous] on to get
+	// there, so a second start never answers no_remaining_leads.
+	//
+	// It is always false on a stop.
+	WaitingForLeads bool `json:"waiting_for_leads"`
 }
 
 // CampaignAdvancedSettings is a campaign's override of the organization-wide
@@ -987,14 +1008,19 @@ func (s *CampaignService) Duplicate(ctx context.Context, id string, params *Camp
 }
 
 // Start begins (or resumes) sending for a campaign. It works from draft, any
-// paused status or completed; a completed campaign with nothing left to send
-// re-completes with a 400, unless it is continuous, in which case it starts
-// and waits for leads with [Campaign.IdleSince] set. Status changes are
-// rate-limited to one per minute per campaign.
+// paused status or completed; a campaign closed by a passed end date resumes
+// once that date is extended or cleared. Status changes are rate-limited to one
+// per minute per campaign.
 //
-// The start can be refused with [ErrCodeListBounceRisk] or
-// [ErrCodeLeadsUndeliverable] in [Error.Code]; see [CampaignService.StartWithOptions]
-// to launch past the bounce-risk gate.
+// A campaign with nothing left to send does not finish again. The start turns
+// [CampaignUpdateParams.Continuous] on if it was off, leaves the campaign
+// [CampaignStatusActive] with [Campaign.IdleSince] set, and answers
+// [CampaignStatusChange.WaitingForLeads]; the switch is written to the
+// campaign's activity log. Adding a lead by any path then wakes it.
+//
+// The start can be refused with [ErrCodeListBounceRisk],
+// [ErrCodeLeadsUndeliverable] or [ErrCodeNoLeads] in [Error.Code]; see
+// [CampaignService.StartWithOptions] to launch past the bounce-risk gate.
 func (s *CampaignService) Start(ctx context.Context, id string, opts ...RequestOption) (*CampaignStatusChange, *Response, error) {
 	return s.StartWithOptions(ctx, id, nil, opts...)
 }

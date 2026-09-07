@@ -3,6 +3,28 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [0.3.1] - 2026-09-07
+
+Picks up the API changes that landed while 0.3.0 was being prepared. Additive,
+so nothing needs touching at a call site.
+
+### Added
+
+- `CampaignStatusChange.WaitingForLeads`, which `POST /campaigns/:id/start` now
+  returns. It is true when the start found nothing left to send, so a caller
+  learns the campaign is parked and waiting without a second fetch.
+- `ErrCodeNoLeads` and `ErrCodeNoRemainingLeads`, the two refusals a start can
+  answer with.
+
+### Changed
+
+- Starting a campaign whose every lead has finished no longer re-completes it
+  with a 400. The start turns `Continuous` on, leaves the campaign active and
+  idle, and reports `WaitingForLeads`. `CampaignService.Start` documented that
+  older behaviour, which is now wrong.
+- A form linked to a campaign, or an automation that enrolls into one, turns
+  `Continuous` on, as linking a segment already did.
+
 ## [0.3.0] - 2026-09-07
 
 Reconciled the SDK with the current v1 API, covering the 484 server commits
