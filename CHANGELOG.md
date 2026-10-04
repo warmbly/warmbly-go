@@ -5,6 +5,10 @@ grouped by release and version numbers use semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-04
+
+Syncs the SDK with the v1 API as of server commit 2032b0492: inbox placement, contact imports, lead copies, new realtime events and error codes. One breaking change, `AuthService.ChangePassword`.
+
 ### Changed
 
 - **Breaking:** `AuthService.ChangePassword` now returns `(*Session, *Response, error)`. The server ends every session, the caller's included, and answers with a fresh token pair, so store it.
@@ -282,6 +286,7 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/warmbly/warmbly-go/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0
