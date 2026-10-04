@@ -116,7 +116,7 @@ const (
 	// bodies.
 	AuditEntityEmailImage = "email_image"
 
-	// Inbox placement: a test or batch started or cancelled, and a campaign's
+	// Inbox placement: a test or batch started or canceled, and a campaign's
 	// scheduled test set up, changed or removed.
 	AuditEntityPlacementTest    = "placement_test"
 	AuditEntityPlacementBatch   = "placement_batch"

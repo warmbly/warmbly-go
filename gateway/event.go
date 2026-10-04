@@ -108,7 +108,7 @@ const (
 	// EventContactImportProgress fires on the workspace channel as a
 	// background contact import moves: when it is queued and starts, at most
 	// once a second while its rows settle, and when it completes, fails or is
-	// cancelled. It carries the import id and status only, so refetch the
+	// canceled. It carries the import id and status only, so refetch the
 	// import on receipt. It requires contact access. Payload:
 	// [ImportProgressEvent], with a Status of one of the ImportStatus*
 	// constants.
@@ -134,7 +134,7 @@ const (
 	EventWarmupPlacement EventName = "WARMUP_PLACEMENT"
 	// EventMailboxImportProgress fires on the workspace channel as a mailbox
 	// import moves: at most once a second per import while rows finish, and
-	// always when it completes, is cancelled, or a waiting sign-in row
+	// always when it completes, is canceled, or a waiting sign-in row
 	// connects. It carries the import id and status only, so refetch the
 	// import on receipt. It requires mailbox management access. Payload:
 	// [ImportProgressEvent].
@@ -143,21 +143,21 @@ const (
 
 // Import statuses carried in [ImportProgressEvent.Status]. A contact import
 // moves through queued, running and one of the terminal states; a mailbox
-// import only reports running, completed and cancelled. Treat an unrecognized
+// import only reports running, completed and canceled. Treat an unrecognized
 // value as in flight.
 const (
 	ImportStatusQueued    = "queued"
 	ImportStatusRunning   = "running"
 	ImportStatusCompleted = "completed"
 	ImportStatusFailed    = "failed"
-	ImportStatusCancelled = "cancelled"
+	ImportStatusCancelled = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 )
 
 // Inbox placement test events. Payload: [PlacementTestEvent].
 const (
 	// EventPlacementTestUpdated fires on the workspace channel when an inbox
 	// placement test starts, each time one of its copies gets a verdict, and
-	// when it finishes or is cancelled. A placement batch sends the same event
+	// when it finishes or is canceled. A placement batch sends the same event
 	// with a batch id in place of a test id when it starts, skips or defers a
 	// mailbox, and finishes. It requires analytics access, like the endpoints
 	// that read results, and carries ids and status only.
@@ -608,7 +608,7 @@ type ImportProgressEvent struct {
 }
 
 // Statuses carried in [PlacementTestEvent.Status]. A test reports running,
-// completed, cancelled or failed. A batch adds queued and
+// completed, canceled or failed. A batch adds queued and
 // completed_with_warnings. Treat an unrecognized value as a state this client
 // predates.
 const (
@@ -616,7 +616,7 @@ const (
 	PlacementStatusRunning              = "running"
 	PlacementStatusCompleted            = "completed"
 	PlacementStatusCompletedWithWarning = "completed_with_warnings"
-	PlacementStatusCancelled            = "cancelled"
+	PlacementStatusCancelled            = "cancelled" //nolint:misspell // wire value: the API sends "cancelled" here
 	PlacementStatusFailed               = "failed"
 )
 

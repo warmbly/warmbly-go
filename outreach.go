@@ -147,7 +147,7 @@ type InboxTaggingSettings struct {
 	Languages []string `json:"languages"`
 	// ActionRequiredInInbox keeps automated notifications that need the
 	// recipient to act (a failed payment, a suspended account) in the inbox,
-	// labelled, instead of the Automated view.
+	// labeled, instead of the Automated view.
 	ActionRequiredInInbox bool `json:"action_required_in_inbox"`
 }
 
