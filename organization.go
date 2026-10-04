@@ -108,13 +108,18 @@ type User struct {
 	// bitmask behind it. Both are only populated on the caller's own profile.
 	AdminPermissions uint64 `json:"admin_permissions,omitempty"`
 	IsAdmin          bool   `json:"is_admin,omitempty"`
+	// SessionMFAVerified reports whether the session making this request
+	// presented a second factor (a TOTP or recovery code, or a passkey). The
+	// admin panel needs it to explain why an admin account is being refused.
+	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	// DeletionScheduledFor is set while the account is pending a hard delete.
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
 	DeletionScheduledFor *time.Time `json:"deletion_scheduled_for,omitempty"`
 
-	// Folders, Tags and Categories are the user's label groups, returned on
-	// their own profile.
+	// Folders, Tags and Categories are the label registries of the workspace
+	// the session currently has selected, returned on the caller's own
+	// profile.
 	Folders    []Group `json:"folders,omitempty"`
 	Tags       []Group `json:"tags,omitempty"`
 	Categories []Group `json:"categories,omitempty"`
@@ -159,6 +164,11 @@ type Organization struct {
 	// AssistantSharedHistory makes AI assistant conversations visible to every
 	// member with the use-AI permission rather than only their author.
 	AssistantSharedHistory bool `json:"assistant_shared_history"`
+
+	// Timezone is the workspace's IANA zone: the default a new campaign's
+	// schedule is created in, and the clock a mailbox with no timezone of its
+	// own keeps its warmup hours and working hours in. Empty means not set.
+	Timezone string `json:"timezone"`
 
 	Owner *User `json:"owner,omitempty"`
 }
@@ -370,6 +380,8 @@ type InvitationPreview struct {
 // OrganizationCreateParams creates a workspace.
 type OrganizationCreateParams struct {
 	Name string `json:"name"`
+	// Timezone is the workspace timezone, an IANA name. Optional.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // OrganizationUpdateParams updates the current workspace. Nil fields are left
@@ -387,6 +399,10 @@ type OrganizationUpdateParams struct {
 
 	InboxAgentEnabled      *bool `json:"inbox_agent_enabled,omitempty"`
 	AssistantSharedHistory *bool `json:"assistant_shared_history,omitempty"`
+
+	// Timezone is the workspace timezone, an IANA name. An empty string clears
+	// it.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // InviteMemberParams invites someone by email into one or more roles.

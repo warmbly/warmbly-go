@@ -111,6 +111,9 @@ func TestAccountSyncRouting(t *testing.T) {
 		{"auth.EnrollTwoFA", func() error { _, _, e := c.Auth.EnrollTwoFA(ctx); return e }, "POST", "/v1/auth/2fa/enroll/start"},
 		{"auth.ConfirmTwoFA", func() error { _, _, e := c.Auth.ConfirmTwoFA(ctx, "123456"); return e }, "POST", "/v1/auth/2fa/enroll/confirm"},
 		{"auth.DisableTwoFA", func() error { _, e := c.Auth.DisableTwoFA(ctx, "123456"); return e }, "DELETE", "/v1/auth/2fa"},
+		{"auth.Reauth", func() error { _, _, e := c.Auth.Reauth(ctx, "pw", ""); return e }, "POST", "/v1/auth/reauth"},
+		{"auth.SSOLink", func() error { _, _, e := c.Auth.SSOLink(ctx, "pt_1", "pw"); return e }, "POST", "/v1/auth/sso/link"},
+		{"auth.RegenerateRecoveryCodes", func() error { _, _, e := c.Auth.RegenerateRecoveryCodes(ctx, "123456"); return e }, "POST", "/v1/auth/2fa/recovery-codes"},
 		{"auth.VerifyTwoFA", func() error { _, _, e := c.Auth.VerifyTwoFA(ctx, "pt_1", "123456"); return e }, "POST", "/v1/auth/2fa/verify"},
 
 		// --- passkeys ---
@@ -238,6 +241,7 @@ func TestAccountSyncRouting(t *testing.T) {
 
 		// --- API keys ---
 		{"apikeys.Revoke", func() error { _, e := c.APIKeys.Revoke(ctx, "k_1", "rotated"); return e }, "DELETE", "/v1/api-keys/k_1"},
+		{"apikeys.Delete", func() error { _, e := c.APIKeys.Delete(ctx, "k_1"); return e }, "DELETE", "/v1/api-keys/k_1/permanent"},
 		{"apikeys.RevokeSelf", func() error { _, e := c.APIKeys.RevokeSelf(ctx, "logout"); return e }, "DELETE", "/v1/api-keys/self"},
 		{"apikeys.UsageSummary", func() error { _, _, e := c.APIKeys.UsageSummary(ctx); return e }, "GET", "/v1/api-keys/usage/summary"},
 		{"apikeys.Analytics", func() error { _, _, e := c.APIKeys.Analytics(ctx, "k_1", nil); return e }, "GET", "/v1/api-keys/k_1/analytics"},
@@ -1321,5 +1325,57 @@ func TestAccountSyncNoBillingProvider(t *testing.T) {
 	_, _, err := c.Meta.Plans(context.Background())
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("Plans on a billing-less deployment = %v, want ErrNotFound", err)
+	}
+}
+
+// TestReauthAndSSOLinkDecode covers the confirmation window the reauth route
+// answers with, and the link-required step of a federated sign-in.
+func TestReauthAndSSOLinkDecode(t *testing.T) {
+	var got recordedRequest
+	c := accountServer(t, `{"valid_for_seconds": 300}`, &got)
+	d, _, err := c.Auth.Reauth(context.Background(), "pw", "")
+	if err != nil {
+		t.Fatalf("Reauth: %v", err)
+	}
+	if d != 5*time.Minute {
+		t.Errorf("window = %v, want 5m", d)
+	}
+	if !strings.Contains(got.body, `"password":"pw"`) || strings.Contains(got.body, `"code"`) {
+		t.Errorf("body = %s, want the password only", got.body)
+	}
+
+	c = accountServer(t, `{"link_required": true, "link_email": "a@b.com", "link_provider": "google", "pending_token": "pt_1", "expires_in": 600}`, nil)
+	sess, _, err := c.Auth.ExchangeSSO(context.Background(), "hc_1", "bind")
+	if err != nil {
+		t.Fatalf("ExchangeSSO: %v", err)
+	}
+	if !sess.LinkRequired || sess.LinkEmail != "a@b.com" || sess.LinkProvider != "google" || sess.PendingToken != "pt_1" {
+		t.Errorf("session = %+v", sess)
+	}
+}
+
+// TestNotificationPreferencesCarryPlacementCategories checks that the
+// categories added with inbox placement and inbox tagging round-trip, so a
+// read-modify-write of the preferences does not switch them off.
+func TestNotificationPreferencesCarryPlacementCategories(t *testing.T) {
+	var got recordedRequest
+	c := accountServer(t, `{"preferences": {"placement_finished": {"enabled": true, "channels": {"in_app": true}},
+		"placement_alert": {"enabled": true, "channels": {"email": true}},
+		"inbox_action_required": {"enabled": true, "channels": {"email": true}}}}`, &got)
+	res, _, err := c.Auth.NotificationPreferences(context.Background())
+	if err != nil {
+		t.Fatalf("NotificationPreferences: %v", err)
+	}
+	p := res.Preferences
+	if !p.PlacementFinished.Enabled || !p.PlacementAlert.Channels.Email || !p.InboxActionRequired.Enabled {
+		t.Errorf("preferences = %+v", p)
+	}
+	if _, _, err := c.Auth.UpdateNotificationPreferences(context.Background(), &p); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for _, key := range []string{`"placement_finished"`, `"placement_alert"`, `"inbox_action_required"`} {
+		if !strings.Contains(got.body, key) {
+			t.Errorf("update body is missing %s: %s", key, got.body)
+		}
 	}
 }

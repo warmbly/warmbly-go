@@ -59,7 +59,11 @@ const (
 // audited too, but on the operator's trail rather than any organization's, so
 // they never appear here.
 const (
-	AuditEntityCampaign     = "campaign"
+	AuditEntityCampaign = "campaign"
+	// AuditEntityCampaignLead is one contact inside one campaign: the entity id
+	// is the contact and the metadata carries the campaign. Written when a
+	// member pauses or resumes that lead's flow, or changes who it copies.
+	AuditEntityCampaignLead = "campaign_lead"
 	AuditEntityContact      = "contact"
 	AuditEntityEmailAccount = "email_account"
 	AuditEntityAPIKey       = "api_key"
@@ -100,6 +104,23 @@ const (
 	AuditEntityLeadSyncSource = "lead_sync_source"
 	AuditEntityMeeting        = "meeting"
 	AuditEntityUnibox         = "unibox"
+
+	// Mailbox import, vendor connections, whole-domain admin grants and the
+	// redirects served on a sending domain.
+	AuditEntityMailboxImport  = "mailbox_import"
+	AuditEntityMailboxVendor  = "mailbox_vendor"
+	AuditEntityMailboxGrant   = "mailbox_grant"
+	AuditEntityDomainRedirect = "domain_redirect"
+
+	// AuditEntityEmailImage is one image in the workspace's library for email
+	// bodies.
+	AuditEntityEmailImage = "email_image"
+
+	// Inbox placement: a test or batch started or cancelled, and a campaign's
+	// scheduled test set up, changed or removed.
+	AuditEntityPlacementTest    = "placement_test"
+	AuditEntityPlacementBatch   = "placement_batch"
+	AuditEntityPlacementMonitor = "placement_monitor"
 
 	// Warmup and sending posture.
 	AuditEntityWarmupRoutingRule = "warmup_routing_rule"

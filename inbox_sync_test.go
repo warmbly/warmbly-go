@@ -743,6 +743,14 @@ func TestIntegrationSyncRouting(t *testing.T) {
 			_, _, e := c.Integrations.WebhookSecret(ctx, "conn_1")
 			return e
 		}, "GET", "/v1/integrations/connections/conn_1/webhook-secret", "", nil},
+		{"SetInboundSigningKey", func() error {
+			_, _, e := c.Integrations.SetInboundSigningKey(ctx, "conn_1", "signing-key-1")
+			return e
+		}, "PUT", "/v1/integrations/connections/conn_1/signing-key", "", []string{`"signing_key":"signing-key-1"`}},
+		{"RotateInboundURL", func() error {
+			_, _, e := c.Integrations.RotateInboundURL(ctx, "conn_1")
+			return e
+		}, "POST", "/v1/integrations/connections/conn_1/rotate-inbound-url", "", nil},
 		{"Test", func() error {
 			_, _, e := c.Integrations.Test(ctx, "conn_1")
 			return e
@@ -1255,5 +1263,34 @@ func TestTeamDecode(t *testing.T) {
 	}
 	if team.Members[0].AddedAt.IsZero() {
 		t.Error("AddedAt did not decode")
+	}
+}
+
+// TestInboundIntegrationDecode covers the two responses that carry an inbound
+// connection's state: the signing-key route answers with the connection (and
+// its display fields say whether a key is set), and the rotate route with the
+// new URL alone.
+func TestInboundIntegrationDecode(t *testing.T) {
+	c := inboxFixtureClient(t, `{"connection": {"id": "conn_1", "provider": "calendly",
+		"display_fields": {"inbound_signing": true},
+		"config_capabilities": {"scheduling_url": "https://cal.example/x"}}}`)
+	conn, _, err := c.Integrations.SetInboundSigningKey(context.Background(), "conn_1", "signing-key-1")
+	if err != nil {
+		t.Fatalf("SetInboundSigningKey: %v", err)
+	}
+	if conn == nil || conn.Provider != ProviderCalendly || !strings.Contains(string(conn.DisplayFields), `"inbound_signing"`) {
+		t.Errorf("connection = %+v", conn)
+	}
+	if strings.Contains(string(conn.ConfigCapabilities), "signing_secret") {
+		t.Errorf("config_capabilities = %s, want no signing secret", conn.ConfigCapabilities)
+	}
+
+	c = inboxFixtureClient(t, `{"inbound_webhook_url": "https://api.example/inbound/calendly/abc"}`)
+	url, _, err := c.Integrations.RotateInboundURL(context.Background(), "conn_1")
+	if err != nil {
+		t.Fatalf("RotateInboundURL: %v", err)
+	}
+	if url != "https://api.example/inbound/calendly/abc" {
+		t.Errorf("url = %q", url)
 	}
 }

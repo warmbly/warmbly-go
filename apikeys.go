@@ -361,6 +361,15 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
 }
 
+// Delete removes a revoked or expired key from the workspace for good, along
+// with its usage logs. A key that could still authenticate is refused with a
+// 409: revoke it first, so what ended the credential stays on the record. A key
+// past its expires_at can be deleted directly. It needs the same API_KEYS scope
+// and manage_api_keys permission as the other key routes.
+func (s *APIKeyService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id)+"/permanent", opts...)
+}
+
 // RevokeSelf revokes the key this client is authenticated with. It is the one
 // key route that needs no scope: a credential must always be able to end
 // itself, which is what a CLI logout promises. The reason is stored on the key

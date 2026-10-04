@@ -5,8 +5,9 @@
 //
 // # Connecting
 //
-// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, or with a
-// session access token. Register handlers first, then open the connection:
+// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, with an
+// OAuth access token, or with the ticket Meta.GatewayTicket mints for a
+// session (a bare session access token is refused). Register handlers first, then open the connection:
 //
 //	client := gateway.New(apiKey, orgID,
 //		gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail))

@@ -564,6 +564,56 @@ func TestDecodeEventPayloads(t *testing.T) {
 		}
 	})
 
+	t.Run("engagement detail and direct email", func(t *testing.T) {
+		var e EngagementEvent
+		decodeInto(t, `{"event_type":"DIRECT_EMAIL_OPENED","org_id":"o_1","email_account_id":"a_1","machine":true,
+			"client":"Gmail","client_type":"webmail","device_hidden":true,"device_type":"desktop","os":"macOS","browser":"Chrome"}`, &e)
+		if e.EventType != EventDirectEmailOpened || e.EmailAccountID != "a_1" || e.CampaignID != "" {
+			t.Errorf("decoded = %+v", e)
+		}
+		if e.ClientType != "webmail" || !e.DeviceHidden || e.OS != "macOS" || e.Browser != "Chrome" {
+			t.Errorf("client detail = %+v", e)
+		}
+	})
+
+	t.Run("task progress counts emails", func(t *testing.T) {
+		var e TaskProgressEvent
+		decodeInto(t, `{"event_type":"TASK_PROGRESS","campaign_id":"c_1","task_id":"t_1","total_contacts":10,"total_emails":30,"processed_count":6,"progress":20}`, &e)
+		if e.TotalEmails != 30 || e.ProcessedCount != 6 || e.Progress != 20 {
+			t.Errorf("decoded = %+v", e)
+		}
+	})
+
+	t.Run("import progress", func(t *testing.T) {
+		var c, m ImportProgressEvent
+		decodeInto(t, `{"event_type":"CONTACT_IMPORT_PROGRESS","org_id":"o_1","import_id":"i_1","status":"queued"}`, &c)
+		decodeInto(t, `{"event_type":"MAILBOX_IMPORT_PROGRESS","org_id":"o_1","import_id":"i_2","status":"a_state_from_the_future"}`, &m)
+		if c.EventType != EventContactImportProgress || c.ImportID != "i_1" || c.Status != ImportStatusQueued || c.OrgID != "o_1" {
+			t.Errorf("contact import = %+v", c)
+		}
+		if m.EventType != EventMailboxImportProgress || m.Status != "a_state_from_the_future" {
+			t.Errorf("mailbox import = %+v: an unknown status must still decode", m)
+		}
+	})
+
+	t.Run("placement", func(t *testing.T) {
+		var test, batch PlacementTestEvent
+		decodeInto(t, `{"event_type":"PLACEMENT_TEST_UPDATED","org_id":"o_1","test_id":"t_1","campaign_id":"c_1","status":"running"}`, &test)
+		decodeInto(t, `{"event_type":"PLACEMENT_TEST_UPDATED","org_id":"o_1","batch_id":"b_1","status":"completed_with_warnings"}`, &batch)
+		if test.TestID != "t_1" || test.CampaignID != "c_1" || test.BatchID != "" || test.Status != PlacementStatusRunning {
+			t.Errorf("test = %+v", test)
+		}
+		if batch.BatchID != "b_1" || batch.TestID != "" || batch.Status != PlacementStatusCompletedWithWarning {
+			t.Errorf("batch = %+v", batch)
+		}
+
+		var seen AccountEvent
+		decodeInto(t, `{"event_type":"WARMUP_PLACEMENT","email_account_id":"a_1","email":"a@b.com","status":"spam"}`, &seen)
+		if seen.EventType != EventWarmupPlacement || seen.Status != "spam" || seen.Email != "a@b.com" {
+			t.Errorf("warmup placement = %+v", seen)
+		}
+	})
+
 	t.Run("rate limited", func(t *testing.T) {
 		var e RateLimited
 		decodeInto(t, `{"category":"ws_message","retry_after_ms":21400}`, &e)
@@ -586,6 +636,38 @@ func TestDecodeEventPayloads(t *testing.T) {
 			t.Errorf("diff = %+v", diff)
 		}
 	})
+}
+
+// TestIntentsSelectTheirOwnFamilies mirrors the server's substring match and
+// checks that each intent constant admits the events it documents and not the
+// look-alikes.
+func TestIntentsSelectTheirOwnFamilies(t *testing.T) {
+	matches := func(intent, event string) bool { return strings.Contains(event, intent) }
+	cases := []struct {
+		intent string
+		in     []EventName
+		out    []EventName
+	}{
+		{IntentPlacement, []EventName{EventPlacementTestUpdated}, []EventName{EventWarmupPlacement, EventAccountSyncState}},
+		{IntentWarmup, []EventName{EventWarmupPlacement}, []EventName{EventPlacementTestUpdated}},
+		{IntentDirectEmail, []EventName{EventDirectEmailOpened, EventDirectEmailClicked}, []EventName{EventEmailOpened, EventEmailReceived}},
+		{IntentMailboxImport, []EventName{EventMailboxImportProgress}, []EventName{EventContactImportProgress}},
+		{IntentContactImport, []EventName{EventContactImportProgress}, []EventName{EventContactCreated, EventMailboxImportProgress}},
+		{IntentEmail, []EventName{EventDirectEmailOpened}, []EventName{EventMailboxImportProgress}},
+		{IntentAI, []EventName{EventAIDraftReady}, []EventName{EventMailboxImportProgress, EventDirectEmailClicked, EventCampaignPaused}},
+	}
+	for _, tc := range cases {
+		for _, ev := range tc.in {
+			if !matches(tc.intent, ev) {
+				t.Errorf("intent %q should admit %s", tc.intent, ev)
+			}
+		}
+		for _, ev := range tc.out {
+			if matches(tc.intent, ev) {
+				t.Errorf("intent %q should not admit %s", tc.intent, ev)
+			}
+		}
+	}
 }
 
 func decodeInto(t *testing.T, raw string, v any) {

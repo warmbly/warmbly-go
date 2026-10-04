@@ -44,6 +44,15 @@ type Session struct {
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// LinkRequired is true when a federated sign-in (Google, Apple or single
+	// sign-on) resolved to an existing password account. The token fields are
+	// then empty and PendingToken is the handle to pass, with that account's
+	// password, to [AuthService.SSOLink]. LinkEmail is the account and
+	// LinkProvider the provider that was used.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -449,6 +458,15 @@ const (
 	// NotifDomainAuth fires when a sending domain starts failing SPF or
 	// DMARC: the warning before the send gate applies.
 	NotifDomainAuth = "health_domain_auth"
+	// NotifPlacementFinished tells whoever started an inbox placement test
+	// where its copies landed.
+	NotifPlacementFinished = "placement_finished"
+	// NotifPlacementAlert fires when a campaign's scheduled placement test
+	// comes back below its alert threshold.
+	NotifPlacementAlert = "placement_alert"
+	// NotifInboxActionRequired fires when automatic tagging finds automated
+	// mail that needs someone to act, such as a failed payment.
+	NotifInboxActionRequired = "inbox_action_required"
 )
 
 // ChannelPrefs are the delivery toggles for one notification category.
@@ -481,6 +499,16 @@ type NotificationPreferences struct {
 	// act.
 	CampaignPaused CategoryPref `json:"campaign_paused"`
 	DomainAuth     CategoryPref `json:"health_domain_auth"`
+	// PlacementFinished tells whoever started an inbox placement test where
+	// its copies landed. PlacementAlert fires when a campaign's scheduled
+	// placement test comes back below its alert threshold, so it emails by
+	// default.
+	PlacementFinished CategoryPref `json:"placement_finished"`
+	PlacementAlert    CategoryPref `json:"placement_alert"`
+	// InboxActionRequired fires when automatic tagging finds automated mail in
+	// a mailbox that needs someone to act, such as a failed payment or a
+	// suspended account, so it emails by default.
+	InboxActionRequired CategoryPref `json:"inbox_action_required"`
 
 	// EmailDigestMinutes bundles pending notification emails into one send.
 	// It must fall within [NotificationEmailDelivery.MinMinutes] and
@@ -933,6 +961,52 @@ func (s *AuthService) VerifyTwoFA(ctx context.Context, pendingToken, code string
 		Code         string `json:"code"`
 	}{PendingToken: pendingToken, Code: code}
 	return send[Session](ctx, s.client.post, "auth/2fa/verify", body, opts)
+}
+
+// RegenerateRecoveryCodes replaces the account's two-factor recovery codes and
+// returns the new set, which is shown exactly once. It needs a current
+// authenticator code or one of the existing recovery codes. Session only.
+func (s *AuthService) RegenerateRecoveryCodes(ctx context.Context, code string, opts ...RequestOption) (*TwoFARecoveryCodes, *Response, error) {
+	body := struct {
+		Code string `json:"code"`
+	}{Code: code}
+	return send[TwoFARecoveryCodes](ctx, s.client.post, "auth/2fa/recovery-codes", body, opts)
+}
+
+// Reauth re-proves the account holder behind the live session and returns how
+// many seconds the confirmation lasts. Changes that hand out a durable
+// credential or cannot be undone, such as creating an API key, adding or
+// removing a passkey, transferring a workspace or scheduling a deletion, fail
+// with [ErrCodeReauthRequired] until it has been given recently. Send the
+// account password, a current two-factor or recovery code, or both. An account
+// with neither a password nor two-factor authentication fails with
+// [ErrCodeReauthNoFactor]. Session only.
+func (s *AuthService) Reauth(ctx context.Context, password, code string, opts ...RequestOption) (time.Duration, *Response, error) {
+	body := struct {
+		Password string `json:"password,omitempty"`
+		Code     string `json:"code,omitempty"`
+	}{Password: password, Code: code}
+	var out struct {
+		ValidForSeconds int `json:"valid_for_seconds"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return time.Duration(out.ValidForSeconds) * time.Second, resp, nil
+}
+
+// SSOLink finishes a federated sign-in that stopped with
+// [Session.LinkRequired]: it takes the pending token and the existing
+// account's password, attaches the provider identity and signs in. An account
+// with two-factor on answers with the usual 2FA challenge instead of tokens.
+// Three wrong passwords end the pending token ([ErrCodeSSOLinkExpired]).
+func (s *AuthService) SSOLink(ctx context.Context, pendingToken, password string, opts ...RequestOption) (*Session, *Response, error) {
+	body := struct {
+		PendingToken string `json:"pending_token"`
+		Password     string `json:"password"`
+	}{PendingToken: pendingToken, Password: password}
+	return send[Session](ctx, s.client.post, "auth/sso/link", body, opts)
 }
 
 // --- passkeys ---
