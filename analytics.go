@@ -200,9 +200,9 @@ type CampaignAnalyticsTotals struct {
 	// UniqueOpens - MachineOpens.
 	MachineOpens int64 `json:"machine_opens"`
 	UniqueClicks int64 `json:"unique_clicks"`
-	// MachineClicks counts steps whose only clicks came from automated
-	// fetchers. They are not part of UniqueClicks, which only ever counts a
-	// person's click.
+	// MachineClicks counts the contacts whose only clicks on a step came from
+	// automated fetchers. They are not part of UniqueClicks, which only ever
+	// counts a person's click.
 	MachineClicks int64   `json:"machine_clicks"`
 	Replies       int64   `json:"replies"`
 	Bounces       int64   `json:"bounces"`
@@ -254,16 +254,18 @@ type WarmupAnalytics struct {
 
 // WarmupSummary is the rollup for a warmup window.
 type WarmupSummary struct {
-	TotalSent    int64   `json:"total_sent"`
-	TotalReplied int64   `json:"total_replied"`
-	AverageDaily float64 `json:"average_daily"`
-	ReplyRate    float64 `json:"reply_rate"`
-	// TargetProgress is how far the ramp has come, from 0 to 1.
+	TotalSent    int64 `json:"total_sent"`
+	TotalReplied int64 `json:"total_replied"`
+	// TotalReceived is verified warmup mail that arrived from partners in the
+	// range: the other half of the exchange, so a mailbox that sends and is
+	// never written to shows in the numbers.
+	TotalReceived int64   `json:"total_received"`
+	AverageDaily  float64 `json:"average_daily"`
+	ReplyRate     float64 `json:"reply_rate"`
+	// TargetProgress is actual sends divided by planned target volume over
+	// the active days, as a percentage (100 means on target).
 	TargetProgress float64 `json:"target_progress"`
 	DaysActive     int     `json:"days_active"`
-	// TotalReceived is verified warmup mail that arrived from partners in the
-	// range: the other half of the exchange.
-	TotalReceived int64 `json:"total_received"`
 }
 
 // WarmupDailyStat is one day of warmup volume against its target.
@@ -453,7 +455,8 @@ type WarmupStatus struct {
 	CurrentVolume int `json:"current_volume"`
 	TargetVolume  int `json:"target_volume"`
 	MaxVolume     int `json:"max_volume"`
-	// ReplyRate is the configured warmup reply percentage.
+	// ReplyRate is the configured share of warmup sends that receive
+	// synthetic replies, as a percentage.
 	ReplyRate  int `json:"reply_rate"`
 	DaysActive int `json:"days_active"`
 	// RampHold explains a ramp that is not climbing, so a TargetVolume below
@@ -521,6 +524,11 @@ type WarmupRampHold struct {
 
 // WarmupHealth is a mailbox's standing in the warmup pool.
 type WarmupHealth struct {
+	// PoolType is the pool the mailbox warms in: "premium" or "free".
+	PoolType string `json:"pool_type,omitempty"`
+	// Source is "cloud" when Warmbly Cloud warms the mailbox and reported
+	// this standing, empty for the instance's own pool.
+	Source string `json:"source,omitempty"`
 	// State is one of the Band* constants.
 	State string `json:"state"`
 	// Score runs 0 to 100, higher being healthier.
@@ -531,11 +539,6 @@ type WarmupHealth struct {
 	SpamScore    int        `json:"spam_score"`
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
-	// PoolType is the pool the mailbox warms in: premium or free.
-	PoolType string `json:"pool_type,omitempty"`
-	// Source is "cloud" when Warmbly Cloud warms the mailbox and reported this
-	// standing; empty for this instance's own pool.
-	Source string `json:"source,omitempty"`
 	// Partner diversity counts confirmed warmup deliveries over seven days.
 	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
 	PartnerDomains7d       int `json:"partner_domains_7d"`
@@ -647,9 +650,23 @@ func (s *AnalyticsService) Dashboard(ctx context.Context, period string, opts ..
 	return fetch[DashboardAnalytics](ctx, s.client, withQuery("analytics/dashboard", q), opts)
 }
 
-// Campaign returns one campaign's engagement, broken down by step.
+// Campaign returns one campaign's engagement over its whole life, broken down
+// by step. Use [AnalyticsService.CampaignRange] to scope it to a period.
 func (s *AnalyticsService) Campaign(ctx context.Context, id string, opts ...RequestOption) (*CampaignAnalytics, *Response, error) {
 	return fetch[CampaignAnalytics](ctx, s.client, "analytics/campaigns/"+url.PathEscape(id), opts)
+}
+
+// CampaignRange is [AnalyticsService.Campaign] scoped to the emails sent
+// between two calendar days (UTC, both included). The summary, the step
+// performance, the engagement breakdown and the daily series all read the
+// same days; TotalContacts and EmailsPending stay campaign-wide, and
+// [CampaignAnalytics.DateRange] reports the resolved period. The server needs
+// both days or neither (a lone one is a 400), and from must not be after to.
+func (s *AnalyticsService) CampaignRange(ctx context.Context, id string, from, to time.Time, opts ...RequestOption) (*CampaignAnalytics, *Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "from", formatDay(from))
+	setNonEmpty(q, "to", formatDay(to))
+	return fetch[CampaignAnalytics](ctx, s.client, withQuery("analytics/campaigns/"+url.PathEscape(id), q), opts)
 }
 
 // CampaignDaily returns a campaign's day-by-day engagement over a date range.
@@ -693,9 +710,28 @@ func (s *AnalyticsService) Deliverability(ctx context.Context, from, to time.Tim
 	return fetch[DeliverabilityDashboard](ctx, s.client, withQuery("analytics/deliverability", q), opts)
 }
 
-// Accounts returns the operational status of every mailbox.
+// Accounts returns the operational status of every mailbox. The server
+// answers in pages of up to [AccountStatusMaxLimit], so this follows the
+// cursor until the whole inventory is read; the returned [Response] is the
+// last page's. For a very large inventory, or to read only some mailboxes,
+// use [AnalyticsService.AccountsPage].
 func (s *AnalyticsService) Accounts(ctx context.Context, opts ...RequestOption) ([]AccountStatus, *Response, error) {
-	return fetchData[AccountStatus](ctx, s.client, "analytics/accounts", opts)
+	page, err := s.AccountsPage(ctx, nil, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := []AccountStatus{}
+	for {
+		out = append(out, page.Data...)
+		if !page.HasMore() {
+			return out, page.Response(), nil
+		}
+		next, err := page.Next(ctx)
+		if err != nil {
+			return nil, page.Response(), err
+		}
+		page = next
+	}
 }
 
 // Account returns one mailbox's operational status, including its warmup

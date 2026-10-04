@@ -85,6 +85,44 @@ func ExampleWithIdempotencyKey() {
 	fmt.Println("queued", result.TaskID, "for", result.ScheduledAt.Format(time.RFC3339))
 }
 
+// A placement batch tests one copy from many senders. Preview it first: the
+// preview starts nothing and says how many tests, sends and credits it comes
+// to. Then create it and poll until it finishes.
+func ExamplePlacementService_CreateBatch() {
+	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
+	ctx := context.Background()
+
+	params := &warmbly.PlacementBatchParams{
+		SenderScope: &warmbly.PlacementSenderScope{Type: warmbly.PlacementScopeWorkspace, UntestedDays: 30},
+		Sample:      &warmbly.PlacementSample{Mode: warmbly.PlacementSamplePercent, Percent: 10, Stratify: "provider"},
+		Subject:     "Quick question",
+		BodyPlain:   "Hi {{first_name}}, ...",
+		Tracking:    warmbly.PlacementTrackingOn,
+		MaxCredits:  20,
+	}
+	preview, _, err := client.Placement.PreviewBatch(ctx, params)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%d senders, %d tests, up to %d credits\n", preview.Selected, preview.Tests, preview.Credits)
+
+	batch, _, err := client.Placement.CreateBatch(ctx, params, warmbly.WithIdempotencyKey("placement-2026-09-14"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for !batch.Status.Finished() {
+		time.Sleep(30 * time.Second)
+		detail, _, err := client.Placement.GetBatch(ctx, batch.ID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		batch = &detail.PlacementBatch
+	}
+	if rate := batch.Summary.InboxRate; rate != nil {
+		fmt.Printf("inbox rate %.0f%%\n", *rate*100)
+	}
+}
+
 // Verify every webhook delivery before trusting its payload.
 func ExampleWebhookService_ConstructEvent() {
 	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))

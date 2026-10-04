@@ -255,6 +255,9 @@ const (
 	// LeadHoldInboxTagging is a hold a classified reply wrote: "not now" for a
 	// while, or a decline with no end.
 	LeadHoldInboxTagging = "inbox_tagging"
+	// LeadHoldCC holds a contact's own lead while they are copied on another
+	// lead's thread in the same campaign, so they never get two sequences.
+	LeadHoldCC = "cc"
 )
 
 // LeadHold is one contact's flow parked inside one campaign. It resumes where

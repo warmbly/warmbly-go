@@ -322,7 +322,6 @@ type Step struct {
 	// Position is the step's zero-based index in the sequence. It orders the
 	// canvas and picks the entry step; it never advances a contact by itself.
 	Position int `json:"position"`
-
 	// X and Y are the step's coordinates on the sequence canvas. They are
 	// written only through [CampaignService.UpdateStepLayout].
 	X float64 `json:"x"`
@@ -361,7 +360,6 @@ type StepUpdateParams struct {
 	BodySync  *bool   `json:"body_sync,omitempty"`
 	BodyCode  *bool   `json:"body_code,omitempty"`
 	WaitAfter *int    `json:"wait_after,omitempty"`
-
 	// Conditions replaces the step's outgoing connections when non-nil. Send
 	// an empty object to remove them all, after which the contact's flow ends
 	// at this step.
@@ -417,12 +415,18 @@ type CampaignFolderCount struct {
 	Total    int64  `json:"total"`
 }
 
-// CampaignEstimateParams projects an audience against a sender pool before a
-// campaign exists. Only SegmentIDs is required. Nothing is written.
+// CampaignEstimateParams projects an audience against a sender pool, before
+// a campaign exists or for a saved one. Nothing is written. Name the audience
+// with SegmentIDs, or project a saved campaign with CampaignID, which fills
+// in anything not sent from it.
 type CampaignEstimateParams struct {
 	// SegmentIDs make up the audience (at most 20). A contact in several of
-	// them is counted once.
-	SegmentIDs []string `json:"segment_ids"`
+	// them, or already a lead of CampaignID, is counted once.
+	SegmentIDs []string `json:"segment_ids,omitempty"`
+	// CampaignID projects a saved campaign: its own leads, hand-picked
+	// senders, daily limit, days and sending window stand in for whatever is
+	// not sent here.
+	CampaignID *string `json:"campaign_id,omitempty"`
 	// EmailTagIDs resolve the mailbox pool. Empty means every active mailbox
 	// in the organization.
 	EmailTagIDs []string `json:"email_tag_ids,omitempty"`
@@ -432,7 +436,8 @@ type CampaignEstimateParams struct {
 	// Days is the weekday bitmask of sending days, bit 0 being Monday.
 	// Defaults to weekdays.
 	Days *uint8 `json:"days,omitempty"`
-	// Timezone is the IANA timezone the days are counted in. Defaults to UTC.
+	// Timezone is the IANA timezone the days are counted in. Defaults to the
+	// workspace timezone.
 	Timezone *string `json:"timezone,omitempty"`
 	// StartDate is when sending begins. Omit for now.
 	StartDate *time.Time `json:"start_date,omitempty"`
@@ -443,8 +448,6 @@ type CampaignEstimateParams struct {
 	// StepWaits is each follow-up's wait_after, in days and in order, at most
 	// [CampaignEstimateStepsMax]. Empty is a single email.
 	StepWaits []int `json:"step_waits,omitempty"`
-	// CampaignID projects a saved campaign, filling anything not sent from it.
-	CampaignID *string `json:"campaign_id,omitempty"`
 }
 
 // CampaignEstimateStepsMax bounds [CampaignEstimateParams.StepWaits], the
@@ -484,8 +487,8 @@ const (
 type CampaignEstimateResult struct {
 	Recipients int `json:"recipients"`
 	Mailboxes  int `json:"mailboxes"`
-	// DailyCapacity is the pool's per-day ceiling under the campaign limit;
-	// RemainingToday subtracts what the mailboxes already sent today.
+	// DailyCapacity is the pool's per-day ceiling under the campaign limit
+	// today; RemainingToday subtracts what the mailboxes already sent today.
 	DailyCapacity  int `json:"daily_capacity"`
 	RemainingToday int `json:"remaining_today"`
 	// SendingDays is how many sending days the audience needs and
@@ -948,7 +951,7 @@ type StepInput struct {
 // zero value is never mistaken for "clear this".
 //
 // Changing any schedule field (StartDate, EndDate, Timezone, Days, StartTime,
-// EndTime, ScheduleWindows) on an active campaign reschedules its next send
+// EndTime, ScheduleWindows, EntryDelayMinutes) on an active campaign reschedules its next send
 // immediately. The explicit sender list is not editable here; use
 // [CampaignService.ReplaceSenders]. Linked segments live under
 // [CampaignService.SetSegments].
@@ -1105,10 +1108,10 @@ func (s *CampaignService) Overview(ctx context.Context, opts ...RequestOption) (
 	return fetch[CampaignsOverview](ctx, s.client, "campaigns-overview", opts)
 }
 
-// Estimate projects an audience of segments against a sender pool before a
-// campaign exists: how many contacts it resolves to, the pool's daily
-// capacity and the day the last send is expected to land. It writes nothing,
-// so it needs no idempotency key.
+// Estimate projects an audience of segments (or a saved campaign) against a
+// sender pool: how many contacts it resolves to, the pool's daily capacity,
+// the day-by-day simulation under the scheduler's clamps and the day the last
+// send is expected to land. It writes nothing, so it needs no idempotency key.
 func (s *CampaignService) Estimate(ctx context.Context, params *CampaignEstimateParams, opts ...RequestOption) (*CampaignEstimateResult, *Response, error) {
 	return send[CampaignEstimateResult](ctx, s.client.post, "campaigns-estimate", params, opts)
 }
@@ -1159,7 +1162,9 @@ func (s *CampaignService) Duplicate(ctx context.Context, id string, params *Camp
 // campaign's activity log. Adding a lead by any path then wakes it.
 //
 // The start can be refused with [ErrCodeListBounceRisk],
-// [ErrCodeLeadsUndeliverable] or [ErrCodeNoLeads] in [Error.Code]; see
+// [ErrCodeLeadsUndeliverable] or [ErrCodeNoLeads] in [Error.Code]; an email
+// step with no body to render, or a template syntax error in a step, is
+// refused with a 400 as well ("empty_step_body" for the first). See
 // [CampaignService.StartWithOptions] to launch past the bounce-risk gate.
 func (s *CampaignService) Start(ctx context.Context, id string, opts ...RequestOption) (*CampaignStatusChange, *Response, error) {
 	return s.StartWithOptions(ctx, id, nil, opts...)
@@ -1285,8 +1290,7 @@ func (s *CampaignService) ListSteps(ctx context.Context, id string, opts ...Requ
 
 // CreateStep appends a blank step to the campaign's sequence. Fill it in with
 // [CampaignService.UpdateStep]. New steps are not connected to anything: wire
-// them in through the previous step's Conditions. A one-time campaign refuses
-// a second email step.
+// them in through the previous step's Conditions.
 func (s *CampaignService) CreateStep(ctx context.Context, id string, opts ...RequestOption) (*Step, *Response, error) {
 	return send[Step](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", nil, opts)
 }

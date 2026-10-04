@@ -60,6 +60,8 @@ type Client struct {
 	Contacts *ContactService
 	// Segments are saved contact audiences evaluated live.
 	Segments *SegmentService
+	// Placement runs inbox placement tests and batches against seed inboxes.
+	Placement *PlacementService
 	// Suppressions is the workspace's do-not-contact list.
 	Suppressions *SuppressionService
 	// Forms are hosted lead-capture forms and their submissions.
@@ -186,6 +188,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Campaigns = (*CampaignService)(&c.common)
 	c.Contacts = (*ContactService)(&c.common)
 	c.Segments = (*SegmentService)(&c.common)
+	c.Placement = (*PlacementService)(&c.common)
 	c.Suppressions = (*SuppressionService)(&c.common)
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
