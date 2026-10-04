@@ -86,8 +86,12 @@ type LeadSyncSource struct {
 
 	// TargetCampaignID, when set, enrolls every new or updated lead in that
 	// campaign on each sync.
-	TargetCampaignID  *string  `json:"target_campaign_id,omitempty"`
-	CategoryIDs       []string `json:"category_ids"`
+	TargetCampaignID *string  `json:"target_campaign_id,omitempty"`
+	CategoryIDs      []string `json:"category_ids"`
+	// SegmentIDs pins every synced row into these segments as an include
+	// override on every run, the same write a file import's segment targets do.
+	// A segment deleted later is dropped from the run rather than failing it.
+	SegmentIDs        []string `json:"segment_ids"`
 	SubscribedDefault bool     `json:"subscribed_default"`
 
 	Label string `json:"label,omitempty"`
@@ -119,8 +123,11 @@ type LeadSyncCreateParams struct {
 	// Dedup is one of the ImportDedup* constants.
 	Dedup string `json:"dedup,omitempty"`
 
-	TargetCampaignID  *string  `json:"target_campaign_id,omitempty"`
-	CategoryIDs       []string `json:"category_ids,omitempty"`
+	TargetCampaignID *string  `json:"target_campaign_id,omitempty"`
+	CategoryIDs      []string `json:"category_ids,omitempty"`
+	// SegmentIDs are segments every synced row is pinned into. Each id must
+	// name a segment in the workspace or the save is a 400.
+	SegmentIDs        []string `json:"segment_ids,omitempty"`
 	SubscribedDefault *bool    `json:"subscribed_default,omitempty"`
 	Label             string   `json:"label,omitempty"`
 }
@@ -140,8 +147,11 @@ type LeadSyncUpdateParams struct {
 	TargetCampaignID *string `json:"target_campaign_id,omitempty"`
 	// ClearCampaign detaches the target campaign. Use it instead of a nil
 	// TargetCampaignID, which means "leave unchanged".
-	ClearCampaign     bool      `json:"clear_campaign,omitempty"`
-	CategoryIDs       *[]string `json:"category_ids,omitempty"`
+	ClearCampaign bool      `json:"clear_campaign,omitempty"`
+	CategoryIDs   *[]string `json:"category_ids,omitempty"`
+	// SegmentIDs replaces the segment targets. An unknown id is a 400; a
+	// pointer to an empty slice clears them.
+	SegmentIDs        *[]string `json:"segment_ids,omitempty"`
 	SubscribedDefault *bool     `json:"subscribed_default,omitempty"`
 	Label             *string   `json:"label,omitempty"`
 }

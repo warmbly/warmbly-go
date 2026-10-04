@@ -571,3 +571,54 @@ func TestCampaignEstimateResultDecodesProjection(t *testing.T) {
 		}
 	}
 }
+
+// TestOutreachSettingsRoundTripInboxTagging guards the wholesale-replace
+// contract: a Get followed by an Update must carry the inbox tagging section
+// and the task intents back unchanged, or the update would reset them.
+func TestOutreachSettingsRoundTripInboxTagging(t *testing.T) {
+	const stored = `{"reply_intent": {"enabled": true, "auto_create_crm_task": true,
+			"crm_task_intents": ["positive", "question"], "hold_on_out_of_office": true, "out_of_office_hold_days": 10},
+		"inbox_tagging": {"hold_on_not_now": true, "not_now_hold_days": 21, "stop_on_declined": true,
+			"questions": [{"id": "q1", "type": "choice", "question": "Which plan?", "action": {"type": ""},
+				"choices": [{"label": "Pro", "description": "wants pro", "action": {"type": "hold", "hold_days": 30}}]}],
+			"languages": ["en", "de"], "action_required_in_inbox": true}}`
+	var got recordedRequest
+	c := accountServer(t, stored, &got)
+	s, _, err := c.Outreach.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := s.ReplyIntent.CRMTaskIntents; len(got) != 2 || got[0] != ReplyIntentPositive {
+		t.Errorf("CRMTaskIntents = %v", got)
+	}
+	if !s.ReplyIntent.HoldOnOutOfOffice || s.ReplyIntent.OutOfOfficeHoldDays != 10 {
+		t.Errorf("reply intent = %+v", s.ReplyIntent)
+	}
+	it := s.InboxTagging
+	if !it.HoldOnNotNow || it.NotNowHoldDays != 21 || !it.StopOnDeclined || !it.ActionRequiredInInbox || len(it.Languages) != 2 {
+		t.Errorf("inbox tagging = %+v", it)
+	}
+	if len(it.Questions) != 1 || it.Questions[0].Type != InboxTagQuestionChoice || it.Questions[0].Choices[0].Action.Type != InboxTagActionHold {
+		t.Errorf("questions = %+v", it.Questions)
+	}
+
+	if _, err := c.Outreach.Update(context.Background(), s); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for _, want := range []string{`"crm_task_intents":["positive","question"]`, `"not_now_hold_days":21`, `"hold_days":30`, `"languages":["en","de"]`} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("update body is missing %s: %s", want, got.body)
+		}
+	}
+
+	// An unset list is sent as null (the server default); an explicit empty list
+	// stays empty (none).
+	body, _ := json.Marshal(ReplyIntentSettings{})
+	if !strings.Contains(string(body), `"crm_task_intents":null`) {
+		t.Errorf("nil intents = %s", body)
+	}
+	body, _ = json.Marshal(ReplyIntentSettings{CRMTaskIntents: []string{}})
+	if !strings.Contains(string(body), `"crm_task_intents":[]`) {
+		t.Errorf("empty intents = %s", body)
+	}
+}

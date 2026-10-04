@@ -229,6 +229,9 @@ type Form struct {
 	// CaptchaEnabled adds a Cloudflare Turnstile challenge. It only takes
 	// effect when [FormsConfig.CaptchaAvailable] is true for the instance.
 	CaptchaEnabled bool `json:"captcha_enabled"`
+	// TriageEnabled classifies each submission (see [FormSubmission.Triage]);
+	// junk is kept but creates no contact and joins no campaign.
+	TriageEnabled bool `json:"triage_enabled"`
 
 	// LogoURL, CoverURL and BackgroundURL are the public object URLs of the
 	// uploaded brand assets; empty when none is set. Change them with
@@ -402,6 +405,8 @@ type FormUpdateParams struct {
 	CategoryIDs    *[]string `json:"category_ids,omitempty"`
 	AllowedDomains *[]string `json:"allowed_domains,omitempty"`
 	CaptchaEnabled *bool     `json:"captcha_enabled,omitempty"`
+	// TriageEnabled classifies each submission; see [Form.TriageEnabled].
+	TriageEnabled *bool `json:"triage_enabled,omitempty"`
 }
 
 // MarshalJSON emits campaign_id as an explicit null when ClearCampaign is set,
@@ -448,8 +453,14 @@ type FormSubmission struct {
 	Data map[string]any `json:"data"`
 	// SourceURL is the page the form was submitted from (the host page for
 	// an embed, the hosted page otherwise).
-	SourceURL string    `json:"source_url"`
-	CreatedAt time.Time `json:"created_at"`
+	SourceURL string `json:"source_url"`
+	// Triage is the verdict when the form triages submissions, one of the
+	// FormTriage* constants (or a value this SDK predates). It is empty when
+	// the form did not triage or the classification did not complete.
+	// TriageConfidence is the classifier's own confidence.
+	Triage           string    `json:"triage"`
+	TriageConfidence float64   `json:"triage_confidence"`
+	CreatedAt        time.Time `json:"created_at"`
 
 	// ContactEmail, ContactName and CampaignName are display summaries of
 	// the linked records, resolved at read time; empty when unlinked.
@@ -457,6 +468,17 @@ type FormSubmission struct {
 	ContactName  string `json:"contact_name,omitempty"`
 	CampaignName string `json:"campaign_name,omitempty"`
 }
+
+// Verdicts of [FormSubmission.Triage].
+const (
+	FormTriageBuyer     = "buyer"
+	FormTriageVendor    = "vendor"
+	FormTriageJobSeeker = "job_seeker"
+	FormTriageOther     = "other"
+	// FormTriageJunk submissions are kept but create no contact and join no
+	// campaign.
+	FormTriageJunk = "junk"
+)
 
 // FormSubmissionListParams control [FormService.ListSubmissions]. Submissions
 // are keyset-paginated newest first on created_at rather than by opaque

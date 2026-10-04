@@ -615,6 +615,11 @@ type CampaignSegmentLink struct {
 type CampaignSegmentsResult struct {
 	Segments []CampaignSegmentLink `json:"data"`
 	Added    int                   `json:"added"`
+	// Withdrawn is how many leads were removed because the link that brought
+	// them was detached. Contacted is the part of that audience the campaign
+	// had already written to, which stays.
+	Withdrawn int `json:"withdrawn"`
+	Contacted int `json:"contacted"`
 }
 
 // CampaignFormStats is one form the campaign's emails link to, with what the

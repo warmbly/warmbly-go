@@ -34,6 +34,11 @@ func TestEmailSyncRouting(t *testing.T) {
 		{"Release", func() error { _, _, e := c.Emails.Release(ctx, "em_1"); return e }, "POST", "/v1/emails/em_1/release", ""},
 		{"RefreshAuthCheck", func() error { _, _, e := c.Emails.RefreshAuthCheck(ctx, "em_1"); return e }, "POST", "/v1/emails/em_1/auth-check", ""},
 		{"SyncStatus", func() error { _, _, e := c.Emails.SyncStatus(ctx, "em_1"); return e }, "GET", "/v1/emails/em_1/sync", ""},
+		{"SetSyncSkipFolders", func() error {
+			_, _, e := c.Emails.SetSyncSkipFolders(ctx, "em_1", []string{"Newsletters"})
+			return e
+		}, "PUT", "/v1/emails/em_1/sync", `"skip_folders":["Newsletters"]`},
+		{"SetDirectTracking", func() error { _, _, e := c.Emails.SetDirectTracking(ctx, "em_1", true); return e }, "PATCH", "/v1/emails/em_1/direct-tracking", `"enabled":true`},
 		{"Behavior", func() error { _, _, e := c.Emails.Behavior(ctx, "em_1"); return e }, "GET", "/v1/emails/em_1/behavior", ""},
 		{"UpdateBehavior", func() error {
 			_, _, e := c.Emails.UpdateBehavior(ctx, "em_1", &SendingBehaviorUpdateParams{Enabled: Bool(true), Weekdays: Int(BehaviorWeekdays)})
@@ -551,5 +556,41 @@ func TestEmailBehaviorUpdateOmitsUnsetFields(t *testing.T) {
 	}
 	if string(b) != `{"lunch_enabled":false}` {
 		t.Errorf("body = %s", b)
+	}
+}
+
+// TestEmailDecodesFilingIdentityAndSyncFolders covers the mailbox fields added
+// with warmup filing, send-as aliases, mail host detection and folder skipping.
+func TestEmailDecodesFilingIdentityAndSyncFolders(t *testing.T) {
+	var e Email
+	if err := json.Unmarshal([]byte(`{"id":"em_1","send_as_email":"sales@example.com","mail_host":"google_workspace",
+		"auth_method":"delegated","domain_grant_id":"gr_1","vendor":"inboxkit","vendor_connection_id":"vc_1","avatar_url":"https://x/y.png",
+		"track_direct_mail":true,"warmup_placement":"archive","warmup_folder":"","warmup_retention_days":14,"relay_folder_moves":true}`), &e); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if e.SendAsEmail != "sales@example.com" || e.MailHost != MailHostGoogleWorkspace || e.AuthMethod != MailAuthDelegated {
+		t.Errorf("identity = %+v", e)
+	}
+	if e.DomainGrantID == nil || *e.DomainGrantID != "gr_1" || e.Vendor != "inboxkit" || e.VendorConnectionID == nil {
+		t.Errorf("source = %+v", e)
+	}
+	if !e.TrackDirectMail || e.WarmupPlacement != WarmupPlacementArchive || e.WarmupRetentionDays != 14 || !e.RelayFolderMoves {
+		t.Errorf("settings = %+v", e)
+	}
+
+	body, err := json.Marshal(EmailUpdateParams{WarmupPlacement: String(WarmupPlacementInbox), SendAsEmail: String("")})
+	if err != nil || !strings.Contains(string(body), `"warmup_placement":"inbox"`) || !strings.Contains(string(body), `"send_as_email":""`) {
+		t.Errorf("update body = %s (%v)", body, err)
+	}
+
+	c := emailFixtureClient(t, http.StatusOK, `{"state": null,
+		"policy": {"backfill_days": 90, "backfill_messages": 5000, "daily_messages": 2000, "org_daily_messages": 25000, "skip_folders": ["Newsletters"]},
+		"skip_folders": ["Newsletters"], "folders": [{"name": "INBOX", "folder": "inbox"}, {"name": "Newsletters", "folder": ""}]}`, nil)
+	sync, _, err := c.Emails.SyncStatus(context.Background(), "em_1")
+	if err != nil {
+		t.Fatalf("SyncStatus: %v", err)
+	}
+	if len(sync.SkipFolders) != 1 || len(sync.Folders) != 2 || sync.Folders[0].Folder != "inbox" || len(sync.Policy.SkipFolders) != 1 {
+		t.Errorf("sync = %+v", sync)
 	}
 }
