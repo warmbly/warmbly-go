@@ -194,6 +194,16 @@ type ContactCampaignProgress struct {
 	// FailureReason is the sending worker's reason for the last failed send.
 	// Set only when Status is [LeadStatusFailed].
 	FailureReason string `json:"failure_reason,omitempty"`
+	// Sender is the mailbox address this lead's whole sequence sends from,
+	// fixed when its first email went out. Empty until then.
+	Sender string `json:"sender,omitempty"`
+	// Hold is the per-lead pause, set only while it is live. It is present on
+	// any status: a held lead that has also replied still reads
+	// [LeadStatusReplied]. See [CampaignService.PauseLead].
+	Hold *LeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this campaign.
+	// See [CampaignService.SetLeadCC].
+	CC []CampaignLeadCC `json:"cc,omitempty"`
 }
 
 // ContactEngagement summarizes every email touchpoint recorded for a contact.

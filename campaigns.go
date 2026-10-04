@@ -47,16 +47,6 @@ const (
 	CampaignStatusStopped             = "stopped"
 )
 
-// Campaign kinds returned in [Campaign.Kind]. The kind is fixed at creation.
-const (
-	// CampaignKindSequence is the multi-step default.
-	CampaignKindSequence = "sequence"
-	// CampaignKindOneTime is a single message with no follow-ups. It is a
-	// normal campaign underneath (same pool, caps, suppression and analytics)
-	// but accepts at most one email step and refuses further ones.
-	CampaignKindOneTime = "one_time"
-)
-
 // Sender-selection strategies for [Campaign.SenderStrategy].
 const (
 	// SenderStrategyTags resolves the sending pool from the mailbox tags in
@@ -132,8 +122,6 @@ type Campaign struct {
 	Description string `json:"description"`
 	// Status is one of the CampaignStatus* constants.
 	Status string `json:"status"`
-	// Kind is [CampaignKindSequence] or [CampaignKindOneTime].
-	Kind string `json:"kind"`
 
 	// StopOnReply halts a contact's sequence as soon as they reply.
 	StopOnReply bool `json:"stop_on_reply"`
@@ -164,8 +152,13 @@ type Campaign struct {
 	// a nil StartDate means "start now" and a nil EndDate means open-ended.
 	StartDate *time.Time `json:"start_date"`
 	EndDate   *time.Time `json:"end_date"`
-	// Timezone is the IANA timezone the schedule is interpreted in.
+	// Timezone is the IANA timezone the schedule is interpreted in. It is
+	// empty when the campaign follows the workspace timezone;
+	// EffectiveTimezone is the zone in use either way.
 	Timezone string `json:"timezone"`
+	// EffectiveTimezone is the zone the schedule is actually read in: the
+	// campaign's own Timezone when set, else the workspace's.
+	EffectiveTimezone string `json:"effective_timezone"`
 	// Days is a legacy weekday bitmask (bit 0 is Monday), superseded by
 	// ScheduleWindows.
 	Days uint8 `json:"days"`
@@ -211,6 +204,11 @@ type Campaign struct {
 	// MaxNewLeadsPerDay throttles newly enrolled contacts; 0 means unlimited.
 	MaxNewLeadsPerDay  int  `json:"max_new_leads_per_day"`
 	PrioritizeNewLeads bool `json:"prioritize_new_leads"`
+
+	// EntryDelayMinutes holds a contact's first email back for this long
+	// after they entered the campaign; 0 means the first email is due
+	// immediately.
+	EntryDelayMinutes int `json:"entry_delay_minutes"`
 
 	// Continuous keeps the campaign active when it runs out of leads: instead
 	// of completing it waits, with IdleSince set, and sends the sequence to
@@ -309,6 +307,13 @@ type Step struct {
 	// Position is the step's zero-based index in the sequence. It orders the
 	// canvas and picks the entry step; it never advances a contact by itself.
 	Position int `json:"position"`
+	// ThreadReply sends this step as a reply in the conversation the
+	// contact's earlier email from this campaign started (In-Reply-To and
+	// References, plus the provider's thread handle) instead of opening a new
+	// one. It only has an effect once the contact has been sent an email by
+	// the campaign, and a threading step sends under the conversation's
+	// subject rather than its own.
+	ThreadReply bool `json:"thread_reply"`
 
 	// X and Y are the step's coordinates on the sequence canvas. They are
 	// written only through [CampaignService.UpdateStepLayout].
@@ -342,6 +347,8 @@ type StepUpdateParams struct {
 	BodySync  *bool   `json:"body_sync,omitempty"`
 	BodyCode  *bool   `json:"body_code,omitempty"`
 	WaitAfter *int    `json:"wait_after,omitempty"`
+	// ThreadReply toggles reply-in-thread; see [Step.ThreadReply].
+	ThreadReply *bool `json:"thread_reply,omitempty"`
 
 	// Conditions replaces the step's outgoing connections when non-nil. Send
 	// an empty object to remove them all, after which the contact's flow ends
@@ -349,7 +356,6 @@ type StepUpdateParams struct {
 	Conditions json.RawMessage `json:"conditions,omitempty"`
 
 	// Kind and Action switch the node between an email and an action or wait.
-	// A one-time campaign refuses a second email step.
 	Kind   *string         `json:"kind,omitempty"`
 	Action json.RawMessage `json:"action,omitempty"`
 }
@@ -375,15 +381,13 @@ type CampaignLogEntry struct {
 }
 
 // CampaignsOverview backs the campaigns browser: status-bucket counts across
-// the organization plus per-folder totals. Paused sums every paused_* variant;
-// OneTime counts campaigns of [CampaignKindOneTime] whatever their status.
+// the organization plus per-folder totals. Paused sums every paused_* variant.
 type CampaignsOverview struct {
 	Total     int64                 `json:"total"`
 	Active    int64                 `json:"active"`
 	Paused    int64                 `json:"paused"`
 	Draft     int64                 `json:"draft"`
 	Completed int64                 `json:"completed"`
-	OneTime   int64                 `json:"one_time"`
 	Folders   []CampaignFolderCount `json:"folders"`
 }
 
@@ -393,12 +397,18 @@ type CampaignFolderCount struct {
 	Total    int64  `json:"total"`
 }
 
-// CampaignEstimateParams projects an audience against a sender pool before a
-// campaign exists. Only SegmentIDs is required. Nothing is written.
+// CampaignEstimateParams projects an audience against a sender pool, before
+// a campaign exists or for a saved one. Nothing is written. Name the audience
+// with SegmentIDs, or project a saved campaign with CampaignID, which fills
+// in anything not sent from it.
 type CampaignEstimateParams struct {
 	// SegmentIDs make up the audience (at most 20). A contact in several of
-	// them is counted once.
-	SegmentIDs []string `json:"segment_ids"`
+	// them, or already a lead of CampaignID, is counted once.
+	SegmentIDs []string `json:"segment_ids,omitempty"`
+	// CampaignID projects a saved campaign: its own leads, hand-picked
+	// senders, daily limit, days and sending window stand in for whatever is
+	// not sent here.
+	CampaignID *string `json:"campaign_id,omitempty"`
 	// EmailTagIDs resolve the mailbox pool. Empty means every active mailbox
 	// in the organization.
 	EmailTagIDs []string `json:"email_tag_ids,omitempty"`
@@ -408,20 +418,60 @@ type CampaignEstimateParams struct {
 	// Days is the weekday bitmask of sending days, bit 0 being Monday.
 	// Defaults to weekdays.
 	Days *uint8 `json:"days,omitempty"`
-	// Timezone is the IANA timezone the days are counted in. Defaults to UTC.
+	// Timezone is the IANA timezone the days are counted in. Defaults to the
+	// workspace timezone.
 	Timezone *string `json:"timezone,omitempty"`
 	// StartDate is when sending begins. Omit for now.
 	StartDate *time.Time `json:"start_date,omitempty"`
+	// StartTime and EndTime are the daily sending window as "HH:MM", with
+	// EndTime after StartTime. They default to 08:00 and 18:00 (or the saved
+	// campaign's window).
+	StartTime *string `json:"start_time,omitempty"`
+	EndTime   *string `json:"end_time,omitempty"`
+	// StepWaits is each follow-up's wait in days (0 to 365), in order, at most
+	// [CampaignEstimateMaxSteps] of them. Empty projects a single email.
+	StepWaits []int `json:"step_waits,omitempty"`
 }
 
-// CampaignEstimateResult is the projection from [CampaignService.Estimate]. It
-// applies the scheduler's cap rule but none of its pacing, so it is the
-// earliest the last send can land, not a promise.
+// CampaignEstimateMaxSteps is the most follow-ups one estimate simulates.
+const CampaignEstimateMaxSteps = 30
+
+// Bottlenecks of a campaign estimate ([CampaignEstimateResult.Bottleneck]).
+// Unknown values decode unchanged.
+const (
+	EstimateBottleneckCampaignLimit   = "campaign_limit"
+	EstimateBottleneckGraduation      = "warmup_graduation"
+	EstimateBottleneckSpacing         = "spacing"
+	EstimateBottleneckOtherCampaigns  = "other_campaigns"
+	EstimateBottleneckHealth          = "health"
+	EstimateBottleneckHeld            = "held"
+	EstimateBottleneckWorkspaceRisk   = "workspace_risk"
+	EstimateBottleneckOrgDailyLimit   = "org_daily_limit"
+	EstimateBottleneckSendingBehavior = "sending_behavior"
+)
+
+// Sender states of a campaign estimate ([CampaignEstimateSender.State]).
+// Unknown values decode unchanged.
+const (
+	EstimateSenderReady      = "ready"
+	EstimateSenderRamping    = "ramping"
+	EstimateSenderThrottled  = "throttled"
+	EstimateSenderHealthHold = "health_hold"
+	EstimateSenderDomainAuth = "domain_auth"
+	EstimateSenderResting    = "resting"
+	EstimateSenderNoWorker   = "no_worker"
+)
+
+// CampaignEstimateResult is the projection from [CampaignService.Estimate].
+// It simulates the send day by day under the scheduler's own clamps (warmup
+// graduation, the spacing warmup mail shares, other campaigns on the same
+// mailboxes, health holds, follow-up waits), but assumes nobody replies or
+// unsubscribes, so it is the earliest the last send can land, not a promise.
 type CampaignEstimateResult struct {
 	Recipients int `json:"recipients"`
 	Mailboxes  int `json:"mailboxes"`
-	// DailyCapacity is the pool's per-day ceiling under the campaign limit;
-	// RemainingToday subtracts what the mailboxes already sent today.
+	// DailyCapacity is the pool's per-day ceiling under the campaign limit
+	// today; RemainingToday subtracts what the mailboxes already sent today.
 	DailyCapacity  int `json:"daily_capacity"`
 	RemainingToday int `json:"remaining_today"`
 	// SendingDays is how many sending days the audience needs and
@@ -430,6 +480,72 @@ type CampaignEstimateResult struct {
 	// take longer than two years.
 	SendingDays       *int       `json:"sending_days"`
 	EstimatedFinishAt *time.Time `json:"estimated_finish_at"`
+
+	// Steps is how many emails each contact receives and TotalSends is
+	// Recipients times Steps.
+	Steps      int `json:"steps"`
+	TotalSends int `json:"total_sends"`
+	// FirstTouchFinishAt is the day the last contact gets their first email.
+	FirstTouchFinishAt *time.Time `json:"first_touch_finish_at"`
+	// SteadyCapacity is the pool's sending-day capacity once every mailbox
+	// has graduated from warmup; FullCapacityAt is the first day it gets
+	// there, nil when it already has or never does inside the horizon.
+	SteadyCapacity int        `json:"steady_capacity"`
+	FullCapacityAt *time.Time `json:"full_capacity_at"`
+	// Ramping counts mailboxes still climbing their warmup graduation
+	// ceiling; Held counts mailboxes that contribute nothing today.
+	Ramping int `json:"ramping"`
+	Held    int `json:"held"`
+	// Warmup is the warmup mail the pool keeps sending alongside.
+	Warmup CampaignEstimateWarmup `json:"warmup"`
+	// OtherCampaignsPerDay is what the pool's mailboxes already send for
+	// other campaigns on an average recent day; it shares their caps.
+	OtherCampaignsPerDay int `json:"other_campaigns_per_day"`
+	// Bottleneck is the clamp that costs the most sends on the first sending
+	// day, an EstimateBottleneck* constant, empty when the mailboxes' own caps
+	// are the limit.
+	Bottleneck string `json:"bottleneck"`
+	// Timeline is the projection day by day from the start, at most 120 days.
+	Timeline []CampaignEstimateDay `json:"timeline"`
+	// Senders is the pool mailbox by mailbox, at most 200.
+	Senders []CampaignEstimateSender `json:"senders"`
+}
+
+// CampaignEstimateWarmup is the warmup traffic running beside a campaign. A
+// mailbox backing a live campaign warms at a reduced volume, and every warmup
+// email takes a slot on the same spacing clock as a campaign send.
+type CampaignEstimateWarmup struct {
+	Mailboxes int `json:"mailboxes"`
+	PerDay    int `json:"per_day"`
+}
+
+// CampaignEstimateDay is one calendar day of the projection.
+type CampaignEstimateDay struct {
+	// Date is a calendar day formatted YYYY-MM-DD.
+	Date       string `json:"date"`
+	SendingDay bool   `json:"sending_day"`
+	Capacity   int    `json:"capacity"`
+	Sends      int    `json:"sends"`
+	// FirstEmails and FollowUps split Sends.
+	FirstEmails int `json:"first_emails"`
+	FollowUps   int `json:"follow_ups"`
+	// Warmup is the warmup mail sharing the day's spacing.
+	Warmup int `json:"warmup"`
+}
+
+// CampaignEstimateSender is one mailbox's part in the projection.
+type CampaignEstimateSender struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Provider string `json:"provider"`
+	// State is an EstimateSender* constant.
+	State string `json:"state"`
+	// FirstDayCap is its cap on the first sending day and SteadyCap its cap
+	// once graduated; FullCapAt is the day it gets there, nil when it has.
+	FirstDayCap  int        `json:"first_day_cap"`
+	SteadyCap    int        `json:"steady_cap"`
+	WarmupPerDay int        `json:"warmup_per_day"`
+	FullCapAt    *time.Time `json:"full_cap_at"`
 }
 
 // CampaignDuplicateParams is the optional body of [CampaignService.Duplicate].
@@ -732,10 +848,6 @@ type TemplatePreviewAttachment struct {
 type CampaignCreateParams struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	// Kind is [CampaignKindSequence] (the default) or [CampaignKindOneTime].
-	// It is fixed at creation. A one-time email accepts at most one entry in
-	// Steps.
-	Kind *string `json:"kind,omitempty"`
 
 	StopOnReply       *bool `json:"stop_on_reply,omitempty"`
 	OpenTracking      *bool `json:"open_tracking,omitempty"`
@@ -775,6 +887,9 @@ type CampaignCreateParams struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	// EntryDelayMinutes holds each contact's first email back this long after
+	// they enter the campaign; see [Campaign.EntryDelayMinutes].
+	EntryDelayMinutes *int `json:"entry_delay_minutes,omitempty"`
 	// Continuous keeps the campaign active and waiting when it runs out of
 	// leads; see [Campaign.Continuous].
 	Continuous     *bool   `json:"continuous,omitempty"`
@@ -806,13 +921,19 @@ type StepInput struct {
 	BodySync  *bool  `json:"body_sync,omitempty"`
 	BodyCode  *bool  `json:"body_code,omitempty"`
 	WaitAfter *int   `json:"wait_after,omitempty"`
+	// ThreadReply defaults to true on a campaign written in one request: a
+	// step after the first is a follow-up and belongs in the conversation the
+	// first email started. The exception is a step with a subject different
+	// from the conversation's, which is read as meant to start a new
+	// conversation. Send false to always start a new one.
+	ThreadReply *bool `json:"thread_reply,omitempty"`
 }
 
 // CampaignUpdateParams updates a campaign. Nil fields are left unchanged, so a
 // zero value is never mistaken for "clear this".
 //
 // Changing any schedule field (StartDate, EndDate, Timezone, Days, StartTime,
-// EndTime, ScheduleWindows) on an active campaign reschedules its next send
+// EndTime, ScheduleWindows, EntryDelayMinutes) on an active campaign reschedules its next send
 // immediately. The explicit sender list is not editable here; use
 // [CampaignService.ReplaceSenders]. Linked segments live under
 // [CampaignService.SetSegments].
@@ -868,6 +989,10 @@ type CampaignUpdateParams struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	// EntryDelayMinutes holds each contact's first email back this long after
+	// they enter the campaign; see [Campaign.EntryDelayMinutes]. Changing it
+	// reschedules like any schedule field.
+	EntryDelayMinutes *int `json:"entry_delay_minutes,omitempty"`
 	// Continuous keeps the campaign active and waiting when it runs out of
 	// leads; see [Campaign.Continuous]. Turning it off has the campaign finish
 	// once every lead is done.
@@ -935,9 +1060,6 @@ type CampaignListParams struct {
 	// [CampaignStatusPaused] (matches every paused_* variant) or
 	// [CampaignStatusCompleted]. Any other value is a 400.
 	Status string
-	// Kind is [CampaignKindSequence] or [CampaignKindOneTime]. Any other value
-	// is a 400.
-	Kind string
 }
 
 func (p *CampaignListParams) values() url.Values {
@@ -949,7 +1071,6 @@ func (p *CampaignListParams) values() url.Values {
 	setNonEmpty(q, "q", p.Query)
 	setNonEmpty(q, "folder", p.Folder)
 	setNonEmpty(q, "status", p.Status)
-	setNonEmpty(q, "kind", p.Kind)
 	return q
 }
 
@@ -965,10 +1086,10 @@ func (s *CampaignService) Overview(ctx context.Context, opts ...RequestOption) (
 	return fetch[CampaignsOverview](ctx, s.client, "campaigns-overview", opts)
 }
 
-// Estimate projects an audience of segments against a sender pool before a
-// campaign exists: how many contacts it resolves to, the pool's daily
-// capacity and the day the last send is expected to land. It writes nothing,
-// so it needs no idempotency key.
+// Estimate projects an audience of segments (or a saved campaign) against a
+// sender pool: how many contacts it resolves to, the pool's daily capacity,
+// the day-by-day simulation under the scheduler's clamps and the day the last
+// send is expected to land. It writes nothing, so it needs no idempotency key.
 func (s *CampaignService) Estimate(ctx context.Context, params *CampaignEstimateParams, opts ...RequestOption) (*CampaignEstimateResult, *Response, error) {
 	return send[CampaignEstimateResult](ctx, s.client.post, "campaigns-estimate", params, opts)
 }
@@ -1019,7 +1140,9 @@ func (s *CampaignService) Duplicate(ctx context.Context, id string, params *Camp
 // campaign's activity log. Adding a lead by any path then wakes it.
 //
 // The start can be refused with [ErrCodeListBounceRisk],
-// [ErrCodeLeadsUndeliverable] or [ErrCodeNoLeads] in [Error.Code]; see
+// [ErrCodeLeadsUndeliverable] or [ErrCodeNoLeads] in [Error.Code]; an email
+// step with no body to render, or a template syntax error in a step, is
+// refused with a 400 as well ("empty_step_body" for the first). See
 // [CampaignService.StartWithOptions] to launch past the bounce-risk gate.
 func (s *CampaignService) Start(ctx context.Context, id string, opts ...RequestOption) (*CampaignStatusChange, *Response, error) {
 	return s.StartWithOptions(ctx, id, nil, opts...)
@@ -1145,8 +1268,7 @@ func (s *CampaignService) ListSteps(ctx context.Context, id string, opts ...Requ
 
 // CreateStep appends a blank step to the campaign's sequence. Fill it in with
 // [CampaignService.UpdateStep]. New steps are not connected to anything: wire
-// them in through the previous step's Conditions. A one-time campaign refuses
-// a second email step.
+// them in through the previous step's Conditions.
 func (s *CampaignService) CreateStep(ctx context.Context, id string, opts ...RequestOption) (*Step, *Response, error) {
 	return send[Step](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", nil, opts)
 }

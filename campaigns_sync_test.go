@@ -52,9 +52,9 @@ func TestCampaignSyncRouting(t *testing.T) {
 		wantNoBody bool
 	}{
 		{"campaigns.List filters", func() error {
-			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused, Kind: CampaignKindOneTime})
+			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused})
 			return e
-		}, "GET", "/v1/campaigns", "kind=one_time&status=paused", "", false},
+		}, "GET", "/v1/campaigns", "status=paused", "", false},
 		{"campaigns.Estimate", func() error {
 			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
 				SegmentIDs: []string{"seg_1"}, DailyLimit: Int(40), StartDate: &start,
@@ -118,10 +118,27 @@ func TestCampaignSyncRouting(t *testing.T) {
 			})
 			return e
 		}, "PATCH", "/v1/campaigns/camp_1", "", `"unsubscribe_mode":"link","continuous":true,"utm_tracking":true,"guardrail_enabled":true,"guardrail_bounce_rate_max":5`, false},
-		{"campaigns.Create kind", func() error {
-			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{Name: "Launch", Kind: String(CampaignKindOneTime), Continuous: Bool(false)})
+		{"campaigns.Create entry delay and threaded steps", func() error {
+			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{
+				Name: "Launch", EntryDelayMinutes: Int(90), Continuous: Bool(false),
+				Steps: []StepInput{{Subject: "Hi"}, {ThreadReply: Bool(false), Subject: "Other"}},
+			})
 			return e
-		}, "POST", "/v1/campaigns", "", `{"name":"Launch","kind":"one_time","continuous":false}`, false},
+		}, "POST", "/v1/campaigns", "", `{"name":"Launch","entry_delay_minutes":90,"continuous":false,"steps":[{"subject":"Hi"},{"subject":"Other","thread_reply":false}]}`, false},
+		{"campaigns.Update entry delay", func() error {
+			_, _, e := c.Campaigns.Update(ctx, "camp_1", &CampaignUpdateParams{EntryDelayMinutes: Int(0)})
+			return e
+		}, "PATCH", "/v1/campaigns/camp_1", "", `{"entry_delay_minutes":0}`, false},
+		{"campaigns.UpdateStep thread reply", func() error {
+			_, _, e := c.Campaigns.UpdateStep(ctx, "camp_1", "st_1", &StepUpdateParams{ThreadReply: Bool(true)})
+			return e
+		}, "PATCH", "/v1/campaigns/camp_1/steps/st_1", "", `{"thread_reply":true}`, false},
+		{"campaigns.Estimate saved campaign", func() error {
+			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
+				CampaignID: String("camp_1"), StartTime: String("09:00"), EndTime: String("17:00"), StepWaits: []int{3, 5},
+			})
+			return e
+		}, "POST", "/v1/campaigns-estimate", "", `{"campaign_id":"camp_1","start_time":"09:00","end_time":"17:00","step_waits":[3,5]}`, false},
 		{"outreach.Update", func() error {
 			_, e := c.Outreach.Update(ctx, &OutreachSettings{Unsubscribe: UnsubscribeSettings{Mode: UnsubscribeModeText}})
 			return e
@@ -186,14 +203,14 @@ func TestCampaignDecodeSyncFields(t *testing.T) {
 		"daily_limit": 50, "unsubscribe_header": true, "risky_emails": false,
 		"unsubscribe_mode": "inherit",
 		"cc": [], "bcc": [],
-		"start_date": null, "end_date": null, "timezone": "Europe/Berlin", "days": 31,
+		"start_date": null, "end_date": null, "timezone": "Europe/Berlin", "effective_timezone": "Europe/Berlin", "days": 31,
 		"start_time": "09:00", "end_time": "17:00",
 		"schedule_windows": [[], [{"start": 540, "end": 1020}], [], [], [], [], []],
 		"email_tags": ["t1"], "folders": [],
 		"contact_order_by": "created_at", "contact_order_dir": "asc",
 		"sender_strategy": "tags", "rotation_mode": "round_robin",
 		"ramp_enabled": false, "ramp_start": 0, "ramp_increment": 0, "ramp_ceiling": 0, "ramp_level": 0,
-		"esp_match_mode": "off", "max_new_leads_per_day": 0, "prioritize_new_leads": false,
+		"esp_match_mode": "off", "max_new_leads_per_day": 0, "prioritize_new_leads": false, "entry_delay_minutes": 45,
 		"continuous": true, "idle_since": "2026-09-01T10:00:00Z",
 		"guardrail_enabled": true, "guardrail_bounce_rate_max": 5, "guardrail_complaint_rate_max": 0.1,
 		"guardrail_reply_rate_min": 0, "guardrail_min_sample": 50, "guardrail_window_days": 7,
@@ -206,8 +223,11 @@ func TestCampaignDecodeSyncFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(fixture), &c); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if c.Kind != CampaignKindSequence || c.UnsubscribeMode != UnsubscribeModeInherit {
-		t.Errorf("kind/unsubscribe_mode = %q/%q", c.Kind, c.UnsubscribeMode)
+	if c.UnsubscribeMode != UnsubscribeModeInherit {
+		t.Errorf("unsubscribe_mode = %q", c.UnsubscribeMode)
+	}
+	if c.Timezone != "Europe/Berlin" || c.EffectiveTimezone != "Europe/Berlin" || c.EntryDelayMinutes != 45 {
+		t.Errorf("timezone/effective/entry delay = %q/%q/%d", c.Timezone, c.EffectiveTimezone, c.EntryDelayMinutes)
 	}
 	if !c.Continuous || c.IdleSince == nil || c.IdleSince.Day() != 1 {
 		t.Errorf("continuous/idle_since = %v/%v", c.Continuous, c.IdleSince)
@@ -422,12 +442,12 @@ func TestTestEmailResultDecode(t *testing.T) {
 	}
 }
 
-func TestCampaignsOverviewOneTimeDecode(t *testing.T) {
+func TestCampaignsOverviewDecode(t *testing.T) {
 	var o CampaignsOverview
-	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"one_time":2,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
+	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if o.OneTime != 2 || len(o.Folders) != 1 {
+	if o.Total != 12 || o.Completed != 3 || len(o.Folders) != 1 {
 		t.Errorf("overview = %+v", o)
 	}
 }
