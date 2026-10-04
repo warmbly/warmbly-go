@@ -451,6 +451,17 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
 }
 
+// PushSelection is [IntegrationService.Push] for a [ContactSelection], so a
+// push can cover everything a contact search matches. The resolved set is still
+// capped at 500 contacts, because the push calls the provider once per contact
+// inside the request.
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, sel *ContactSelection, opts ...RequestOption) (*PushResult, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", sel, opts)
+}
+
 // --- OAuth connect flow (session-only) ---
 
 // StartOAuth begins the consent flow for an OAuth provider and returns the URL

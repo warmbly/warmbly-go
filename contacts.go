@@ -68,6 +68,8 @@ const (
 	// invalid, unknown) when supplying a verdict you already hold.
 	VerificationProviderWarmbly         = "warmbly"
 	VerificationProviderMillionVerifier = "millionverifier"
+	// VerificationProviderCleanMyList is the connected CleanMyList verifier.
+	VerificationProviderCleanMyList     = "cleanmylist"
 	VerificationProviderZeroBounce      = "zerobounce"
 	VerificationProviderNeverBounce     = "neverbounce"
 	VerificationProviderBouncer         = "bouncer"
@@ -123,6 +125,15 @@ type Contact struct {
 	// "", "gmail", "outlook" or "other". Campaign ESP matching keys off it.
 	ESPProvider   string     `json:"esp_provider"`
 	ESPResolvedAt *time.Time `json:"esp_resolved_at,omitempty"`
+	// MailHost is who hosts the inbox the address belongs to, one of the
+	// MailHost* constants (or another value this SDK predates), read from the
+	// domain's DNS in the background. It is empty until that check has run or
+	// when the domain has no mail server, and is forgotten when the address
+	// changes.
+	MailHost string `json:"mail_host"`
+	// VerificationRequestedAt is set while a member-requested re-check waits to
+	// run; the verdict above stands until it lands.
+	VerificationRequestedAt *time.Time `json:"verification_requested_at,omitempty"`
 
 	// CampaignLead is the contact's state within a single campaign. It is
 	// populated only when a search filters by exactly one campaign.
@@ -131,6 +142,33 @@ type Contact struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Values of [Contact.MailHost] and of [ContactSearchParams.MailHosts]. The set
+// can grow, so treat an unrecognized value as a host this SDK predates; "other"
+// means the domain receives mail on a host Warmbly does not name.
+const (
+	MailHostGoogleWorkspace = "google_workspace"
+	MailHostGmail           = "gmail"
+	MailHostMicrosoft365    = "microsoft365"
+	MailHostOutlook         = "outlook"
+	MailHostZoho            = "zoho"
+	MailHostYahoo           = "yahoo"
+	MailHostAOL             = "aol"
+	MailHostICloud          = "icloud"
+	MailHostFastmail        = "fastmail"
+	MailHostGoDaddy         = "godaddy"
+	MailHostNamecheap       = "namecheap"
+	MailHostIONOS           = "ionos"
+	MailHostHostinger       = "hostinger"
+	MailHostOVH             = "ovh"
+	MailHostMigadu          = "migadu"
+	MailHostPurelymail      = "purelymail"
+	MailHostRackspace       = "rackspace"
+	MailHostYandex          = "yandex"
+	MailHostGMX             = "gmx"
+	MailHostProton          = "proton"
+	MailHostOther           = "other"
+)
 
 // Derived lead states returned in [ContactCampaignProgress.Status],
 // [ContactCampaignState.LeadStatus] and accepted by
@@ -152,6 +190,11 @@ const (
 	LeadStatusFailed = "failed"
 	// LeadStatusUnsubscribed is terminal: the contact is suppressed.
 	LeadStatusUnsubscribed = "unsubscribed"
+	// LeadStatusPaused is a lead whose flow is held: an out-of-office
+	// auto-reply parked it until the contact is back, or a member paused it by
+	// hand. It keeps its place in the sequence and resumes where it stopped; it
+	// is not unsubscribed and not removed. See [ContactCampaignProgress.Hold].
+	LeadStatusPaused = "paused"
 	// LeadStatusUndeliverable is a lead the campaign skips because address
 	// verification refused it (invalid, or risky with the campaign's risky
 	// toggle off). Re-verifying or marking it deliverable
@@ -194,6 +237,62 @@ type ContactCampaignProgress struct {
 	// FailureReason is the sending worker's reason for the last failed send.
 	// Set only when Status is [LeadStatusFailed].
 	FailureReason string `json:"failure_reason,omitempty"`
+	// Sender is the mailbox address this lead's whole sequence sends from,
+	// fixed when its first email went out. Empty until then.
+	Sender string `json:"sender,omitempty"`
+	// Hold is the per-lead pause, set only while it is live. It is present on
+	// any status: a held lead that has also replied still reads replied.
+	Hold *LeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this campaign.
+	CC []CampaignLeadCC `json:"cc,omitempty"`
+}
+
+// Sources of a [LeadHold.Source]. The set can grow.
+const (
+	// LeadHoldManual is a hold a member set by hand.
+	LeadHoldManual = "manual"
+	// LeadHoldOutOfOffice is a hold an out-of-office auto-reply parked.
+	LeadHoldOutOfOffice = "out_of_office"
+	// LeadHoldInboxTagging is a hold a classified reply wrote: "not now" for a
+	// while, or a decline with no end.
+	LeadHoldInboxTagging = "inbox_tagging"
+)
+
+// LeadHold is one contact's flow parked inside one campaign. It resumes where
+// it stopped when the hold ends.
+type LeadHold struct {
+	Since time.Time `json:"since"`
+	// Until is nil for a hold with no end, which only a person lifts.
+	Until  *time.Time `json:"until,omitempty"`
+	Reason string     `json:"reason,omitempty"`
+	// Source is one of the LeadHold* constants.
+	Source string `json:"source"`
+}
+
+// Statuses of a [CampaignLeadCC.Status]: whether the next email copies the
+// contact. Anything but "active" is left off.
+const (
+	LeadCCStatusActive = "active"
+	// LeadCCStatusUnsubscribed is an opted-out or suppressed address.
+	LeadCCStatusUnsubscribed = "unsubscribed"
+	// LeadCCStatusBounced is an address that bounced on this thread or on any
+	// campaign email of its own.
+	LeadCCStatusBounced = "bounced"
+	// LeadCCStatusUndeliverable is an address verification refused.
+	LeadCCStatusUndeliverable = "undeliverable"
+)
+
+// CampaignLeadCC is a contact copied on every email one campaign sends one
+// lead, so several people at one company share a single thread.
+type CampaignLeadCC struct {
+	ContactID string `json:"contact_id"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Company   string `json:"company,omitempty"`
+	// Status is one of the LeadCCStatus* constants.
+	Status    string     `json:"status"`
+	BouncedAt *time.Time `json:"bounced_at,omitempty"`
 }
 
 // ContactEngagement summarizes every email touchpoint recorded for a contact.
@@ -213,6 +312,25 @@ type ContactEngagement struct {
 	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
 	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
 	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
+
+	// ReadsOn is how the contact reads your mail: each client and device a
+	// person's opens came from, most recent first, with how often.
+	ReadsOn []ContactReadingOrigin `json:"reads_on,omitempty"`
+}
+
+// ContactReadingOrigin is one client and device a contact opened mail on.
+type ContactReadingOrigin struct {
+	Client string `json:"client,omitempty"`
+	// ClientType is "app" or "webmail".
+	ClientType string `json:"client_type,omitempty"`
+	// DeviceHidden is true when a mailbox provider's image proxy fetched the
+	// email, so the device is unknowable.
+	DeviceHidden bool      `json:"device_hidden,omitempty"`
+	DeviceType   string    `json:"device_type,omitempty"`
+	OS           string    `json:"os,omitempty"`
+	Browser      string    `json:"browser,omitempty"`
+	Opens        int       `json:"opens"`
+	LastOpenedAt time.Time `json:"last_opened_at"`
 }
 
 // ContactSuppression records why a contact's address is suppressed. It is nil
@@ -263,6 +381,17 @@ type ContactVerificationDetail struct {
 	Decisive bool `json:"decisive"`
 	// Evidence lists the observations the score came from, newest first.
 	Evidence []ContactVerificationEvidence `json:"evidence"`
+
+	// CheckStatus is what the last check said before real mail was weighed in.
+	CheckStatus string     `json:"check_status"`
+	CheckedAt   *time.Time `json:"checked_at,omitempty"`
+	// Source and Provider name who produced the last check or verdict, and
+	// ProviderLabel is the verifier's display name ("MillionVerifier").
+	Source        string `json:"source"`
+	Provider      string `json:"provider"`
+	ProviderLabel string `json:"provider_label,omitempty"`
+	// RequestedAt is set while a member-requested re-check waits to run.
+	RequestedAt *time.Time `json:"requested_at,omitempty"`
 }
 
 // Where a contact first came from, returned in [ContactDetail.Source] and on
@@ -330,6 +459,10 @@ type ContactSentEmail struct {
 	ClickedAt *time.Time `json:"clicked_at,omitempty"`
 	RepliedAt *time.Time `json:"replied_at,omitempty"`
 	BouncedAt *time.Time `json:"bounced_at,omitempty"`
+	// MachineOpenedAt is when an automated fetch (a mail-privacy proxy or
+	// scanner) first loaded the email. It is not a person's open and does not
+	// set OpenedAt.
+	MachineOpenedAt *time.Time `json:"machine_opened_at,omitempty"`
 }
 
 // Timeline event types returned in [TimelineEvent.Type].
@@ -397,7 +530,13 @@ type ContactLinkClick struct {
 // location is resolved from the source network; the address itself is never
 // stored. Every field is empty when unknown.
 type EngagementOrigin struct {
-	Client         string `json:"client,omitempty"`
+	Client string `json:"client,omitempty"`
+	// ClientType is "app" or "webmail".
+	ClientType string `json:"client_type,omitempty"`
+	// DeviceHidden is true when a mailbox provider's image proxy fetched the
+	// email, so the device is unknowable and the device fields say nothing
+	// about the person.
+	DeviceHidden   bool   `json:"device_hidden,omitempty"`
 	DeviceType     string `json:"device_type,omitempty"`
 	OS             string `json:"os,omitempty"`
 	Browser        string `json:"browser,omitempty"`
@@ -633,6 +772,23 @@ type CampaignLeadCounts struct {
 	Opened     int `json:"opened"`
 	Clicked    int `json:"clicked"`
 	RepliedAny int `json:"replied_any"`
+
+	// Paused counts leads whose flow is held (an out-of-office auto-reply, or a
+	// member pausing it by hand) and resumes where it stopped.
+	Paused int `json:"paused"`
+	// Providers splits the leads by their inbox's family, as ESP matching sees
+	// it.
+	Providers CampaignLeadProviderCounts `json:"providers"`
+}
+
+// CampaignLeadProviderCounts are a campaign's leads by inbox family. Other
+// includes checked domains with no known host, which match like other;
+// Undetected counts the leads the provider check has not reached yet.
+type CampaignLeadProviderCounts struct {
+	Google     int `json:"gmail"`
+	Microsoft  int `json:"outlook"`
+	Other      int `json:"other"`
+	Undetected int `json:"undetected"`
 }
 
 // Custom-field match modes for [ContactFieldFilter.Type].
@@ -684,15 +840,24 @@ type ContactSearchParams struct {
 	Subscribed   *bool    `json:"subscribed,omitempty"`
 	// VerificationStatus filters by verdict: one of the VerifyStatus*
 	// constants.
-	VerificationStatus string     `json:"verification_status,omitempty"`
-	CreatedAfter       *time.Time `json:"created_after,omitempty"`
-	CreatedBefore      *time.Time `json:"created_before,omitempty"`
-	UpdatedAfter       *time.Time `json:"updated_after,omitempty"`
-	UpdatedBefore      *time.Time `json:"updated_before,omitempty"`
-	// SortBy names the column to order by, for example "first_name" or
-	// "campaign_count".
+	VerificationStatus string `json:"verification_status,omitempty"`
+	// MailHosts matches contacts whose inbox is hosted by any of these
+	// [Contact.MailHost] values (the MailHost* constants). An empty string
+	// matches contacts with no known host yet. An unknown value is rejected
+	// with code "invalid_mail_host".
+	MailHosts     []string   `json:"mail_hosts,omitempty"`
+	CreatedAfter  *time.Time `json:"created_after,omitempty"`
+	CreatedBefore *time.Time `json:"created_before,omitempty"`
+	UpdatedAfter  *time.Time `json:"updated_after,omitempty"`
+	UpdatedBefore *time.Time `json:"updated_before,omitempty"`
+	// SortBy names the column to order by: created_at (the default),
+	// updated_at, first_name, last_name, email, company, phone,
+	// campaign_count or mail_host. "custom:<key>" sorts on a custom field as
+	// text, with contacts lacking the field grouped last when ascending; a key
+	// that could never be a custom-field name is rejected with code
+	// "invalid_sort_by". Any other value falls back to created_at.
 	SortBy string `json:"sort_by,omitempty"`
-	// Reverse switches the sort to descending.
+	// Reverse sorts ascending. The default is descending.
 	Reverse bool `json:"reverse,omitempty"`
 }
 
@@ -767,8 +932,15 @@ type ContactInput struct {
 // Categories replaces the contact's categories wholesale, while AddCategories
 // and RemoveCategories adjust them incrementally. Use one form or the other.
 type ContactUpdateParams struct {
-	FirstName    *string           `json:"first_name,omitempty"`
-	LastName     *string           `json:"last_name,omitempty"`
+	FirstName *string `json:"first_name,omitempty"`
+	LastName  *string `json:"last_name,omitempty"`
+	// Email replaces the contact's address. It is stored lowercased, and the
+	// address has to be free: one another contact holds fails with code
+	// "contact_email_taken" rather than merging the two. A changed address
+	// drops the verification verdict back to unknown, clears the delivery
+	// evidence behind it and forgets MailHost, because all of them belonged to
+	// the old mailbox.
+	Email        *string           `json:"email,omitempty"`
 	Company      *string           `json:"company,omitempty"`
 	Phone        *string           `json:"phone,omitempty"`
 	CustomFields map[string]string `json:"custom_fields,omitempty"`
@@ -800,10 +972,49 @@ type ContactFieldEdit struct {
 	Value string `json:"value,omitempty"`
 }
 
-// ContactBulkUpdateParams edits many contacts at once.
+// Limits on a bulk selection.
+const (
+	// MaxContactBatchIDs bounds an explicit id list in one bulk request;
+	// past it the server fails with code "too_many_contacts".
+	MaxContactBatchIDs = 10000
+	// MaxContactBulkSelection bounds how many contacts one filter selection
+	// ([ContactSelection.All]) may resolve to, and how many ids
+	// [ContactSelection.Exclude] may hold. A larger match fails with code
+	// "selection_too_large" and nothing is changed.
+	MaxContactBulkSelection = 250000
+)
+
+// ContactSelection names the contacts a bulk action applies to, either by id
+// or by a search. Every endpoint that acts on a set of contacts takes one:
+// bulk update and delete, verification, AI research batches, segment member
+// overrides and CRM pushes.
+//
+// By id, set Contacts (up to [MaxContactBatchIDs]). By filter, set All and
+// Filters, the same search body [ContactService.Search] takes; the server
+// resolves it and applies the action to everything it matches, so one call can
+// cover far more than a page. Exclude drops ids back out of the resolved set
+// (the rows a user unticked after selecting all) and is ignored unless All is
+// set. A selection that names both prefers the filter, and one that resolves to
+// nothing is a 400.
+type ContactSelection struct {
+	Contacts []string `json:"contacts,omitempty"`
+	// All switches the selection from Contacts to Filters.
+	All     bool                 `json:"all,omitempty"`
+	Filters *ContactSearchParams `json:"filters,omitempty"`
+	Exclude []string             `json:"exclude,omitempty"`
+}
+
+// ContactBulkUpdateParams edits many contacts at once. Select the contacts
+// with Contacts, or with All, Filters and Exclude; see [ContactSelection].
 type ContactBulkUpdateParams struct {
-	// Contacts are the contact ids to edit, at most 1,000 per request.
-	Contacts []string `json:"contacts"`
+	// Contacts are the contact ids to edit, at most [MaxContactBatchIDs] per
+	// request.
+	Contacts []string `json:"contacts,omitempty"`
+	// All, Filters and Exclude select by search instead of by id; see
+	// [ContactSelection].
+	All     bool                 `json:"all,omitempty"`
+	Filters *ContactSearchParams `json:"filters,omitempty"`
+	Exclude []string             `json:"exclude,omitempty"`
 
 	AddCampaigns     []string           `json:"add_campaigns,omitempty"`
 	RemoveCampaigns  []string           `json:"remove_campaigns,omitempty"`
@@ -834,9 +1045,14 @@ type ContactVerificationParams struct {
 	// Action is one of the VerificationAction* constants. Anything else is
 	// rejected with code "invalid_action".
 	Action string `json:"action"`
-	// Contacts are contact ids, at most 1,000 per request
+	// Contacts are contact ids, at most [MaxContactBatchIDs] per request
 	// ("too_many_contacts").
 	Contacts []string `json:"contacts,omitempty"`
+	// All, Filters and Exclude select by search instead of by id; see
+	// [ContactSelection].
+	All     bool                 `json:"all,omitempty"`
+	Filters *ContactSearchParams `json:"filters,omitempty"`
+	Exclude []string             `json:"exclude,omitempty"`
 	// CampaignID selects every lead of the campaign that verification refused
 	// (the [LeadStatusUndeliverable] ones), instead of or as well as Contacts.
 	CampaignID string `json:"campaign_id,omitempty"`
@@ -850,13 +1066,19 @@ type ContactVerificationResult struct {
 	// Queued is true for [VerificationActionVerify]: the check runs in the
 	// background rather than in the request.
 	Queued bool `json:"queued"`
+	// Verifier and VerifierLabel name who runs a queued check: "builtin" or the
+	// connected provider. VerifierError says why a connected provider cannot be
+	// used right now, in which case the built-in check runs instead.
+	Verifier      string `json:"verifier,omitempty"`
+	VerifierLabel string `json:"verifier_label,omitempty"`
+	VerifierError string `json:"verifier_error,omitempty"`
 }
 
 // ContactVerificationOverview says who checks the workspace's addresses and how
 // its contacts split by verdict.
 type ContactVerificationOverview struct {
-	// Provider is the verifier in use: [VerificationProviderBuiltin] or
-	// [VerificationProviderMillionVerifier].
+	// Provider is the verifier in use: [VerificationProviderBuiltin],
+	// [VerificationProviderMillionVerifier] or [VerificationProviderCleanMyList].
 	Provider string `json:"provider"`
 	// ConnectionID is the integration connection behind a paid provider.
 	ConnectionID *string `json:"connection_id,omitempty"`
@@ -948,6 +1170,15 @@ type ContactCampaignState struct {
 	// why.
 	Next        *ContactNextAction `json:"next,omitempty"`
 	EndedReason string             `json:"ended_reason,omitempty"`
+
+	// SenderID and SenderEmail are the mailbox this lead's whole sequence sends
+	// from, fixed when its first email went out. Empty until then.
+	SenderID    *string `json:"sender_id,omitempty"`
+	SenderEmail string  `json:"sender_email,omitempty"`
+	// Hold is the per-lead pause, present only while it is live.
+	Hold *LeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this campaign.
+	CC []CampaignLeadCC `json:"cc"`
 }
 
 // ContactSegmentMembership is one segment of the organization seen from a
@@ -1278,15 +1509,27 @@ func (s *ContactService) Create(ctx context.Context, contacts []ContactInput, op
 }
 
 // BulkUpdate edits many contacts at once and returns the updated records. It
-// takes at most 1,000 contacts per request and never creates contacts, so it
-// never raises contact.created.
+// takes at most [MaxContactBatchIDs] ids per request, or a filter selection
+// (see [ContactSelection]), and never creates contacts, so it never raises
+// contact.created. A bulk write raises contact.updated once for the whole call,
+// with no entity id.
 func (s *ContactService) BulkUpdate(ctx context.Context, params *ContactBulkUpdateParams, opts ...RequestOption) ([]Contact, *Response, error) {
 	return sendSlice[Contact](ctx, s.client.patch, "contacts", params, opts)
 }
 
-// BulkDelete permanently removes the given contacts, at most 1,000 per request.
+// BulkDelete permanently removes the given contacts, at most
+// [MaxContactBatchIDs] per request. To delete everything a search matches, use
+// [ContactService.BulkDeleteSelection].
 func (s *ContactService) BulkDelete(ctx context.Context, ids []string, opts ...RequestOption) (*Response, error) {
 	return s.client.deleteBody(ctx, "contacts", ids, opts...)
+}
+
+// BulkDeleteSelection permanently removes the contacts a [ContactSelection]
+// names, by id or by search. A filter selection that matches more than
+// [MaxContactBulkSelection] contacts fails with code "selection_too_large" and
+// removes nothing.
+func (s *ContactService) BulkDeleteSelection(ctx context.Context, sel *ContactSelection, opts ...RequestOption) (*Response, error) {
+	return s.client.deleteBody(ctx, "contacts", sel, opts...)
 }
 
 // Get retrieves the hydrated contact 360 view.
@@ -1472,12 +1715,23 @@ func (s *ContactService) ListResearch(ctx context.Context, id string, limit int,
 
 // BatchResearch queues AI research for many contacts and returns how many runs
 // were enqueued. They drain in the background; poll
-// [ContactService.ListResearch] or subscribe to the gateway for progress.
+// [ContactService.ListResearch] or subscribe to the gateway for progress. To
+// select the contacts by search, use [ContactService.BatchResearchSelection].
 func (s *ContactService) BatchResearch(ctx context.Context, contactIDs []string, objective string, opts ...RequestOption) (int, *Response, error) {
+	return s.BatchResearchSelection(ctx, &ContactSelection{Contacts: contactIDs}, objective, opts...)
+}
+
+// BatchResearchSelection is [ContactService.BatchResearch] for a
+// [ContactSelection]. The resolved set is capped at 500 contacts, because each
+// run spends AI credits.
+func (s *ContactService) BatchResearchSelection(ctx context.Context, sel *ContactSelection, objective string, opts ...RequestOption) (int, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
 	body := struct {
-		ContactIDs []string `json:"contact_ids"`
-		Objective  string   `json:"objective,omitempty"`
-	}{ContactIDs: contactIDs, Objective: objective}
+		ContactSelection
+		Objective string `json:"objective,omitempty"`
+	}{ContactSelection: *sel, Objective: objective}
 	var out struct {
 		Queued int `json:"queued"`
 	}

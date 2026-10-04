@@ -494,3 +494,80 @@ func TestOutreachUpdateNoContent(t *testing.T) {
 		t.Errorf("got %s %s", got.method, got.path)
 	}
 }
+
+// TestCampaignDecodesTimezoneEntryDelayAndThreadReply covers the schedule and
+// step fields added to the campaign payload, and that the retired kind field is
+// simply absent.
+func TestCampaignDecodesTimezoneEntryDelayAndThreadReply(t *testing.T) {
+	var camp Campaign
+	if err := json.Unmarshal([]byte(`{"id":"c_1","name":"Q3","timezone":"","effective_timezone":"Europe/London","entry_delay_minutes":90}`), &camp); err != nil {
+		t.Fatalf("decode campaign: %v", err)
+	}
+	if camp.Timezone != "" || camp.EffectiveTimezone != "Europe/London" || camp.EntryDelayMinutes != 90 || camp.Kind != "" {
+		t.Errorf("campaign = %+v", camp)
+	}
+
+	var step Step
+	if err := json.Unmarshal([]byte(`{"id":"s_1","kind":"email","thread_reply":true}`), &step); err != nil {
+		t.Fatalf("decode step: %v", err)
+	}
+	if !step.ThreadReply {
+		t.Error("ThreadReply = false, want true")
+	}
+
+	yes := false
+	delay := 30
+	body, err := json.Marshal(CampaignUpdateParams{EntryDelayMinutes: &delay})
+	if err != nil || !strings.Contains(string(body), `"entry_delay_minutes":30`) {
+		t.Errorf("update body = %s (%v)", body, err)
+	}
+	body, err = json.Marshal(StepInput{Subject: "Hi", ThreadReply: &yes})
+	if err != nil || !strings.Contains(string(body), `"thread_reply":false`) {
+		t.Errorf("step input body = %s (%v)", body, err)
+	}
+}
+
+// TestCampaignEstimateResultDecodesProjection covers the pool, timeline and
+// per-mailbox detail the estimate now returns.
+func TestCampaignEstimateResultDecodesProjection(t *testing.T) {
+	var res CampaignEstimateResult
+	if err := json.Unmarshal([]byte(`{
+		"recipients": 300, "mailboxes": 3, "daily_capacity": 90, "remaining_today": 90,
+		"sending_days": 4, "estimated_finish_at": "2026-09-09T00:00:00Z",
+		"steps": 3, "total_sends": 900, "first_touch_finish_at": "2026-09-05T00:00:00Z",
+		"steady_capacity": 150, "full_capacity_at": null, "ramping": 2, "held": 1,
+		"warmup": {"mailboxes": 3, "per_day": 30}, "other_campaigns_per_day": 12,
+		"bottleneck": "warmup_graduation",
+		"timeline": [{"date": "2026-09-01", "sending_day": true, "capacity": 90, "sends": 90, "first_emails": 90, "follow_ups": 0, "warmup": 30}],
+		"senders": [{"id": "mb_1", "email": "a@x.com", "provider": "gmail", "state": "ramping", "first_day_cap": 20, "steady_cap": 50, "warmup_per_day": 10, "full_cap_at": "2026-09-12T00:00:00Z"},
+			{"id": "mb_2", "email": "b@x.com", "provider": "outlook", "state": "a_state_from_the_future", "first_day_cap": 0, "steady_cap": 0, "warmup_per_day": 0, "full_cap_at": null}]
+	}`), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.Steps != 3 || res.TotalSends != 900 || res.FirstTouchFinishAt == nil || res.FullCapacityAt != nil {
+		t.Errorf("projection = %+v", res)
+	}
+	if res.Bottleneck != EstimateBottleneckGraduation || res.Warmup.PerDay != 30 || res.Ramping != 2 || res.Held != 1 {
+		t.Errorf("pool = %+v", res)
+	}
+	if len(res.Timeline) != 1 || !res.Timeline[0].SendingDay || res.Timeline[0].Warmup != 30 {
+		t.Errorf("timeline = %+v", res.Timeline)
+	}
+	if len(res.Senders) != 2 || res.Senders[0].State != EstimateSenderRamping || res.Senders[0].FullCapAt == nil || res.Senders[1].State != "a_state_from_the_future" {
+		t.Errorf("senders = %+v", res.Senders)
+	}
+
+	var got recordedRequest
+	c := accountServer(t, `{}`, &got)
+	start, end := "08:00", "17:00"
+	if _, _, err := c.Campaigns.Estimate(context.Background(), &CampaignEstimateParams{
+		SegmentIDs: []string{"seg_1"}, StartTime: &start, EndTime: &end, StepWaits: []int{2, 4},
+	}); err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	for _, want := range []string{`"start_time":"08:00"`, `"end_time":"17:00"`, `"step_waits":[2,4]`} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("estimate body %s is missing %s", got.body, want)
+		}
+	}
+}

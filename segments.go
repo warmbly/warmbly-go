@@ -343,10 +343,19 @@ func (s *SegmentService) Delete(ctx context.Context, id string, opts ...RequestO
 // ignored. It returns how many rows changed. Pinning in (or clearing an
 // exclude) can admit new members, so linked campaigns are synced afterwards.
 func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs []string, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	return s.SetMembersSelection(ctx, id, &ContactSelection{Contacts: contactIDs}, mode, opts...)
+}
+
+// SetMembersSelection is [SegmentService.SetMembers] for a [ContactSelection],
+// so an override can cover everything a contact search matches.
+func (s *SegmentService) SetMembersSelection(ctx context.Context, id string, sel *ContactSelection, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
 	body := struct {
-		Contacts []string          `json:"contacts"`
-		Mode     SegmentMemberMode `json:"mode"`
-	}{Contacts: contactIDs, Mode: mode}
+		ContactSelection
+		Mode SegmentMemberMode `json:"mode"`
+	}{ContactSelection: *sel, Mode: mode}
 	var out struct {
 		Updated int `json:"updated"`
 	}
