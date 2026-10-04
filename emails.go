@@ -25,6 +25,43 @@ const (
 	MailboxStatusRevoked  = "revoked"
 )
 
+// How a mailbox signs in, returned in [Email.AuthMethod]. Empty until known.
+const (
+	// MailAuthPassword is an SMTP/IMAP login with the account password.
+	MailAuthPassword = "password"
+	// MailAuthAppPassword is an SMTP/IMAP login with a provider app password.
+	MailAuthAppPassword = "app_password"
+	// MailAuthOAuth is a Google or Microsoft consent held per mailbox.
+	MailAuthOAuth = "oauth"
+	// MailAuthDelegated is a mailbox reached through an administrator's grant
+	// for its domain: no credential is stored and tokens are minted per use.
+	MailAuthDelegated = "delegated"
+)
+
+// Where warmup mail is filed in the customer's own mail client, in
+// [Email.WarmupPlacement] and [EmailUpdateParams.WarmupPlacement]. Warmup mail
+// is hidden from the unibox whichever is chosen.
+const (
+	// WarmupPlacementFolder moves warmup mail out of the inbox (and out of
+	// Sent) into one named folder, [Email.WarmupFolder].
+	WarmupPlacementFolder = "folder"
+	// WarmupPlacementInbox leaves warmup mail where the provider put it. Mail
+	// that landed in spam is still rescued into the inbox.
+	WarmupPlacementInbox = "inbox"
+	// WarmupPlacementArchive takes warmup mail out of the inbox without giving
+	// it a folder of its own: the provider's archive.
+	WarmupPlacementArchive = "archive"
+)
+
+// Where a mailbox's stored signature came from, in
+// [SendIdentity.SignatureSource].
+const (
+	// SignatureSourceManual was written in Warmbly.
+	SignatureSourceManual = "manual"
+	// SignatureSourceProvider was imported from the mailbox provider.
+	SignatureSourceProvider = "provider"
+)
+
 // Sending-domain authentication states returned in [Email.AuthState].
 const (
 	// AuthStateUnknown means the domain has not been checked yet, the DNS
@@ -70,12 +107,32 @@ type Email struct {
 	// SignatureCode reports whether the HTML signature is edited as raw markup.
 	SignatureCode bool `json:"signature_code"`
 
+	// SendAsEmail is the verified provider alias this mailbox sends from. Empty,
+	// which is every mailbox until someone picks one, means the mailbox's own
+	// address. The alias list is read with [EmailService.Identity].
+	SendAsEmail string `json:"send_as_email"`
+
 	// Provider is the mailbox backend: [ProviderGmail], [ProviderOutlook] or
 	// [ProviderSMTPIMAP].
 	Provider string `json:"provider"`
 	// Status is the connection state: [MailboxStatusActive],
 	// [MailboxStatusInactive] or [MailboxStatusRevoked].
 	Status string `json:"status"`
+
+	// MailHost is who hosts the mailbox (a MailHost* value) and AuthMethod how
+	// it signs in (a MailAuth* value); both are empty until known.
+	MailHost   string `json:"mail_host"`
+	AuthMethod string `json:"auth_method"`
+	// DomainGrantID is the administrator's grant a delegated mailbox connects
+	// through.
+	DomainGrantID *string `json:"domain_grant_id,omitempty"`
+	// VendorConnectionID and Vendor name the inbox-vendor account (InboxKit,
+	// Zapmail and similar) a mailbox was imported from.
+	VendorConnectionID *string `json:"vendor_connection_id,omitempty"`
+	Vendor             string  `json:"vendor,omitempty"`
+	// AvatarURL is the mailbox's own profile photo, empty when its provider or
+	// vendor has none Warmbly can read.
+	AvatarURL string `json:"avatar_url"`
 
 	// LastSyncedAt is when the mailbox was last polled for inbound mail; nil
 	// until the first sync has run. [EmailService.SyncStatus] has the detail.
@@ -100,6 +157,16 @@ type Email struct {
 	// nothing in the account by itself. Gmail and Outlook file their own copy
 	// and ignore the flag. Warmup mail is never filed.
 	SaveToSent bool `json:"save_to_sent"`
+
+	// TrackDirectMail opts this mailbox's hand-written unibox sends into the
+	// open and click tracking campaign mail already gets. Off by default; set
+	// it with [EmailService.SetDirectTracking].
+	TrackDirectMail bool `json:"track_direct_mail"`
+
+	// RelayFolderMoves makes Archive, Delete and Move to inbox in the unibox
+	// ([UniboxService.MoveFolder]) move the message in the mailbox too. On by
+	// default.
+	RelayFolderMoves bool `json:"relay_folder_moves"`
 
 	// TrackingDomain is the custom open/click tracking subdomain, or "" for
 	// the shared host. Only a verified domain is used at send time; see
@@ -145,6 +212,14 @@ type Email struct {
 	WarmupEndTime   string `json:"warmup_end_time"`
 	// WarmupDays is a bitmask of the weekdays warmup runs on.
 	WarmupDays int `json:"warmup_days"`
+	// WarmupPlacement is one of the WarmupPlacement* constants and
+	// WarmupFolder the folder used for [WarmupPlacementFolder]; an empty
+	// WarmupFolder means the instance default, not "no folder".
+	WarmupPlacement string `json:"warmup_placement"`
+	WarmupFolder    string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail stays in this mailbox before
+	// the platform deletes it. Zero follows the instance setting.
+	WarmupRetentionDays int `json:"warmup_retention_days"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behavior and
 	// business-hours window are evaluated in. Empty means not configured, so
@@ -253,6 +328,13 @@ type EmailUpdateParams struct {
 	SignatureSync  *bool   `json:"signature_sync,omitempty"`
 	SignatureCode  *bool   `json:"signature_code,omitempty"`
 
+	// SendAsEmail picks which verified provider alias the mailbox sends from.
+	// An empty string clears it back to the mailbox's own address; anything
+	// else must be an address the provider reported as verified (see
+	// [EmailService.Identity]), or the call fails with a 400 carrying code
+	// "mailbox_send_as_unknown".
+	SendAsEmail *string `json:"send_as_email,omitempty"`
+
 	// Status is [MailboxStatusActive], [MailboxStatusInactive] or
 	// [MailboxStatusRevoked]. Setting a mailbox inactive stops its syncing and
 	// sending within seconds while keeping its settings, history and worker
@@ -289,6 +371,19 @@ type EmailUpdateParams struct {
 	WarmupStartTime *string `json:"warmup_start_time,omitempty"`
 	WarmupEndTime   *string `json:"warmup_end_time,omitempty"`
 	WarmupDays      *int    `json:"warmup_days,omitempty"`
+
+	// WarmupPlacement is one of the WarmupPlacement* constants; WarmupFolder
+	// names the destination for [WarmupPlacementFolder] and an empty string
+	// returns it to the instance default.
+	WarmupPlacement *string `json:"warmup_placement,omitempty"`
+	WarmupFolder    *string `json:"warmup_folder,omitempty"`
+	// WarmupRetentionDays is how long warmup mail is kept in the mailbox; 0
+	// returns to the instance setting.
+	WarmupRetentionDays *int `json:"warmup_retention_days,omitempty"`
+
+	// RelayFolderMoves turns the unibox's filing relay to the mailbox on or off;
+	// see [Email.RelayFolderMoves].
+	RelayFolderMoves *bool `json:"relay_folder_moves,omitempty"`
 
 	// Tags replaces the mailbox's tag ids wholesale when non-nil.
 	Tags []string `json:"tags,omitempty"`
@@ -953,6 +1048,96 @@ func (s *EmailService) BulkTag(ctx context.Context, params *BulkTagParams, opts 
 // Remaining is zero. Requires an organization to be selected.
 func (s *EmailService) Allowance(ctx context.Context, opts ...RequestOption) (*MailboxAllowance, *Response, error) {
 	return fetch[MailboxAllowance](ctx, s.client, "emails/allowance", opts)
+}
+
+// SendAsIdentity is one address the provider has verified a mailbox to send as.
+type SendAsIdentity struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	// IsPrimary marks the mailbox's own address; IsDefault the one the provider
+	// composes from by default, which Warmbly reports but does not follow: the
+	// alias Warmbly sends from is the workspace's choice, [Email.SendAsEmail].
+	IsPrimary bool `json:"is_primary"`
+	IsDefault bool `json:"is_default"`
+	// Verified reports that the provider finished verifying the address. An
+	// unverified alias is listed but never selectable.
+	Verified bool `json:"verified"`
+}
+
+// SendIdentity is a mailbox's sending identity: which addresses the provider
+// lets it send as, which one is in use, and where the stored signature came
+// from.
+type SendIdentity struct {
+	// Supported reports whether the provider can be asked at all. Only Gmail and
+	// Google Workspace mailboxes expose send-as addresses and a stored
+	// signature; an Outlook or SMTP/IMAP mailbox answers false with an empty
+	// list rather than an error.
+	Supported bool   `json:"supported"`
+	Provider  string `json:"provider"`
+	// MailboxEmail is the address the mailbox authenticates as, always a legal
+	// sender and what an empty SendAsEmail means.
+	MailboxEmail string           `json:"mailbox_email"`
+	SendAsEmail  string           `json:"send_as_email"`
+	Identities   []SendAsIdentity `json:"identities"`
+	// SyncedAt is when the list was last read from the provider.
+	SyncedAt *time.Time `json:"synced_at,omitempty"`
+
+	// SignatureSource is [SignatureSourceManual] or [SignatureSourceProvider].
+	SignatureSource     string     `json:"signature_source"`
+	SignatureImportedAt *time.Time `json:"signature_imported_at,omitempty"`
+}
+
+// SendIdentityRefreshParams chooses what a refresh does beyond re-reading the
+// send-as addresses.
+type SendIdentityRefreshParams struct {
+	// ImportSignature also imports the provider's signature, overwriting the
+	// stored one. It is opt-in because it replaces what is saved.
+	ImportSignature bool `json:"import_signature"`
+}
+
+// Identity returns the addresses the mailbox may send as, the one in use, and
+// where its signature came from. It reads stored state only and never calls the
+// provider, so it costs nothing to open on every render; use
+// [EmailService.RefreshIdentity] to re-read it.
+//
+// Requires the view-campaigns permission ([PermReadEmails] for an API key, on a
+// mailbox the key may use).
+func (s *EmailService) Identity(ctx context.Context, id string, opts ...RequestOption) (*SendIdentity, *Response, error) {
+	return fetch[SendIdentity](ctx, s.client, "emails/"+url.PathEscape(id)+"/identity", opts)
+}
+
+// RefreshIdentity re-reads the mailbox's send-as addresses from the provider on
+// the worker holding the mailbox, stores them and returns the result, importing
+// the provider's signature too when params ask. Params may be nil for just the
+// addresses. It converges on the provider's current state, so a retry is safe.
+//
+// A mailbox whose provider has no send-as list fails with a 400 carrying code
+// "mailbox_send_as_unsupported"; one whose worker cannot be reached with a 503
+// carrying "mailbox_identity_unavailable", with nothing changed; and a provider
+// signature too large to store with "mailbox_signature_too_large". Requires the
+// manage-emails permission ([PermWriteEmails] for an API key).
+func (s *EmailService) RefreshIdentity(ctx context.Context, id string, params *SendIdentityRefreshParams, opts ...RequestOption) (*SendIdentity, *Response, error) {
+	return send[SendIdentity](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/identity/refresh", params, opts)
+}
+
+// SetDirectTracking turns open and click tracking on or off for this mailbox's
+// hand-written unibox sends (the opt-in half of direct-mail analytics, see
+// [AnalyticsService.Direct]). It is off by default and per mailbox, because a
+// tracking pixel sits more comfortably in a cold sequence than in a one-to-one
+// reply. It returns the stored value and is safe to repeat. Requires the
+// manage-emails permission ([PermWriteEmails] for an API key).
+func (s *EmailService) SetDirectTracking(ctx context.Context, id string, enabled bool, opts ...RequestOption) (bool, *Response, error) {
+	body := struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: enabled}
+	var out struct {
+		TrackDirectMail bool `json:"track_direct_mail"`
+	}
+	resp, err := s.client.patch(ctx, "emails/"+url.PathEscape(id)+"/direct-tracking", body, &out, opts...)
+	if err != nil {
+		return false, resp, err
+	}
+	return out.TrackDirectMail, resp, nil
 }
 
 // GetTrackingDomain returns the mailbox's stored tracking-domain state plus

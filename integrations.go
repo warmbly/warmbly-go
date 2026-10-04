@@ -38,6 +38,9 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier connected by API key,
+	// behaving like [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -385,6 +388,45 @@ func (s *IntegrationService) WebhookSecret(ctx context.Context, id string, opts 
 	return fetch[ConnectionWebhookSecret](ctx, s.client, "integrations/connections/"+url.PathEscape(id)+"/webhook-secret", opts)
 }
 
+// RotateInboundURL mints a new inbound webhook URL for a Calendly or Cal.com
+// connection and returns it. The previous URL stops working immediately, so
+// update the provider's webhook before relying on bookings arriving. The URL
+// embeds a secret: treat it as a credential. Any other provider fails with a
+// 400. Requires the manage-settings permission ([PermIntegrations] for an API
+// key).
+func (s *IntegrationService) RotateInboundURL(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		InboundWebhookURL string `json:"inbound_webhook_url"`
+	}
+	resp, err := s.client.post(ctx, "integrations/connections/"+url.PathEscape(id)+"/rotate-inbound-url", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.InboundWebhookURL, resp, nil
+}
+
+// SetSigningKey sets the key a Calendly or Cal.com connection's deliveries
+// must be signed with, and returns the connection. With a key set, a delivery
+// that reaches the inbound URL unsigned or with a bad signature is refused with
+// a 401, so the URL secret alone is no longer enough. An empty key goes back to
+// the URL secret alone. A key must be 8 to 512 characters (a 400 otherwise),
+// and any other provider is a 400. The key is stored encrypted and never
+// returned. Requires the manage-settings permission ([PermIntegrations] for an
+// API key).
+func (s *IntegrationService) SetSigningKey(ctx context.Context, id, signingKey string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
+	body := struct {
+		SigningKey string `json:"signing_key"`
+	}{SigningKey: signingKey}
+	var out struct {
+		Connection *IntegrationConnection `json:"connection"`
+	}
+	resp, err := s.client.put(ctx, "integrations/connections/"+url.PathEscape(id)+"/signing-key", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Connection, resp, nil
+}
+
 // Test sends a test message through the connection to confirm it works. For a
 // notification provider this posts a real message to the configured channel.
 func (s *IntegrationService) Test(ctx context.Context, id string, opts ...RequestOption) (bool, *Response, error) {
@@ -399,12 +441,25 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 }
 
 // Push sends the given contacts to the provider now, rather than waiting for
-// an event to fire.
+// an event to fire. A push is synchronous against the provider's API, so it
+// takes at most 500 contacts; more is a 400 carrying code "too_many_contacts".
+// To push what a search matches, use [IntegrationService.PushSelection].
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`
 	}{ContactIDs: contactIDs}
 	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
+}
+
+// PushSelection is [IntegrationService.Push] for a [ContactSelection]: set All
+// and Filters to push every contact a search matches, less Exclude. The
+// resolved set is still held to 500 contacts, so a broader selection is refused
+// with code "too_many_contacts" rather than run for minutes.
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, sel *ContactSelection, opts ...RequestOption) (*PushResult, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", sel, opts)
 }
 
 // --- OAuth connect flow (session-only) ---

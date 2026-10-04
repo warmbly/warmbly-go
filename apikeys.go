@@ -344,6 +344,11 @@ func (s *APIKeyService) Get(ctx context.Context, id string, opts ...RequestOptio
 
 // Create provisions a new API key. The returned [APIKeyWithSecret] is the only
 // time the plaintext credential is available.
+//
+// A key is a durable credential that outlives the session that made it, so a
+// signed-in session must have confirmed itself recently: call
+// [AuthService.Reauth] first, or the request fails with code "reauth_required".
+// An API key or OAuth caller is not asked.
 func (s *APIKeyService) Create(ctx context.Context, params *APIKeyCreateParams, opts ...RequestOption) (*APIKeyWithSecret, *Response, error) {
 	return send[APIKeyWithSecret](ctx, s.client.post, "api-keys", params, opts)
 }
@@ -359,6 +364,16 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	q := make(url.Values)
 	setNonEmpty(q, "reason", reason)
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
+}
+
+// DeletePermanently removes a key's row and its usage logs for good. Only a key
+// that can no longer authenticate may be deleted: an active one fails with a 409
+// until it is revoked ([APIKeyService.Revoke]) or has expired. Revoking and
+// deleting are separate paths so neither can be reached by accident. The server
+// answers 200 with a {"status": "deleted"} body, which this method discards.
+// Requires the manage-api-keys permission ([PermAPIKeys] for an API key).
+func (s *APIKeyService) DeletePermanently(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id)+"/permanent", opts...)
 }
 
 // RevokeSelf revokes the key this client is authenticated with. It is the one
