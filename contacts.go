@@ -120,21 +120,20 @@ type Contact struct {
 	VerificationConfidence int        `json:"verification_confidence"`
 	IsCatchAll             bool       `json:"is_catch_all"`
 	VerificationCheckedAt  *time.Time `json:"verification_checked_at,omitempty"`
-
-	// ESPProvider is the recipient's mail provider, derived from the domain:
-	// "", "gmail", "outlook" or "other". Campaign ESP matching keys off it.
-	ESPProvider   string     `json:"esp_provider"`
-	ESPResolvedAt *time.Time `json:"esp_resolved_at,omitempty"`
-	// MailHost is who hosts the inbox the address belongs to, one of the
-	// MailHost* constants (or another value this SDK predates), read from the
-	// domain's DNS in the background. It is empty until that check has run or
-	// when the domain has no mail server, and is forgotten when the address
-	// changes.
-	MailHost string `json:"mail_host"`
 	// VerificationRequestedAt is set while a member-requested re-check waits to
-	// run; the verdict above stands until it lands.
+	// run. The verdict above stands until the new one lands.
 	VerificationRequestedAt *time.Time `json:"verification_requested_at,omitempty"`
 
+	// MailHost is who hosts the contact's inbox, read from the domain's MX by
+	// a background sweep (for example "google_workspace" or "microsoft365").
+	// Empty until the sweep has reached the contact. Filter on it with
+	// [ContactSearchParams.MailHosts]. Treat the values as open-ended.
+	MailHost string `json:"mail_host"`
+
+	// ESPProvider is [Contact.MailHost]'s family, resolved with it: "",
+	// "gmail", "outlook" or "other". Campaign ESP matching keys off it.
+	ESPProvider   string     `json:"esp_provider"`
+	ESPResolvedAt *time.Time `json:"esp_resolved_at,omitempty"`
 	// CampaignLead is the contact's state within a single campaign. It is
 	// populated only when a search filters by exactly one campaign.
 	CampaignLead *ContactCampaignProgress `json:"campaign_lead,omitempty"`
@@ -173,7 +172,7 @@ const (
 // Derived lead states returned in [ContactCampaignProgress.Status],
 // [ContactCampaignState.LeadStatus] and accepted by
 // [ContactSearchParams.LeadStatus]. Highest priority first: unsubscribed,
-// bounced, replied, failed, completed, active, undeliverable, pending.
+// bounced, replied, failed, completed, paused, active, undeliverable, pending.
 const (
 	// LeadStatusPending means the contact is enrolled but nothing has been sent.
 	LeadStatusPending = "pending"
@@ -525,8 +524,10 @@ type ContactLinkClick struct {
 }
 
 // EngagementOrigin is what an open or click said about where it came from.
-// Client names the mail client or image proxy when the user agent does
-// (Gmail, Apple Mail, Outlook); the browser fields describe the rest. The
+// Client names the mail client when the user agent does (Gmail, Apple Mail,
+// Outlook); ClientType says whether it was an installed app or webmail; the
+// browser fields describe the rest. DeviceHidden marks a fetch by a mailbox
+// provider's image proxy, which hides the reader's device and network. The
 // location is resolved from the source network; the address itself is never
 // stored. Every field is empty when unknown.
 type EngagementOrigin struct {
@@ -545,6 +546,12 @@ type EngagementOrigin struct {
 	Region         string `json:"region,omitempty"`
 	City           string `json:"city,omitempty"`
 }
+
+// Values of [EngagementOrigin.ClientType] and [ContactReadingOrigin.ClientType].
+const (
+	EngagementClientApp     = "app"
+	EngagementClientWebmail = "webmail"
+)
 
 // ContactPageHit is one page view from the website tracking snippet, as
 // carried by a [TimelinePageHit] event. Landing marks the first view of a
@@ -762,6 +769,9 @@ type CampaignLeadCounts struct {
 	Bounced      int `json:"bounced"`
 	Failed       int `json:"failed"`
 	Unsubscribed int `json:"unsubscribed"`
+	// Paused leads have their flow held (an out-of-office auto-reply, or a
+	// member pausing them) and resume where they stopped.
+	Paused int `json:"paused"`
 	// Undeliverable leads were refused by address verification.
 	Undeliverable int `json:"undeliverable"`
 
@@ -773,9 +783,6 @@ type CampaignLeadCounts struct {
 	Clicked    int `json:"clicked"`
 	RepliedAny int `json:"replied_any"`
 
-	// Paused counts leads whose flow is held (an out-of-office auto-reply, or a
-	// member pausing it by hand) and resumes where it stopped.
-	Paused int `json:"paused"`
 	// Providers splits the leads by their inbox's family, as ESP matching sees
 	// it.
 	Providers CampaignLeadProviderCounts `json:"providers"`
@@ -1314,6 +1321,17 @@ type ContactImportPreview struct {
 	// proposes [ImportTargetVerificationStatus] itself when a column's header
 	// or values look like another service's results.
 	SuggestedMapping []ImportColumnMapping `json:"suggested_mapping"`
+	// InferredColumns are the indexes whose suggestion came from a judgment
+	// about the headers and value kinds (never the cell contents) rather than
+	// from the header or the values, worth a second look.
+	InferredColumns []int `json:"inferred_columns,omitempty"`
+	// ColumnStats describes every column over the whole file, not the sample.
+	// Background imports ([ContactService.CreateImport]) set it.
+	ColumnStats []ContactImportColumnStats `json:"column_stats,omitempty"`
+	// MappingSource is [ContactImportMappingSaved] when the workspace confirmed
+	// a mapping for these exact headers before, and
+	// [ContactImportMappingSuggested] otherwise. Background imports set it.
+	MappingSource string `json:"mapping_source,omitempty"`
 }
 
 // ContactImportParams is the configuration committed alongside the file.
@@ -1384,6 +1402,10 @@ type ContactImportResult struct {
 	ErrorsTruncated bool             `json:"errors_truncated,omitempty"`
 	// Quality is the file's address-level assessment.
 	Quality *ContactImportQuality `json:"quality,omitempty"`
+	// SegmentsPinned is nil when the import had no segment targets. With
+	// targets it is true when every membership write landed and false when one
+	// did not, with the reason among the row notes in Errors.
+	SegmentsPinned *bool `json:"segments_pinned,omitempty"`
 }
 
 // Research run states returned in [ResearchRun.Status]. [ResearchNothingFound]
@@ -1550,6 +1572,13 @@ func (s *ContactService) Delete(ctx context.Context, id string, opts ...RequestO
 // Lookup resolves an email address to a contact. A "Display Name <addr>" form
 // is accepted and reduced to the bare address. The contact is nil when no
 // contact in the organization owns that address.
+//
+// The server answers with the plain contact row, so only the [Contact] part of
+// the returned [ContactDetail] is filled; use [ContactService.Get] for the
+// hydrated view, and [ContactService.LookupSender] to resolve a sender by
+// thread as well.
+//
+// Requires the view-contacts permission ([PermReadContacts] for an API key).
 func (s *ContactService) Lookup(ctx context.Context, email string, opts ...RequestOption) (*ContactDetail, *Response, error) {
 	var env struct {
 		Contact *ContactDetail `json:"contact"`
@@ -1560,6 +1589,61 @@ func (s *ContactService) Lookup(ctx context.Context, email string, opts ...Reque
 		return nil, resp, err
 	}
 	return env.Contact, resp, nil
+}
+
+// How a sender resolved to a contact, in [ContactLookup.Match]. Treat the set
+// as open-ended.
+const (
+	// ContactLookupMatchEmail means the sender's address is the contact's.
+	ContactLookupMatchEmail = "email"
+	// ContactLookupMatchThread means the thread answers a campaign send to the
+	// contact and the reply came from another address (an alias, a colleague).
+	ContactLookupMatchThread = "thread"
+)
+
+// ContactLookupParams resolves a unibox sender to a contact. Email or ThreadID
+// is required (otherwise the server answers 400); with both, the address is
+// tried first and the thread is the fallback.
+type ContactLookupParams struct {
+	// Email is the sender's address. A "Display Name <addr>" form is reduced to
+	// the bare address.
+	Email string
+	// ThreadID is the unibox thread the sender wrote in. Reading a thread
+	// needs unibox access, so a request carrying it also needs the
+	// access-unibox permission ([PermReadUnibox] for an API key).
+	ThreadID string
+	// AccountID is the mailbox the thread lives in, narrowing the thread
+	// match. An API key restricted to some mailboxes cannot name another (403).
+	AccountID string
+}
+
+func (p *ContactLookupParams) values() url.Values {
+	q := make(url.Values)
+	if p == nil {
+		return q
+	}
+	setNonEmpty(q, "email", p.Email)
+	setNonEmpty(q, "thread_id", p.ThreadID)
+	setNonEmpty(q, "account_id", p.AccountID)
+	return q
+}
+
+// ContactLookup is the answer to [ContactService.LookupSender].
+type ContactLookup struct {
+	// Contact is nil when nothing matched, which is a 200 and not an error.
+	Contact *Contact `json:"contact"`
+	// Match says how the contact was found: [ContactLookupMatchEmail] or
+	// [ContactLookupMatchThread]. Empty when Contact is nil.
+	Match string `json:"match,omitempty"`
+}
+
+// LookupSender resolves a unibox sender to a contact, by address first and then
+// by the thread's campaign send, so a reply from an alias still finds the lead.
+//
+// Requires the view-contacts permission ([PermReadContacts] for an API key), plus the
+// access-unibox permission ([PermReadUnibox]) when ThreadID is set.
+func (s *ContactService) LookupSender(ctx context.Context, params *ContactLookupParams, opts ...RequestOption) (*ContactLookup, *Response, error) {
+	return fetch[ContactLookup](ctx, s.client, withQuery("contacts/lookup", params.values()), opts)
 }
 
 // CustomFields returns the organization's distinct contact custom-field keys,
@@ -1664,8 +1748,10 @@ func (s *ContactService) Export(ctx context.Context, params *ContactExportParams
 	return s.client.post(ctx, "contacts/export", params, w, opts...)
 }
 
-// ImportPreview parses an uploaded CSV or XLSX and returns the detected columns
-// and a suggested mapping, without writing anything.
+// ImportPreview parses an uploaded CSV or XLSX (at most 50 MB; a larger file is
+// refused with a 400) and returns the detected columns and a suggested mapping,
+// without writing anything. Large files belong in a background import:
+// [ContactService.CreateImport].
 func (s *ContactService) ImportPreview(ctx context.Context, file *FileUpload, opts ...RequestOption) (*ContactImportPreview, *Response, error) {
 	out := new(ContactImportPreview)
 	resp, err := s.client.postMultipart(ctx, "contacts/import/preview", "file", file, nil, out, opts...)
@@ -1677,8 +1763,9 @@ func (s *ContactService) ImportPreview(ctx context.Context, file *FileUpload, op
 
 // ImportCommit imports the file using the given mapping and options. Pass the
 // same file that was used for [ContactService.ImportPreview]. Imports are
-// capped at 50,000 rows, and new addresses are queued for verification right
-// away.
+// capped at 50 MB and 50,000 rows, and new addresses are queued for
+// verification right away. The request is held open until every row is
+// settled; prefer [ContactService.CreateImport] for anything large.
 //
 // An import is a bulk arrival: it never raises contact.created, however few
 // rows it has, so one upload cannot flood the organization's automations and

@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -709,6 +710,244 @@ func (s *AnalyticsService) Usage(ctx context.Context, period string, opts ...Req
 	q := make(url.Values)
 	setNonEmpty(q, "period", period)
 	return fetch[UsageOverview](ctx, s.client, withQuery("analytics/usage", q), opts)
+}
+
+// DirectMailAnalytics reports the mail sent by hand from the unified inbox, as
+// opposed to campaign mail. Volume is measured from the synced mailboxes and
+// Tracking is the opt-in half ([EmailService.SetDirectTracking]); they are kept
+// apart because one blended rate would be a lie.
+type DirectMailAnalytics struct {
+	// Period is [Period7Days], [Period30Days] or [Period90Days].
+	Period      string                   `json:"period"`
+	Volume      DirectMailVolume         `json:"volume"`
+	Tracking    DirectMailTracking       `json:"tracking"`
+	DailyTrend  []DirectMailDailyStat    `json:"daily_trend"`
+	Mailboxes   []DirectMailMailboxStats `json:"mailboxes"`
+	TopContacts []DirectMailContact      `json:"top_contacts"`
+}
+
+// DirectMailVolume is how much was actually sent and answered, measured from
+// the synced mailbox.
+type DirectMailVolume struct {
+	Sent     int `json:"sent"`
+	Received int `json:"received"`
+	// ThreadsStarted counts outbound threads whose first message was yours, and
+	// Replied those that got an inbound message back.
+	ThreadsStarted int     `json:"threads_started"`
+	Replied        int     `json:"replied"`
+	ReplyRate      float64 `json:"reply_rate"`
+	// Bounced counts the delivery failures that came back. They are excluded
+	// from Replied.
+	Bounced int `json:"bounced"`
+	// MedianReplyMinutes is how long contacts took to answer, across the
+	// threads that were answered. Zero when none was.
+	MedianReplyMinutes int `json:"median_reply_minutes"`
+}
+
+// DirectMailTracking covers the mailboxes that opted into open and click
+// tracking. TrackedSent is the denominator of both rates: an untracked send is
+// not a failure to open, it is a message nobody asked about.
+type DirectMailTracking struct {
+	// MailboxesOptedIn of MailboxesTotal says how much of the picture this
+	// covers.
+	MailboxesOptedIn int `json:"mailboxes_opted_in"`
+	MailboxesTotal   int `json:"mailboxes_total"`
+	TrackedSent      int `json:"tracked_sent"`
+	Opened           int `json:"opened"`
+	// MachineOpened are opens by automated fetchers, excluded from Opened and
+	// OpenRate.
+	MachineOpened int     `json:"machine_opened"`
+	Clicked       int     `json:"clicked"`
+	OpenRate      float64 `json:"open_rate"`
+	ClickRate     float64 `json:"click_rate"`
+}
+
+// DirectMailDailyStat is one day of direct-mail volume.
+type DirectMailDailyStat struct {
+	Date     time.Time `json:"date"`
+	Sent     int       `json:"sent"`
+	Received int       `json:"received"`
+}
+
+// DirectMailMailboxStats is one mailbox's direct-mail volume.
+type DirectMailMailboxStats struct {
+	EmailAccountID string `json:"email_account_id"`
+	Email          string `json:"email"`
+	// TrackDirectMail is whether the mailbox opted into tracking.
+	TrackDirectMail bool `json:"track_direct_mail"`
+	Sent            int  `json:"sent"`
+	Received        int  `json:"received"`
+}
+
+// DirectMailContact is one correspondent, ranked by how much was sent to them.
+type DirectMailContact struct {
+	Email    string    `json:"email"`
+	Sent     int       `json:"sent"`
+	Received int       `json:"received"`
+	LastAt   time.Time `json:"last_at"`
+}
+
+// Direct returns analytics for the mail sent by hand from the unified inbox over
+// a rolling window. Period is [Period7Days], [Period30Days] or [Period90Days];
+// anything else, including empty, silently becomes [Period7Days]. Requires the
+// view-analytics permission ([PermReadAnalytics] for an API key).
+func (s *AnalyticsService) Direct(ctx context.Context, period string, opts ...RequestOption) (*DirectMailAnalytics, *Response, error) {
+	q := make(url.Values)
+	setNonEmpty(q, "period", period)
+	return fetch[DirectMailAnalytics](ctx, s.client, withQuery("analytics/direct", q), opts)
+}
+
+// Kinds of message the automatic inbox tagging recognizes, in
+// [InboxTagResult.Kind]. The set may grow, so a value not listed here still
+// decodes.
+const (
+	InboxKindBounceHard      = "bounce_hard"
+	InboxKindBounceSoft      = "bounce_soft"
+	InboxKindAutoReplyOOO    = "auto_reply_ooo"
+	InboxKindAutoReplyTicket = "auto_reply_ticket"
+	InboxKindHumanReply      = "human_reply"
+	InboxKindColdInbound     = "cold_inbound"
+	InboxKindNotification    = "notification"
+	InboxKindInternal        = "internal"
+)
+
+// Intents of a human reply, in [InboxTagResult.Intent]. Only read when the kind
+// is [InboxKindHumanReply]. The set may grow.
+const (
+	InboxIntentAgreed           = "agreed"
+	InboxIntentWantsInfo        = "wants_info"
+	InboxIntentWantsPricing     = "wants_pricing"
+	InboxIntentNotNow           = "not_now"
+	InboxIntentNotInterested    = "not_interested"
+	InboxIntentWrongPerson      = "wrong_person"
+	InboxIntentOptOut           = "opt_out"
+	InboxIntentScheduling       = "scheduling"
+	InboxIntentInProgress       = "in_progress"
+	InboxIntentQuestionAnswered = "question_answered"
+	InboxIntentUnclear          = "unclear"
+)
+
+// Priorities in [InboxTagResult.Priority]. The set may grow.
+const (
+	InboxPriorityNow      = "now"
+	InboxPriorityToday    = "today"
+	InboxPriorityWhenever = "whenever"
+	InboxPriorityIgnore   = "ignore"
+)
+
+// InboxTagResult is what automatic inbox tagging decided about one inbound
+// message, and how sure it was.
+type InboxTagResult struct {
+	ID        string `json:"id"`
+	MessageID string `json:"message_id"`
+	ThreadID  string `json:"thread_id"`
+	// Kind is one of the InboxKind* constants and KindSource says who decided:
+	// "header" (a standard auto-reply or bounce header) or "model".
+	Kind           string  `json:"kind"`
+	KindConfidence float64 `json:"kind_confidence"`
+	KindSource     string  `json:"kind_source"`
+	// Intent is one of the InboxIntent* constants, meaningful for a human
+	// reply.
+	Intent           string  `json:"intent"`
+	IntentConfidence float64 `json:"intent_confidence"`
+	// Relevance is a 0 to 100 score and Priority one of the InboxPriority*
+	// constants.
+	Relevance int    `json:"relevance"`
+	Priority  string `json:"priority"`
+	// NeedsReview is set when the verdict was not confident enough to trust,
+	// with ReviewReason saying why.
+	NeedsReview  bool   `json:"needs_review"`
+	ReviewReason string `json:"review_reason"`
+	// Labels are the conversation labels the verdict applied.
+	Labels []string `json:"labels"`
+	// Answers are the model's raw per-question answers, an object whose keys
+	// are not part of this SDK's contract.
+	Answers json.RawMessage `json:"answers"`
+	Model   string          `json:"model"`
+	// InputTokens is what the judgment consumed.
+	InputTokens int `json:"input_tokens"`
+	// Actions are what the workspace's switches let this verdict do: "hold",
+	// "stop", "task" or "suppress".
+	Actions []string `json:"actions"`
+	// ReturnDate is the out-of-office return date (YYYY-MM-DD) the model was
+	// asked to confirm, nil when it was not asked.
+	ReturnDate *string   `json:"return_date"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// InboxTagSummary counts the verdicts behind an [InboxTaggingPage].
+type InboxTagSummary struct {
+	Total       int `json:"total"`
+	NeedsReview int `json:"needs_review"`
+	// FromOffline counts verdicts made without the model, from headers alone.
+	FromOffline int `json:"from_offline"`
+	// Acted counts verdicts that were allowed to take an action.
+	Acted int `json:"acted"`
+}
+
+// InboxTaggingPage is one page of the automatic-tagging review list. Beyond the
+// rows it says whether the feature is on and carries the totals.
+type InboxTaggingPage struct {
+	Page[InboxTagResult]
+
+	// Enabled says whether automatic tagging is switched on for this instance,
+	// so an empty list can be explained rather than read as "nothing found".
+	Enabled bool `json:"enabled"`
+	// Total is the number of rows matching the filter, across every page.
+	Total   int             `json:"total"`
+	Summary InboxTagSummary `json:"summary"`
+}
+
+// InboxTaggingParams filters and paginates the review list. Limit may be 1 to
+// 200 and defaults to 50. The cursor is opaque.
+type InboxTaggingParams struct {
+	ListOptions
+	// NeedsReview restricts the list to verdicts flagged for a person's review.
+	NeedsReview bool
+}
+
+func (p *InboxTaggingParams) values() url.Values {
+	q := make(url.Values)
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	if p.NeedsReview {
+		q.Set("needs_review", "true")
+	}
+	return q
+}
+
+// InboxTagging returns the review list of automatic inbox tagging: what it
+// decided about each inbound message and how sure it was, newest first. It is
+// read-only; the point of the review phase is that a person watches it decide
+// before it is allowed to act. Pages are cursor-based, and the filter and the
+// totals ride the first and every following page. Requires the view-analytics
+// permission ([PermReadAnalytics] for an API key).
+func (s *AnalyticsService) InboxTagging(ctx context.Context, params *InboxTaggingParams, opts ...RequestOption) (*InboxTaggingPage, error) {
+	return fetchInboxTagging(ctx, s.client, params, opts)
+}
+
+func fetchInboxTagging(ctx context.Context, c *Client, params *InboxTaggingParams, opts []RequestOption) (*InboxTaggingPage, error) {
+	page := &InboxTaggingPage{}
+	resp, err := c.get(ctx, withQuery("analytics/inbox-tagging", params.values()), page, opts...)
+	if err != nil {
+		return nil, err
+	}
+	page.resp = resp
+	page.fetch = func(ctx context.Context, cursor string) (*Page[InboxTagResult], error) {
+		var next InboxTaggingParams
+		if params != nil {
+			next = *params
+		}
+		next.Cursor = cursor
+		p, err := fetchInboxTagging(ctx, c, &next, opts)
+		if err != nil {
+			return nil, err
+		}
+		return &p.Page, nil
+	}
+	return page, nil
 }
 
 // formatDay renders a calendar day the way the analytics endpoints expect. A

@@ -68,6 +68,8 @@ type Client struct {
 	Unibox *UniboxService
 	// Templates manages reusable reply templates.
 	Templates *TemplateService
+	// EmailImages is the workspace's image library for email bodies.
+	EmailImages *EmailImageService
 	// Analytics reads aggregate analytics and deliverability health.
 	Analytics *AnalyticsService
 	// Advisor reads and acts on continuous checks of the sending posture.
@@ -188,6 +190,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
 	c.Templates = (*TemplateService)(&c.common)
+	c.EmailImages = (*EmailImageService)(&c.common)
 	c.Analytics = (*AnalyticsService)(&c.common)
 	c.Advisor = (*AdvisorService)(&c.common)
 

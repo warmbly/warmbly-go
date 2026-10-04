@@ -443,7 +443,9 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 }
 
 // Push sends the given contacts to the provider now, rather than waiting for
-// an event to fire.
+// an event to fire. A push is synchronous against the provider's API, so it
+// takes at most 500 contacts; more is a 400 carrying code "too_many_contacts".
+// To push what a search matches, use [IntegrationService.PushSelection].
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`

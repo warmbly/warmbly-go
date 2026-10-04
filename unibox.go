@@ -3,6 +3,7 @@ package warmbly
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -109,6 +110,10 @@ type UniboxMessage struct {
 	// case BodyPlain holds only the preview snippet. Show a notice rather than
 	// presenting the partial text as the whole message.
 	BodyTruncated bool `json:"body_truncated,omitempty"`
+	// AnswersMailboxID is the workspace mailbox that sent the email this
+	// message replies to, when that is not the mailbox holding it: a reply that
+	// landed in a shared reply inbox. Set on thread reads only.
+	AnswersMailboxID *string `json:"answers_mailbox_id,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
@@ -332,6 +337,11 @@ type UniboxReplyParams struct {
 	// [SendModeScheduled].
 	SendMode    string     `json:"send_mode,omitempty"`
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	// ForwardMessageID makes the send a forward of that stored message, which
+	// goes out under Body and the signature. The message's mailbox must be one
+	// the caller may use, and forwarding it needs read access to the unibox as
+	// well as write.
+	ForwardMessageID string `json:"forward_message_id,omitempty"`
 }
 
 // UniboxComposeParams sends a brand-new outbound email. Unlike a reply it is
@@ -726,6 +736,44 @@ func (s *UniboxService) Snooze(ctx context.Context, threadID string, until time.
 		SnoozedUntil time.Time `json:"snoozed_until"`
 	}{ThreadID: threadID, SnoozedUntil: until}
 	return send[UniboxSnooze](ctx, s.client.post, "unibox/snooze", body, opts)
+}
+
+// SnoozeMany hides several conversations until the given time in one call and
+// returns their snooze rows. A thread already snoozed has its wake-up time
+// moved. The server answers a single-thread request with the bare row and a
+// larger one with a "data" list; this method returns a list either way.
+func (s *UniboxService) SnoozeMany(ctx context.Context, threadIDs []string, until time.Time, opts ...RequestOption) ([]UniboxSnooze, *Response, error) {
+	body := struct {
+		ThreadIDs    []string  `json:"thread_ids"`
+		SnoozedUntil time.Time `json:"snoozed_until"`
+	}{ThreadIDs: threadIDs, SnoozedUntil: until}
+	var raw json.RawMessage
+	resp, err := s.client.post(ctx, "unibox/snooze", body, &raw, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	var list struct {
+		Data []UniboxSnooze `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, resp, fmt.Errorf("warmbly: decode response body: %w", err)
+	}
+	if list.Data != nil {
+		return list.Data, resp, nil
+	}
+	var one UniboxSnooze
+	if err := json.Unmarshal(raw, &one); err == nil && one.ID != "" {
+		return []UniboxSnooze{one}, resp, nil
+	}
+	return []UniboxSnooze{}, resp, nil
+}
+
+// UnsnoozeMany returns several snoozed conversations to the inbox at once. The
+// ids travel comma-separated in the thread_id query parameter, so none may
+// contain a comma.
+func (s *UniboxService) UnsnoozeMany(ctx context.Context, threadIDs []string, opts ...RequestOption) (*Response, error) {
+	q := url.Values{"thread_id": {strings.Join(threadIDs, ",")}}
+	return s.client.delete(ctx, withQuery("unibox/snooze", q), opts...)
 }
 
 // Unsnooze returns a snoozed thread to the inbox immediately. It is
