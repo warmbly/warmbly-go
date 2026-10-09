@@ -44,6 +44,15 @@ type Session struct {
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// LinkRequired is true when a federated sign-in (Google, Apple or single
+	// sign-on) resolved to an existing password account. The token fields are
+	// then empty and PendingToken is the handle to pass, with that account's
+	// password, to [AuthService.SSOLink]. LinkEmail is the account and
+	// LinkProvider the provider that was used.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -150,6 +159,13 @@ type OnboardingParams struct {
 // TwoFAStatus reports whether the account has two-factor enabled.
 type TwoFAStatus struct {
 	Enabled bool `json:"enabled"`
+	// ConfirmedAt is when two-factor was switched on, nil while it is off.
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
+	// RecoveryCodesRemaining of RecoveryCodesTotal are still unused. Regenerate
+	// the set with [AuthService.RegenerateRecoveryCodes] before they run
+	// out.
+	RecoveryCodesRemaining int `json:"recovery_codes_remaining"`
+	RecoveryCodesTotal     int `json:"recovery_codes_total"`
 }
 
 // TwoFAEnrollment is what a new authenticator needs to be set up.
@@ -283,6 +299,29 @@ type AuthConfig struct {
 	// layout is whatever the operator chose.
 	WebsocketURL string `json:"websocket_url,omitempty"`
 	AppURL       string `json:"app_url,omitempty"`
+	// APIURL is this API's own public base, as the request reached it, for
+	// building copyable API examples on a self-hosted instance.
+	APIURL string `json:"api_url,omitempty"`
+	// GmailOAuthConnect is whether a new Gmail mailbox may be connected with
+	// Google sign-in. False routes the connect flow through an app password
+	// instead; mailboxes already on Google sign-in are unaffected, and a new
+	// Google OAuth start is refused with a 403 carrying code
+	// "mailbox_gmail_oauth_disabled".
+	GmailOAuthConnect bool `json:"gmail_oauth_connect"`
+	// Brand is what this deployment calls itself and where it points people.
+	// Every field is empty on a self-hosted instance that configured none.
+	Brand AuthBrand `json:"brand"`
+}
+
+// AuthBrand is the public half of a deployment's branding, as served by
+// [AuthService.Config].
+type AuthBrand struct {
+	Name         string `json:"name"`
+	WebsiteURL   string `json:"website_url,omitempty"`
+	WebsiteLabel string `json:"website_label,omitempty"`
+	TermsURL     string `json:"terms_url,omitempty"`
+	PrivacyURL   string `json:"privacy_url,omitempty"`
+	SupportEmail string `json:"support_email,omitempty"`
 }
 
 // InstanceInfo is which Warmbly a self-hosted instance runs and whether a
@@ -449,6 +488,15 @@ const (
 	// NotifDomainAuth fires when a sending domain starts failing SPF or
 	// DMARC: the warning before the send gate applies.
 	NotifDomainAuth = "health_domain_auth"
+	// NotifPlacementFinished tells whoever started an inbox placement test
+	// where its copies landed.
+	NotifPlacementFinished = "placement_finished"
+	// NotifPlacementAlert fires when a campaign's scheduled placement test
+	// comes back below its alert threshold.
+	NotifPlacementAlert = "placement_alert"
+	// NotifInboxActionRequired fires when automatic tagging finds automated
+	// mail that needs someone to act, such as a failed payment.
+	NotifInboxActionRequired = "inbox_action_required"
 )
 
 // ChannelPrefs are the delivery toggles for one notification category.
@@ -481,6 +529,16 @@ type NotificationPreferences struct {
 	// act.
 	CampaignPaused CategoryPref `json:"campaign_paused"`
 	DomainAuth     CategoryPref `json:"health_domain_auth"`
+	// PlacementFinished tells whoever started an inbox placement test where
+	// its copies landed. PlacementAlert fires when a campaign's scheduled
+	// placement test comes back below its alert threshold, so it emails by
+	// default.
+	PlacementFinished CategoryPref `json:"placement_finished"`
+	PlacementAlert    CategoryPref `json:"placement_alert"`
+	// InboxActionRequired fires when automatic tagging finds automated mail in
+	// a mailbox that needs someone to act, such as a failed payment or a
+	// suspended account, so it emails by default.
+	InboxActionRequired CategoryPref `json:"inbox_action_required"`
 
 	// EmailDigestMinutes bundles pending notification emails into one send.
 	// It must fall within [NotificationEmailDelivery.MinMinutes] and
@@ -643,7 +701,9 @@ func (s *AuthService) BeginSSO(ctx context.Context, provider string, opts ...Req
 // use. A code presented without the binding of the browser that began the
 // sign-in fails with code "sso_wrong_browser", by design: a forwarded handoff
 // link cannot sign its recipient in. Two-factor applies here like everywhere
-// else; see [Session.TwoFARequired].
+// else; see [Session.TwoFARequired]. When the provider's address already
+// belongs to a password account the result is [Session.LinkRequired] instead of
+// a session: finish with [AuthService.SSOLink].
 //
 // The route is POST /auth/sso/exchange; the server also keeps the older
 // POST /auth/oidc/exchange as an alias for the same handler.
@@ -796,12 +856,16 @@ func (s *AuthService) DenyCLIAuth(ctx context.Context, userCode string, opts ...
 }
 
 // LoginWithApple exchanges an Apple-signed identity token for a session. The
-// token's signature is the credential, so this needs no prior sign-in.
+// token's signature is the credential, so this needs no prior sign-in. When the
+// token's address already belongs to a password account the result is
+// [Session.LinkRequired] instead of a session: finish with
+// [AuthService.SSOLink].
 func (s *AuthService) LoginWithApple(ctx context.Context, identityToken string, opts ...RequestOption) (*Session, *Response, error) {
 	return s.tokenLogin(ctx, "auth/apple", identityToken, opts)
 }
 
-// LoginWithGoogle exchanges a Google-signed ID token for a session.
+// LoginWithGoogle exchanges a Google-signed ID token for a session. Like
+// [AuthService.LoginWithApple] it may answer [Session.LinkRequired].
 func (s *AuthService) LoginWithGoogle(ctx context.Context, idToken string, opts ...RequestOption) (*Session, *Response, error) {
 	return s.tokenLogin(ctx, "auth/google", idToken, opts)
 }
@@ -875,13 +939,20 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, opts ...RequestOption) (
 	return s.client.delete(ctx, "auth/me/avatar", opts...)
 }
 
-// ChangePassword sets a new password, which requires the current one.
-func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Response, error) {
+// ChangePassword sets a new password, which requires the current one. It ends
+// every session of the account, the calling one included, and answers with the
+// token pair of a fresh session for this device: store it, or the next request
+// fails with 401. The returned [Session] is empty on a server too old to reissue
+// one, in which case sign in again. If the password was stored but this device
+// could not be signed back in, the call fails with a 409 carrying code
+// "password_changed_sign_in_again": drop the old tokens and sign in with the new
+// password.
+func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Session, *Response, error) {
 	body := struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
 	}{CurrentPassword: currentPassword, NewPassword: newPassword}
-	return s.client.post(ctx, "auth/me/password", body, nil, opts...)
+	return send[Session](ctx, s.client.post, "auth/me/password", body, opts)
 }
 
 // SetUndoSendSeconds sets how long an instant send is held, and stays
@@ -933,6 +1004,52 @@ func (s *AuthService) VerifyTwoFA(ctx context.Context, pendingToken, code string
 		Code         string `json:"code"`
 	}{PendingToken: pendingToken, Code: code}
 	return send[Session](ctx, s.client.post, "auth/2fa/verify", body, opts)
+}
+
+// RegenerateRecoveryCodes replaces the account's two-factor recovery codes and
+// returns the new set, which is shown exactly once. It needs a current
+// authenticator code or one of the existing recovery codes. Session only.
+func (s *AuthService) RegenerateRecoveryCodes(ctx context.Context, code string, opts ...RequestOption) (*TwoFARecoveryCodes, *Response, error) {
+	body := struct {
+		Code string `json:"code"`
+	}{Code: code}
+	return send[TwoFARecoveryCodes](ctx, s.client.post, "auth/2fa/recovery-codes", body, opts)
+}
+
+// Reauth re-proves the account holder behind the live session and returns how
+// many seconds the confirmation lasts. Changes that hand out a durable
+// credential or cannot be undone, such as creating an API key, adding or
+// removing a passkey, transferring a workspace or scheduling a deletion, fail
+// with [ErrCodeReauthRequired] until it has been given recently. Send the
+// account password, a current two-factor or recovery code, or both. An account
+// with neither a password nor two-factor authentication fails with
+// [ErrCodeReauthNoFactor]. Session only.
+func (s *AuthService) Reauth(ctx context.Context, password, code string, opts ...RequestOption) (time.Duration, *Response, error) {
+	body := struct {
+		Password string `json:"password,omitempty"`
+		Code     string `json:"code,omitempty"`
+	}{Password: password, Code: code}
+	var out struct {
+		ValidForSeconds int `json:"valid_for_seconds"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return time.Duration(out.ValidForSeconds) * time.Second, resp, nil
+}
+
+// SSOLink finishes a federated sign-in that stopped with
+// [Session.LinkRequired]: it takes the pending token and the existing
+// account's password, attaches the provider identity and signs in. An account
+// with two-factor on answers with the usual 2FA challenge instead of tokens.
+// Three wrong passwords end the pending token ([ErrCodeSSOLinkExpired]).
+func (s *AuthService) SSOLink(ctx context.Context, pendingToken, password string, opts ...RequestOption) (*Session, *Response, error) {
+	body := struct {
+		PendingToken string `json:"pending_token"`
+		Password     string `json:"password"`
+	}{PendingToken: pendingToken, Password: password}
+	return send[Session](ctx, s.client.post, "auth/sso/link", body, opts)
 }
 
 // --- passkeys ---
@@ -1061,6 +1178,98 @@ func (s *AuthService) RegisterDeviceToken(ctx context.Context, token, platform, 
 // DeleteDeviceToken unregisters a device from push notifications.
 func (s *AuthService) DeleteDeviceToken(ctx context.Context, token string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "auth/me/device-tokens/"+url.PathEscape(token), opts...)
+}
+
+// --- saved list layouts ---
+
+// Dashboard lists whose layout a member can save, for
+// [AuthService.ViewPreferences] and its siblings. The set grows; an unknown
+// name is a 400.
+const (
+	// ViewNameContacts is the contacts list.
+	ViewNameContacts = "contacts"
+	// ViewNameCampaignLeads is a campaign's leads list.
+	ViewNameCampaignLeads = "campaign_leads"
+	// ViewNameUniboxRail is the unibox scope rail. It has no columns or sort;
+	// its layout is a document in [ViewPreferences.Layout].
+	ViewNameUniboxRail = "unibox_rail"
+)
+
+// ViewSort is the saved ordering of a list, in the contacts search's terms:
+// By is a [ContactSearchParams.SortBy] value.
+type ViewSort struct {
+	By      string `json:"by"`
+	Reverse bool   `json:"reverse"`
+}
+
+// ViewPreferences is one member's saved layout for one list in one workspace.
+type ViewPreferences struct {
+	// View is one of the ViewName* constants.
+	View string `json:"view"`
+	// Columns are the column ids in display order: built-in ids of that list or
+	// "custom:<field>". Empty means the default layout.
+	Columns []string `json:"columns"`
+	// Sort is nil for the default sort.
+	Sort *ViewSort `json:"sort,omitempty"`
+	// Layout is the saved document of a view that has one (the unibox rail),
+	// already validated on write; absent when none is saved.
+	Layout json.RawMessage `json:"layout,omitempty"`
+	// UpdatedAt is nil when nothing is saved.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// ViewPreferencesUpdateParams is a partial write: a field left nil keeps what is
+// saved, so a sort click made before the layout loaded cannot erase the columns.
+type ViewPreferencesUpdateParams struct {
+	// Columns replaces the column list. A pointer to an empty slice returns to
+	// the default layout; nil keeps the saved columns. At most 64, listed once.
+	Columns *[]string `json:"columns,omitempty"`
+	// Sort replaces the sort. A ViewSort with an empty By returns to the default
+	// sort; nil keeps the saved one.
+	Sort *ViewSort `json:"sort,omitempty"`
+	// Layout replaces the layout document of a view that has one. Leave it nil
+	// to keep the saved one, or set json.RawMessage("null") to return to the
+	// default layout. On a view with no layout it is a 400.
+	Layout json.RawMessage `json:"layout,omitempty"`
+}
+
+// ViewPreferences returns the caller's saved layout for one dashboard list in
+// the current workspace, or an empty layout (no columns, no sort) when none is
+// saved. The route is session-only: an API key has no screen to lay out.
+func (s *AuthService) ViewPreferences(ctx context.Context, view string, opts ...RequestOption) (*ViewPreferences, *Response, error) {
+	var env struct {
+		Preferences *ViewPreferences `json:"preferences"`
+	}
+	resp, err := s.client.get(ctx, "me/views/"+url.PathEscape(view), &env, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return env.Preferences, resp, nil
+}
+
+// SaveViewPreferences writes the caller's saved layout for one list: the
+// columns, the sort, the layout, or any of them, and returns what is saved. An
+// unknown view is a 400, as are an unknown or repeated column
+// ("invalid_column", "duplicate_column"), an invalid sort ("invalid_sort") and a
+// bad layout ("invalid_layout").
+func (s *AuthService) SaveViewPreferences(ctx context.Context, view string, params *ViewPreferencesUpdateParams, opts ...RequestOption) (*ViewPreferences, *Response, error) {
+	if params == nil {
+		params = &ViewPreferencesUpdateParams{}
+	}
+	var env struct {
+		Preferences *ViewPreferences `json:"preferences"`
+	}
+	resp, err := s.client.put(ctx, "me/views/"+url.PathEscape(view), params, &env, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return env.Preferences, resp, nil
+}
+
+// ResetViewPreferences forgets the caller's saved layout for one list, so it
+// shows its defaults again (204).
+func (s *AuthService) ResetViewPreferences(ctx context.Context, view string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "me/views/"+url.PathEscape(view), opts...)
 }
 
 // --- account danger zone ---

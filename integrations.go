@@ -38,6 +38,9 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier, connected by API key
+	// and used the same way as [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -103,10 +106,14 @@ type IntegrationConnection struct {
 	Status string `json:"status"`
 	// AuthMethod is "oauth", "api_key" or "webhook".
 	AuthMethod string `json:"auth_method"`
-	// DisplayFields are the non-secret connection details worth showing.
+	// DisplayFields are the non-secret connection details worth showing. For
+	// Calendly and Cal.com it carries "inbound_signing": true once a signing
+	// key has been set with [IntegrationService.SetInboundSigningKey].
 	DisplayFields json.RawMessage `json:"display_fields,omitempty"`
 	// ConfigCapabilities is the per-connection capability snapshot: selected
-	// objects, enabled use cases, picker selections. It never holds secrets.
+	// objects, enabled use cases, picker selections. It never holds secrets:
+	// an automation connection's outbound signing secret is left out of every
+	// response, and is read only through [IntegrationService.WebhookSecret].
 	ConfigCapabilities json.RawMessage `json:"config_capabilities,omitempty"`
 	// SyncDirection is [SyncPush], [SyncPull] or [SyncBoth].
 	SyncDirection string `json:"sync_direction"`
@@ -127,7 +134,9 @@ type IntegrationConnection struct {
 	LastErrorAt  *time.Time `json:"last_error_at,omitempty"`
 
 	// InboundWebhookURL is where an inbound provider should POST. It embeds a
-	// rotatable per-connection secret, so treat it as a credential.
+	// rotatable per-connection secret, so treat it as a credential. The server
+	// returns it when the connection is created and from
+	// [IntegrationService.RotateInboundURL]; do not expect it on later reads.
 	InboundWebhookURL string `json:"inbound_webhook_url,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -385,6 +394,41 @@ func (s *IntegrationService) WebhookSecret(ctx context.Context, id string, opts 
 	return fetch[ConnectionWebhookSecret](ctx, s.client, "integrations/connections/"+url.PathEscape(id)+"/webhook-secret", opts)
 }
 
+// SetInboundSigningKey sets the key a Calendly or Cal.com connection's
+// deliveries must be signed with, on top of the secret in the inbound URL. The
+// key is 8 to 512 characters and is sealed server-side; it is never returned.
+// An empty key removes it and goes back to the URL secret alone.
+// [IntegrationConnection.DisplayFields] reports whether one is set. It fails
+// with a 400 for any other provider.
+func (s *IntegrationService) SetInboundSigningKey(ctx context.Context, id, key string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
+	var out struct {
+		Connection *IntegrationConnection `json:"connection"`
+	}
+	body := struct {
+		SigningKey string `json:"signing_key"`
+	}{key}
+	resp, err := s.client.put(ctx, "integrations/connections/"+url.PathEscape(id)+"/signing-key", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Connection, resp, nil
+}
+
+// RotateInboundURL mints a new inbound URL for a Calendly or Cal.com
+// connection and returns it. The previous URL stops working immediately, so
+// update the provider's webhook before anything else delivers. Treat the URL as
+// a credential.
+func (s *IntegrationService) RotateInboundURL(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		InboundWebhookURL string `json:"inbound_webhook_url"`
+	}
+	resp, err := s.client.post(ctx, "integrations/connections/"+url.PathEscape(id)+"/rotate-inbound-url", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.InboundWebhookURL, resp, nil
+}
+
 // Test sends a test message through the connection to confirm it works. For a
 // notification provider this posts a real message to the configured channel.
 func (s *IntegrationService) Test(ctx context.Context, id string, opts ...RequestOption) (bool, *Response, error) {
@@ -399,12 +443,25 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 }
 
 // Push sends the given contacts to the provider now, rather than waiting for
-// an event to fire.
+// an event to fire. A push is synchronous against the provider's API, so it
+// takes at most 500 contacts; more is a 400 carrying code "too_many_contacts".
+// To push what a search matches, use [IntegrationService.PushSelection].
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`
 	}{ContactIDs: contactIDs}
 	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
+}
+
+// PushSelection is [IntegrationService.Push] for a [ContactSelection], so a
+// push can cover everything a contact search matches. The resolved set is still
+// capped at 500 contacts, because the push calls the provider once per contact
+// inside the request.
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, sel *ContactSelection, opts ...RequestOption) (*PushResult, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", sel, opts)
 }
 
 // --- OAuth connect flow (session-only) ---

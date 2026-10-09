@@ -93,7 +93,11 @@ const (
 	// JoinReasonRateLimited accompanies [JoinCodeRateLimited].
 	JoinReasonRateLimited = "rate_limited"
 	// JoinReasonNotAMember means the credential's owner is not a member of the
-	// workspace in the topic.
+	// workspace in the topic. It is also what a rejoin gets after the member
+	// was removed from the workspace: the server drops every socket the member
+	// has open, and the channels for workspaces they still belong to rejoin
+	// while the removed workspace's is refused with this reason, ending the
+	// session.
 	JoinReasonNotAMember = "not_a_member"
 	// JoinReasonForbidden means the member exists but lacks the permission the
 	// topic requires.
@@ -397,8 +401,14 @@ func WithResumeFrom(seq int) Option {
 }
 
 // New creates a gateway client for one workspace, authenticated with token: an
-// API key holding the realtime-subscribe scope, or a session access token. It
-// does not connect; call [Client.Open].
+// API key holding the realtime-subscribe scope, an OAuth access token, or the
+// single-use ticket a signed-in session mints with Meta.GatewayTicket. The
+// gateway no longer accepts a bare session access token. It does not connect;
+// call [Client.Open].
+//
+// A ticket expires after GatewayTicket.ExpiresIn, and the client presents the
+// same token on every reconnect, so a reconnect after that is refused. Use an
+// API key or OAuth access token for a connection meant to outlive its ticket.
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,

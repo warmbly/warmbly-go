@@ -46,6 +46,21 @@ type Subscription struct {
 
 	// IsEnterprise marks a subscription negotiated outside the plan catalog.
 	IsEnterprise bool `json:"is_enterprise"`
+
+	// Managed is true while a plan granted by an operator, rather than bought
+	// through Stripe, is in force. A granted plan never touches Stripe, so
+	// Status can read "incomplete" on a workspace entitled to everything: do
+	// not decide "paid" from Status alone, check Managed too.
+	Managed bool `json:"managed"`
+	// ManagedPlanID is the granted plan, held beside PlanID: the workspace
+	// returns to PlanID when the grant ends. ManagedAt and ManagedBy record
+	// the grant, ManagedReason why, and ManagedUntil when it lapses (nil is
+	// open-ended).
+	ManagedPlanID *string    `json:"managed_plan_id,omitempty"`
+	ManagedAt     *time.Time `json:"managed_at,omitempty"`
+	ManagedBy     *string    `json:"managed_by,omitempty"`
+	ManagedReason *string    `json:"managed_reason,omitempty"`
+	ManagedUntil  *time.Time `json:"managed_until,omitempty"`
 	// Plan is the plan this subscription is on, joined in by the API so a
 	// caller does not have to look it up in [MetaService.Plans].
 	Plan *Plan `json:"plan,omitempty"`

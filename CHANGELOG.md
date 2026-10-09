@@ -3,6 +3,38 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [Unreleased]
+
+## [0.4.0] - 2026-10-04
+
+Syncs the SDK with the v1 API as of server commit 2032b0492: inbox placement, contact imports, lead copies, new realtime events and error codes. One breaking change, `AuthService.ChangePassword`.
+
+### Changed
+
+- **Breaking:** `AuthService.ChangePassword` now returns `(*Session, *Response, error)`. The server ends every session, the caller's included, and answers with a fresh token pair, so store it.
+- `Campaign.Kind`, `CampaignCreateParams.Kind`, `CampaignListParams.Kind`, `CampaignsOverview.OneTime` and the `CampaignKind*` constants are Deprecated. One-time campaigns no longer exist on the server; the field is never sent and the filter has no effect.
+- `WarmupDomainPlacement.Domain` is Deprecated in favour of `Label`; `WarmupHealth.SpamScore` is Deprecated (always 0).
+- `AnalyticsService.Accounts` now follows every page of mailbox statuses instead of stopping at the first 1000.
+- `Error.Temporary` reports false for `ai_not_configured`, `slack_not_configured` and `mailbox_provider_not_configured`, which a retry cannot fix.
+- Step analytics `Position` is 1-based. `ContactBulkUpdateParams.Contacts` and `ContactVerificationParams.Contacts` are omitted when nil.
+- Realtime: the gateway accepts an API key, an OAuth token or the ticket from `Meta.GatewayTicket`, not a bare session token. Session callers creating API keys, transferring a workspace or scheduling its deletion need `Auth.Reauth` first (`reauth_required`).
+
+### Added
+
+- `client.Placement`: inbox placement tests and batches (create, preview, list, get, cancel, senders), seed inboxes, `Overview` and `Coverage`. Campaign placement monitors (`PlacementMonitor`, `SetPlacementMonitor`, `DeletePlacementMonitor`).
+- Campaign lead copies and holds: `LeadCC`, `SetLeadCC`, `LeadCCSuggestions`, `LeadHold`, `PauseLead`, `ResumeLead`, and `SendPlan`. `Campaign.EffectiveTimezone`, `EntryDelayMinutes`, `Step.ThreadReply` and the full day-by-day `Estimate` projection.
+- Background contact imports on `Contacts`: `CreateImport`, `ListImports`, `GetImport`, `SaveImportDraft`, `AnalyzeImport`, `StartImport`, `CancelImport`, `DownloadImportFailures`; `LookupSender`; select-all `ContactSelection` for bulk update, verification, delete, research, segment members and integration pushes.
+- `client.EmailImages`, `Templates.Analyze`, `Unibox.Move`, `MarkThreadsSeen`, `SnoozeMany`, `UnsnoozeMany`, `Emails.Identity`, `RefreshIdentity`, `SetDirectTracking`, `SetSyncSkipFolders`, `Analytics.Direct`, `InboxTagging`, `WarmupPlacement`, `CRM.BulkUpdateTasks`, `BulkDeleteTasks`, `APIKeys.Delete` (permanent), `Integrations.RotateInboundURL`, `SetInboundSigningKey`.
+- `Auth.Reauth`, `SSOLink`, `RegenerateRecoveryCodes`, `ViewPreferences`, `SaveViewPreferences`, `ResetViewPreferences`, and the `link_required` sign-in result.
+- Gateway events `EventDirectEmailOpened`, `EventDirectEmailClicked`, `EventWarmupPlacement`, `EventPlacementTestUpdated`, `EventMailboxImportProgress`, `EventContactImportProgress` with their intents, and new fields on `EngagementEvent` and `TaskProgressEvent`.
+- About 110 `ErrCode*` constants (including `ErrCodeTwoFAInvalidCode`, `ErrCodeInvalidSyncFolder`, placement, lead copy, reauth, mailbox import and sending domain codes), new audit entity types, notification categories, `MailHost*`, `MailAuth*` and `WarmupPlacement*` constants.
+- New fields across `Contact`, `Email`, `Unibox*`, `Organization`, `Subscription`, `Form`, outreach `InboxTagging` and reply-intent settings, and analytics types.
+
+### Fixed
+
+- Reading then updating outreach settings no longer drops inbox tagging, and notification preferences keep the new placement and inbox categories.
+- Docs for `MachineClicks`, `WarmupSummary.TargetProgress` and `ContactSearchParams.Reverse` matched the server wrongly.
+
 ## [0.3.1] - 2026-09-07
 
 Picks up the API changes that landed while 0.3.0 was being prepared. Additive,
@@ -255,6 +287,7 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/warmbly/warmbly-go/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0

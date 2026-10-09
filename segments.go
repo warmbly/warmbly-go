@@ -66,7 +66,7 @@ const (
 	// phone, company, custom.*) take the text operators; comparisons ignore
 	// case.
 	SegmentFieldText SegmentFieldKind = "text"
-	// SegmentFieldEnum fields (source, verification_status, esp_provider)
+	// SegmentFieldEnum fields (source, verification_status, mail_host, esp_provider)
 	// take in/not_in with Values drawn from [SegmentFieldSpec.Options].
 	SegmentFieldEnum SegmentFieldKind = "enum"
 	// SegmentFieldBool fields (subscribed, suppressed, is_catch_all) take
@@ -224,6 +224,10 @@ type SegmentFieldSpec struct {
 	Kind  SegmentFieldKind `json:"kind"`
 	// Options lists the accepted Values of an enum field; nil otherwise.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels names an enum's values for display where the value alone is
+	// not readable (the mail_host field, for example). A value missing from it
+	// shows as itself.
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 }
 
 // SegmentCreateParams creates a segment. Name is required; everything else
@@ -343,10 +347,19 @@ func (s *SegmentService) Delete(ctx context.Context, id string, opts ...RequestO
 // ignored. It returns how many rows changed. Pinning in (or clearing an
 // exclude) can admit new members, so linked campaigns are synced afterwards.
 func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs []string, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	return s.SetMembersSelection(ctx, id, &ContactSelection{Contacts: contactIDs}, mode, opts...)
+}
+
+// SetMembersSelection is [SegmentService.SetMembers] for a [ContactSelection],
+// so an override can cover everything a contact search matches.
+func (s *SegmentService) SetMembersSelection(ctx context.Context, id string, sel *ContactSelection, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	if sel == nil {
+		sel = &ContactSelection{}
+	}
 	body := struct {
-		Contacts []string          `json:"contacts"`
-		Mode     SegmentMemberMode `json:"mode"`
-	}{Contacts: contactIDs, Mode: mode}
+		ContactSelection
+		Mode SegmentMemberMode `json:"mode"`
+	}{ContactSelection: *sel, Mode: mode}
 	var out struct {
 		Updated int `json:"updated"`
 	}

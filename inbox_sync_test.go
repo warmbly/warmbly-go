@@ -111,6 +111,18 @@ func TestUniboxSyncRouting(t *testing.T) {
 			_, e := c.Unibox.MarkSeen(ctx, []string{"msg_1", "msg_2"}, true)
 			return e
 		}, "PATCH", "/v1/unibox/seen", "", []string{`"email_ids":["msg_1","msg_2"]`, `"seen":true`}},
+		{"MarkThreadsSeen", func() error {
+			_, e := c.Unibox.MarkThreadsSeen(ctx, []string{"th_1"}, false)
+			return e
+		}, "PATCH", "/v1/unibox/seen", "", []string{`"thread_ids":["th_1"]`, `"seen":false`}},
+		{"Move", func() error {
+			_, _, e := c.Unibox.Move(ctx, &UniboxMoveParams{ThreadIDs: []string{"th_1"}, EmailIDs: []string{"msg_1"}, Folder: FolderArchive})
+			return e
+		}, "PATCH", "/v1/unibox/folder", "", []string{`"thread_ids":["th_1"]`, `"email_ids":["msg_1"]`, `"folder":"archive"`}},
+		{"List automated", func() error {
+			_, e := c.Unibox.List(ctx, &UniboxListParams{Automated: Bool(false), IncludeArchived: true})
+			return e
+		}, "GET", "/v1/unibox", "automated=false&include_archived=true", nil},
 		{"MarkFolderSeen", func() error {
 			_, e := c.Unibox.MarkFolderSeen(ctx, FolderInbox, true)
 			return e
@@ -743,6 +755,14 @@ func TestIntegrationSyncRouting(t *testing.T) {
 			_, _, e := c.Integrations.WebhookSecret(ctx, "conn_1")
 			return e
 		}, "GET", "/v1/integrations/connections/conn_1/webhook-secret", "", nil},
+		{"SetInboundSigningKey", func() error {
+			_, _, e := c.Integrations.SetInboundSigningKey(ctx, "conn_1", "signing-key-1")
+			return e
+		}, "PUT", "/v1/integrations/connections/conn_1/signing-key", "", []string{`"signing_key":"signing-key-1"`}},
+		{"RotateInboundURL", func() error {
+			_, _, e := c.Integrations.RotateInboundURL(ctx, "conn_1")
+			return e
+		}, "POST", "/v1/integrations/connections/conn_1/rotate-inbound-url", "", nil},
 		{"Test", func() error {
 			_, _, e := c.Integrations.Test(ctx, "conn_1")
 			return e
@@ -1122,6 +1142,17 @@ func TestCRMSyncRouting(t *testing.T) {
 			_, _, e := c.CRM.TasksSummary(ctx, &TaskSearchParams{Overdue: true})
 			return e
 		}, "POST", "/v1/crm/tasks/summary", "", []string{`"overdue":true`}},
+		{"BulkUpdateTasks", func() error {
+			_, _, e := c.CRM.BulkUpdateTasks(ctx, &TaskBulkUpdateParams{
+				TaskSelection: TaskSelection{All: true, Filters: &TaskSearchParams{Overdue: true}, Exclude: []string{"t_9"}},
+				Status:        String(TaskStatusCompleted),
+			})
+			return e
+		}, "PATCH", "/v1/crm/tasks", "", []string{`"all":true`, `"overdue":true`, `"exclude":["t_9"]`, `"status":"completed"`}},
+		{"BulkDeleteTasks", func() error {
+			_, _, e := c.CRM.BulkDeleteTasks(ctx, &TaskSelection{Tasks: []string{"t_1", "t_2"}})
+			return e
+		}, "DELETE", "/v1/crm/tasks", "", []string{`"tasks":["t_1","t_2"]`}},
 		{"CreateTask", func() error {
 			_, _, e := c.CRM.CreateTask(ctx, &CRMTaskCreateParams{
 				Title: "Call Jane", Priority: TaskPriorityUrgent, Type: "Call", ContactID: String("ct_1"),
@@ -1255,5 +1286,71 @@ func TestTeamDecode(t *testing.T) {
 	}
 	if team.Members[0].AddedAt.IsZero() {
 		t.Error("AddedAt did not decode")
+	}
+}
+
+// TestInboundIntegrationDecode covers the two responses that carry an inbound
+// connection's state: the signing-key route answers with the connection (and
+// its display fields say whether a key is set), and the rotate route with the
+// new URL alone.
+func TestInboundIntegrationDecode(t *testing.T) {
+	c := inboxFixtureClient(t, `{"connection": {"id": "conn_1", "provider": "calendly",
+		"display_fields": {"inbound_signing": true},
+		"config_capabilities": {"scheduling_url": "https://cal.example/x"}}}`)
+	conn, _, err := c.Integrations.SetInboundSigningKey(context.Background(), "conn_1", "signing-key-1")
+	if err != nil {
+		t.Fatalf("SetInboundSigningKey: %v", err)
+	}
+	if conn == nil || conn.Provider != ProviderCalendly || !strings.Contains(string(conn.DisplayFields), `"inbound_signing"`) {
+		t.Errorf("connection = %+v", conn)
+	}
+	if strings.Contains(string(conn.ConfigCapabilities), "signing_secret") {
+		t.Errorf("config_capabilities = %s, want no signing secret", conn.ConfigCapabilities)
+	}
+
+	c = inboxFixtureClient(t, `{"inbound_webhook_url": "https://api.example/inbound/calendly/abc"}`)
+	url, _, err := c.Integrations.RotateInboundURL(context.Background(), "conn_1")
+	if err != nil {
+		t.Fatalf("RotateInboundURL: %v", err)
+	}
+	if url != "https://api.example/inbound/calendly/abc" {
+		t.Errorf("url = %q", url)
+	}
+}
+
+// TestUniboxOverviewDecodesAutomated covers the automated counters and the
+// shared-reply-inbox pointer on a thread row.
+func TestUniboxOverviewDecodesAutomated(t *testing.T) {
+	c := inboxFixtureClient(t, `{"total": 10, "unread": 3, "automated": 4, "automated_unread": 2}`)
+	o, _, err := c.Unibox.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Automated != 4 || o.AutomatedUnread != 2 || o.Unread != 3 {
+		t.Errorf("overview = %+v", o)
+	}
+
+	var th UniboxThread
+	if err := json.Unmarshal([]byte(`{"id":"m_1","thread_id":"th_1","answers_mailbox_id":"em_9"}`), &th); err != nil {
+		t.Fatal(err)
+	}
+	if th.AnswersMailboxID == nil || *th.AnswersMailboxID != "em_9" {
+		t.Errorf("answers_mailbox_id = %v", th.AnswersMailboxID)
+	}
+}
+
+// TestBulkTasksDecodeAffected covers the {"affected": n} answer of both bulk
+// task routes.
+func TestBulkTasksDecodeAffected(t *testing.T) {
+	c := inboxFixtureClient(t, `{"affected": 42}`)
+	n, _, err := c.CRM.BulkDeleteTasks(context.Background(), &TaskSelection{Tasks: []string{"t_1"}})
+	if err != nil || n != 42 {
+		t.Errorf("BulkDeleteTasks = %d, %v", n, err)
+	}
+	n, _, err = c.CRM.BulkUpdateTasks(context.Background(), &TaskBulkUpdateParams{
+		TaskSelection: TaskSelection{Tasks: []string{"t_1"}}, Priority: String(TaskPriorityHigh),
+	})
+	if err != nil || n != 42 {
+		t.Errorf("BulkUpdateTasks = %d, %v", n, err)
 	}
 }

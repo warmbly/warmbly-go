@@ -83,14 +83,118 @@ type ABTestingSettings struct {
 // ReplyIntentSettings configures keyword-based classification of inbound
 // replies and the actions taken on each class.
 type ReplyIntentSettings struct {
-	Enabled                 bool     `json:"enabled"`
-	PositiveKeywords        []string `json:"positive_keywords"`
-	NegativeKeywords        []string `json:"negative_keywords"`
-	OutOfOfficeKeywords     []string `json:"out_of_office_keywords"`
-	QuestionKeywords        []string `json:"question_keywords"`
-	AutoCreateCRMTask       bool     `json:"auto_create_crm_task"`
+	Enabled             bool     `json:"enabled"`
+	PositiveKeywords    []string `json:"positive_keywords"`
+	NegativeKeywords    []string `json:"negative_keywords"`
+	OutOfOfficeKeywords []string `json:"out_of_office_keywords"`
+	QuestionKeywords    []string `json:"question_keywords"`
+	AutoCreateCRMTask   bool     `json:"auto_create_crm_task"`
+	// CRMTaskIntents narrows AutoCreateCRMTask to the reply intents worth a
+	// follow-up task: any of the ReplyIntent* constants. A nil list means the
+	// server default (every human intent, no automated one); an explicit empty
+	// list means none, the same as turning the switch off. An entry that is not
+	// a reply intent fails with code "invalid_setting".
+	CRMTaskIntents          []string `json:"crm_task_intents"`
 	AutoPauseOnNegative     bool     `json:"auto_pause_on_negative"`
 	AutoSuppressOnUnsubWord bool     `json:"auto_suppress_on_unsubscribe_keyword"`
+	// HoldOnOutOfOffice parks a contact's next step when an auto-reply says
+	// they are away, and resumes it when they are back, rather than sending
+	// into an empty desk.
+	HoldOnOutOfOffice bool `json:"hold_on_out_of_office"`
+	// OutOfOfficeHoldDays is the hold used when the auto-reply carries no
+	// readable return date, clamped to 1 to 90 (default 7).
+	OutOfOfficeHoldDays int `json:"out_of_office_hold_days"`
+}
+
+// Reply intents a classified reply can carry, for
+// [ReplyIntentSettings.CRMTaskIntents]. The set can grow.
+const (
+	ReplyIntentPositive    = "positive"
+	ReplyIntentNegative    = "negative"
+	ReplyIntentOutOfOffice = "out_of_office"
+	ReplyIntentQuestion    = "question"
+	ReplyIntentNeutral     = "neutral"
+	// ReplyIntentAutomated is a machine reply that is not a vacation notice:
+	// an autoresponder, a ticket acknowledgement, a bounce or a delivery
+	// report.
+	ReplyIntentAutomated = "automated"
+)
+
+// InboxTaggingSettings are the actions a workspace lets a classified reply
+// take. The three reversible ones default on; suppression defaults off because
+// it is the one that cannot be undone.
+type InboxTaggingSettings struct {
+	// HoldOnNotNow parks the contact's sequences for NotNowHoldDays (1 to 90,
+	// default 30) when they answer "not now".
+	HoldOnNotNow   bool `json:"hold_on_not_now"`
+	NotNowHoldDays int  `json:"not_now_hold_days"`
+	// StopOnDeclined parks a contact with no end when they decline or say they
+	// are the wrong person. The hold shows on the lead and a member lifts it;
+	// nothing is unsubscribed or deleted.
+	StopOnDeclined bool `json:"stop_on_declined"`
+	// TaskOnCallRequest opens a CRM task for the mailbox owner when a reply
+	// asks for a call or proposes a time.
+	TaskOnCallRequest bool `json:"task_on_call_request"`
+	// SuppressOnRemovalRequest adds the sender to the suppression list when a
+	// reply asks to be removed and the classifier is strongly sure of it.
+	SuppressOnRemovalRequest bool `json:"suppress_on_removal_request"`
+	// Questions are the workspace's own tagging questions, asked alongside the
+	// built-in set, at most 10.
+	Questions []InboxTagQuestion `json:"questions"`
+	// Languages are the language codes the workspace's mail is written in (for
+	// example "en", "de", "ja"); empty uses the default set. An unsupported
+	// code fails with code "invalid_setting".
+	Languages []string `json:"languages"`
+	// ActionRequiredInInbox keeps automated notifications that need the
+	// recipient to act (a failed payment, a suspended account) in the inbox,
+	// labeled, instead of the Automated view.
+	ActionRequiredInInbox bool `json:"action_required_in_inbox"`
+}
+
+// Question types of [InboxTagQuestion.Type].
+const (
+	// InboxTagQuestionYesNo applies Label on yes.
+	InboxTagQuestionYesNo = "yes_no"
+	// InboxTagQuestionChoice applies the label of the option it picked.
+	InboxTagQuestionChoice = "choice"
+)
+
+// Actions a matching reply may take, in [InboxTagAction.Type].
+const (
+	InboxTagActionNone = ""
+	InboxTagActionHold = "hold"
+	InboxTagActionStop = "stop"
+	InboxTagActionTask = "task"
+)
+
+// InboxTagQuestion is one workspace-defined tagging question. The server mints
+// ID when it is empty; a question needs text (300 characters at most), a label
+// of up to 40 characters, and for a choice question 2 to 8 options.
+type InboxTagQuestion struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Question string `json:"question"`
+	Label    string `json:"label,omitempty"`
+	// Action is what a yes answer does.
+	Action  InboxTagAction   `json:"action"`
+	Choices []InboxTagChoice `json:"choices,omitempty"`
+	// Automated also asks the question of automated notifications; a match
+	// labels the conversation and keeps it in the inbox, and never acts.
+	Automated bool `json:"automated,omitempty"`
+}
+
+// InboxTagChoice is one option of a choice question.
+type InboxTagChoice struct {
+	Label       string         `json:"label"`
+	Description string         `json:"description"`
+	Action      InboxTagAction `json:"action"`
+}
+
+// InboxTagAction is what a matching reply may do: one of the InboxTagAction*
+// constants, with HoldDays (1 to 365, default 30) for a hold.
+type InboxTagAction struct {
+	Type     string `json:"type"`
+	HoldDays int    `json:"hold_days,omitempty"`
 }
 
 // SendTimeOptimizationSettings holds each campaign email until the clock
@@ -134,10 +238,15 @@ type DeliverabilityDashboardSettings struct {
 // OutreachSettings is the full advanced-outreach policy, either for the
 // organization or as a per-campaign override.
 type OutreachSettings struct {
-	BouncePipeline       BouncePipelineSettings          `json:"bounce_pipeline"`
-	TaskReliability      TaskReliabilitySettings         `json:"task_reliability"`
-	ABTesting            ABTestingSettings               `json:"ab_testing"`
-	ReplyIntent          ReplyIntentSettings             `json:"reply_intent"`
+	BouncePipeline  BouncePipelineSettings  `json:"bounce_pipeline"`
+	TaskReliability TaskReliabilitySettings `json:"task_reliability"`
+	ABTesting       ABTestingSettings       `json:"ab_testing"`
+	ReplyIntent     ReplyIntentSettings     `json:"reply_intent"`
+	// InboxTagging is what a classified reply may do: hold, stop, open a task
+	// or suppress, plus the workspace's own tagging questions. Because
+	// [OutreachService.Update] replaces the settings wholesale, start from Get
+	// so this section is carried back unchanged.
+	InboxTagging         InboxTaggingSettings            `json:"inbox_tagging"`
 	SendTimeOptimization SendTimeOptimizationSettings    `json:"send_time_optimization"`
 	Preflight            PreflightValidationSettings     `json:"preflight"`
 	Dashboard            DeliverabilityDashboardSettings `json:"dashboard"`

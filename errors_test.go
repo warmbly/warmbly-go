@@ -3,7 +3,12 @@ package warmbly
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -164,5 +169,83 @@ func TestErrorDecodesTheEnvelope(t *testing.T) {
 	}
 	if plain.RetryAfter != 0 || !plain.HasCode(ErrCodeNotFound) {
 		t.Errorf("decoded = %+v", plain)
+	}
+}
+
+// TestErrorCodeCatalogIsWellFormed reads every ErrCode constant out of the
+// package source, so a code added without a test entry is still checked: each
+// must be a distinct lower_snake_case slug.
+func TestErrorCodeCatalogIsWellFormed(t *testing.T) {
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, id := range vs.Names {
+					if !strings.HasPrefix(id.Name, "ErrCode") || i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					code, _ := strconv.Unquote(lit.Value)
+					if prev, dup := seen[code]; dup {
+						t.Errorf("%s and %s share the code %q", prev, id.Name, code)
+					}
+					seen[code] = id.Name
+					if code == "" || code != strings.ToLower(code) || strings.ContainsAny(code, " -.") {
+						t.Errorf("%s = %q is not a lower_snake_case slug", id.Name, code)
+					}
+				}
+			}
+		}
+	}
+	for code, name := range map[string]string{
+		"two_fa_invalid_code":      "ErrCodeTwoFAInvalidCode",
+		"invalid_sync_folder":      "ErrCodeInvalidSyncFolder",
+		"password_breached":        "ErrCodePasswordBreached",
+		"reauth_required":          "ErrCodeReauthRequired",
+		"placement_quota_exceeded": "ErrCodePlacementQuotaExceeded",
+	} {
+		if seen[code] != name {
+			t.Errorf("code %q is declared as %q, want %q", code, seen[code], name)
+		}
+	}
+}
+
+// TestTemporaryTreatsMissingFeaturesAsPermanent covers the 503s that retrying
+// cannot fix.
+func TestTemporaryTreatsMissingFeaturesAsPermanent(t *testing.T) {
+	for _, code := range []string{ErrCodeAINotConfigured, ErrCodeSlackNotConfigured, ErrCodeMailboxProviderNotConfigured} {
+		e := &Error{StatusCode: http.StatusServiceUnavailable, Code: code}
+		if e.Temporary() {
+			t.Errorf("%s: Temporary() = true, want false", code)
+		}
+	}
+	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeServiceUnavailable}).Temporary() {
+		t.Error("a plain 503 should stay temporary")
+	}
+	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeMailboxWorkerUnreachable}).Temporary() {
+		t.Error("an unreachable mailbox worker should stay temporary")
+	}
+	if !(&Error{StatusCode: http.StatusTooManyRequests, Code: ErrCodeMailboxVendorRateLimited}).Temporary() {
+		t.Error("a vendor rate limit should stay temporary")
 	}
 }

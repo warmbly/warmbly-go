@@ -53,8 +53,11 @@ type Plan struct {
 	AIGeneration bool `json:"ai_generation"`
 	AccountLimit uint `json:"account_limit"`
 
-	Price           float32 `json:"price"`
-	DiscountedPrice float32 `json:"discounted_price"`
+	Price float32 `json:"price"`
+	// PriceYearly is what the yearly Stripe price charges. Nil means the plan
+	// is monthly only.
+	PriceYearly     *float32 `json:"price_yearly,omitempty"`
+	DiscountedPrice float32  `json:"discounted_price"`
 	// Duration is [DurationMonth] or [DurationYear].
 	Duration string `json:"duration"`
 	// Savings is the percentage saved against the monthly price.

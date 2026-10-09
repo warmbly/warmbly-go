@@ -52,9 +52,9 @@ func TestCampaignSyncRouting(t *testing.T) {
 		wantNoBody bool
 	}{
 		{"campaigns.List filters", func() error {
-			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused, Kind: CampaignKindOneTime})
+			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused})
 			return e
-		}, "GET", "/v1/campaigns", "kind=one_time&status=paused", "", false},
+		}, "GET", "/v1/campaigns", "status=paused", "", false},
 		{"campaigns.Estimate", func() error {
 			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
 				SegmentIDs: []string{"seg_1"}, DailyLimit: Int(40), StartDate: &start,
@@ -118,10 +118,27 @@ func TestCampaignSyncRouting(t *testing.T) {
 			})
 			return e
 		}, "PATCH", "/v1/campaigns/camp_1", "", `"unsubscribe_mode":"link","continuous":true,"utm_tracking":true,"guardrail_enabled":true,"guardrail_bounce_rate_max":5`, false},
-		{"campaigns.Create kind", func() error {
-			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{Name: "Launch", Kind: String(CampaignKindOneTime), Continuous: Bool(false)})
+		{"campaigns.Create entry delay and threaded steps", func() error {
+			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{
+				Name: "Launch", EntryDelayMinutes: Int(90), Continuous: Bool(false),
+				Steps: []StepInput{{Subject: "Hi"}, {ThreadReply: Bool(false), Subject: "Other"}},
+			})
 			return e
-		}, "POST", "/v1/campaigns", "", `{"name":"Launch","kind":"one_time","continuous":false}`, false},
+		}, "POST", "/v1/campaigns", "", `{"name":"Launch","entry_delay_minutes":90,"continuous":false,"steps":[{"subject":"Hi"},{"subject":"Other","thread_reply":false}]}`, false},
+		{"campaigns.Update entry delay", func() error {
+			_, _, e := c.Campaigns.Update(ctx, "camp_1", &CampaignUpdateParams{EntryDelayMinutes: Int(0)})
+			return e
+		}, "PATCH", "/v1/campaigns/camp_1", "", `{"entry_delay_minutes":0}`, false},
+		{"campaigns.UpdateStep thread reply", func() error {
+			_, _, e := c.Campaigns.UpdateStep(ctx, "camp_1", "st_1", &StepUpdateParams{ThreadReply: Bool(true)})
+			return e
+		}, "PATCH", "/v1/campaigns/camp_1/steps/st_1", "", `{"thread_reply":true}`, false},
+		{"campaigns.Estimate saved campaign", func() error {
+			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
+				CampaignID: String("camp_1"), StartTime: String("09:00"), EndTime: String("17:00"), StepWaits: []int{3, 5},
+			})
+			return e
+		}, "POST", "/v1/campaigns-estimate", "", `{"campaign_id":"camp_1","start_time":"09:00","end_time":"17:00","step_waits":[3,5]}`, false},
 		{"outreach.Update", func() error {
 			_, e := c.Outreach.Update(ctx, &OutreachSettings{Unsubscribe: UnsubscribeSettings{Mode: UnsubscribeModeText}})
 			return e
@@ -186,14 +203,14 @@ func TestCampaignDecodeSyncFields(t *testing.T) {
 		"daily_limit": 50, "unsubscribe_header": true, "risky_emails": false,
 		"unsubscribe_mode": "inherit",
 		"cc": [], "bcc": [],
-		"start_date": null, "end_date": null, "timezone": "Europe/Berlin", "days": 31,
+		"start_date": null, "end_date": null, "timezone": "Europe/Berlin", "effective_timezone": "Europe/Berlin", "days": 31,
 		"start_time": "09:00", "end_time": "17:00",
 		"schedule_windows": [[], [{"start": 540, "end": 1020}], [], [], [], [], []],
 		"email_tags": ["t1"], "folders": [],
 		"contact_order_by": "created_at", "contact_order_dir": "asc",
 		"sender_strategy": "tags", "rotation_mode": "round_robin",
 		"ramp_enabled": false, "ramp_start": 0, "ramp_increment": 0, "ramp_ceiling": 0, "ramp_level": 0,
-		"esp_match_mode": "off", "max_new_leads_per_day": 0, "prioritize_new_leads": false,
+		"esp_match_mode": "off", "max_new_leads_per_day": 0, "prioritize_new_leads": false, "entry_delay_minutes": 45,
 		"continuous": true, "idle_since": "2026-09-01T10:00:00Z",
 		"guardrail_enabled": true, "guardrail_bounce_rate_max": 5, "guardrail_complaint_rate_max": 0.1,
 		"guardrail_reply_rate_min": 0, "guardrail_min_sample": 50, "guardrail_window_days": 7,
@@ -206,8 +223,11 @@ func TestCampaignDecodeSyncFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(fixture), &c); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if c.Kind != CampaignKindSequence || c.UnsubscribeMode != UnsubscribeModeInherit {
-		t.Errorf("kind/unsubscribe_mode = %q/%q", c.Kind, c.UnsubscribeMode)
+	if c.UnsubscribeMode != UnsubscribeModeInherit {
+		t.Errorf("unsubscribe_mode = %q", c.UnsubscribeMode)
+	}
+	if c.Timezone != "Europe/Berlin" || c.EffectiveTimezone != "Europe/Berlin" || c.EntryDelayMinutes != 45 {
+		t.Errorf("timezone/effective/entry delay = %q/%q/%d", c.Timezone, c.EffectiveTimezone, c.EntryDelayMinutes)
 	}
 	if !c.Continuous || c.IdleSince == nil || c.IdleSince.Day() != 1 {
 		t.Errorf("continuous/idle_since = %v/%v", c.Continuous, c.IdleSince)
@@ -422,12 +442,12 @@ func TestTestEmailResultDecode(t *testing.T) {
 	}
 }
 
-func TestCampaignsOverviewOneTimeDecode(t *testing.T) {
+func TestCampaignsOverviewDecode(t *testing.T) {
 	var o CampaignsOverview
-	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"one_time":2,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
+	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if o.OneTime != 2 || len(o.Folders) != 1 {
+	if o.Total != 12 || o.Completed != 3 || len(o.Folders) != 1 {
 		t.Errorf("overview = %+v", o)
 	}
 }
@@ -492,5 +512,133 @@ func TestOutreachUpdateNoContent(t *testing.T) {
 	}
 	if got.method != "PATCH" || got.path != "/v1/campaigns/camp_1/advanced" {
 		t.Errorf("got %s %s", got.method, got.path)
+	}
+}
+
+// TestCampaignDecodesTimezoneEntryDelayAndThreadReply covers the schedule and
+// step fields added to the campaign payload, and that the retired kind field is
+// simply absent.
+func TestCampaignDecodesTimezoneEntryDelayAndThreadReply(t *testing.T) {
+	var camp Campaign
+	if err := json.Unmarshal([]byte(`{"id":"c_1","name":"Q3","timezone":"","effective_timezone":"Europe/London","entry_delay_minutes":90}`), &camp); err != nil {
+		t.Fatalf("decode campaign: %v", err)
+	}
+	if camp.Timezone != "" || camp.EffectiveTimezone != "Europe/London" || camp.EntryDelayMinutes != 90 || camp.Kind != "" {
+		t.Errorf("campaign = %+v", camp)
+	}
+
+	var step Step
+	if err := json.Unmarshal([]byte(`{"id":"s_1","kind":"email","thread_reply":true}`), &step); err != nil {
+		t.Fatalf("decode step: %v", err)
+	}
+	if !step.ThreadReply {
+		t.Error("ThreadReply = false, want true")
+	}
+
+	yes := false
+	delay := 30
+	body, err := json.Marshal(CampaignUpdateParams{EntryDelayMinutes: &delay})
+	if err != nil || !strings.Contains(string(body), `"entry_delay_minutes":30`) {
+		t.Errorf("update body = %s (%v)", body, err)
+	}
+	body, err = json.Marshal(StepInput{Subject: "Hi", ThreadReply: &yes})
+	if err != nil || !strings.Contains(string(body), `"thread_reply":false`) {
+		t.Errorf("step input body = %s (%v)", body, err)
+	}
+}
+
+// TestCampaignEstimateResultDecodesProjection covers the pool, timeline and
+// per-mailbox detail the estimate now returns.
+func TestCampaignEstimateResultDecodesProjection(t *testing.T) {
+	var res CampaignEstimateResult
+	if err := json.Unmarshal([]byte(`{
+		"recipients": 300, "mailboxes": 3, "daily_capacity": 90, "remaining_today": 90,
+		"sending_days": 4, "estimated_finish_at": "2026-09-09T00:00:00Z",
+		"steps": 3, "total_sends": 900, "first_touch_finish_at": "2026-09-05T00:00:00Z",
+		"steady_capacity": 150, "full_capacity_at": null, "ramping": 2, "held": 1,
+		"warmup": {"mailboxes": 3, "per_day": 30}, "other_campaigns_per_day": 12,
+		"bottleneck": "warmup_graduation",
+		"timeline": [{"date": "2026-09-01", "sending_day": true, "capacity": 90, "sends": 90, "first_emails": 90, "follow_ups": 0, "warmup": 30}],
+		"senders": [{"id": "mb_1", "email": "a@x.com", "provider": "gmail", "state": "ramping", "first_day_cap": 20, "steady_cap": 50, "warmup_per_day": 10, "full_cap_at": "2026-09-12T00:00:00Z"},
+			{"id": "mb_2", "email": "b@x.com", "provider": "outlook", "state": "a_state_from_the_future", "first_day_cap": 0, "steady_cap": 0, "warmup_per_day": 0, "full_cap_at": null}]
+	}`), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.Steps != 3 || res.TotalSends != 900 || res.FirstTouchFinishAt == nil || res.FullCapacityAt != nil {
+		t.Errorf("projection = %+v", res)
+	}
+	if res.Bottleneck != EstimateBottleneckGraduation || res.Warmup.PerDay != 30 || res.Ramping != 2 || res.Held != 1 {
+		t.Errorf("pool = %+v", res)
+	}
+	if len(res.Timeline) != 1 || !res.Timeline[0].SendingDay || res.Timeline[0].Warmup != 30 {
+		t.Errorf("timeline = %+v", res.Timeline)
+	}
+	if len(res.Senders) != 2 || res.Senders[0].State != EstimateSenderRamping || res.Senders[0].FullCapAt == nil || res.Senders[1].State != "a_state_from_the_future" {
+		t.Errorf("senders = %+v", res.Senders)
+	}
+
+	var got recordedRequest
+	c := accountServer(t, `{}`, &got)
+	start, end := "08:00", "17:00"
+	if _, _, err := c.Campaigns.Estimate(context.Background(), &CampaignEstimateParams{
+		SegmentIDs: []string{"seg_1"}, StartTime: &start, EndTime: &end, StepWaits: []int{2, 4},
+	}); err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	for _, want := range []string{`"start_time":"08:00"`, `"end_time":"17:00"`, `"step_waits":[2,4]`} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("estimate body %s is missing %s", got.body, want)
+		}
+	}
+}
+
+// TestOutreachSettingsRoundTripInboxTagging guards the wholesale-replace
+// contract: a Get followed by an Update must carry the inbox tagging section
+// and the task intents back unchanged, or the update would reset them.
+func TestOutreachSettingsRoundTripInboxTagging(t *testing.T) {
+	const stored = `{"reply_intent": {"enabled": true, "auto_create_crm_task": true,
+			"crm_task_intents": ["positive", "question"], "hold_on_out_of_office": true, "out_of_office_hold_days": 10},
+		"inbox_tagging": {"hold_on_not_now": true, "not_now_hold_days": 21, "stop_on_declined": true,
+			"questions": [{"id": "q1", "type": "choice", "question": "Which plan?", "action": {"type": ""},
+				"choices": [{"label": "Pro", "description": "wants pro", "action": {"type": "hold", "hold_days": 30}}]}],
+			"languages": ["en", "de"], "action_required_in_inbox": true}}`
+	var got recordedRequest
+	c := accountServer(t, stored, &got)
+	s, _, err := c.Outreach.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := s.ReplyIntent.CRMTaskIntents; len(got) != 2 || got[0] != ReplyIntentPositive {
+		t.Errorf("CRMTaskIntents = %v", got)
+	}
+	if !s.ReplyIntent.HoldOnOutOfOffice || s.ReplyIntent.OutOfOfficeHoldDays != 10 {
+		t.Errorf("reply intent = %+v", s.ReplyIntent)
+	}
+	it := s.InboxTagging
+	if !it.HoldOnNotNow || it.NotNowHoldDays != 21 || !it.StopOnDeclined || !it.ActionRequiredInInbox || len(it.Languages) != 2 {
+		t.Errorf("inbox tagging = %+v", it)
+	}
+	if len(it.Questions) != 1 || it.Questions[0].Type != InboxTagQuestionChoice || it.Questions[0].Choices[0].Action.Type != InboxTagActionHold {
+		t.Errorf("questions = %+v", it.Questions)
+	}
+
+	if _, err := c.Outreach.Update(context.Background(), s); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for _, want := range []string{`"crm_task_intents":["positive","question"]`, `"not_now_hold_days":21`, `"hold_days":30`, `"languages":["en","de"]`} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("update body is missing %s: %s", want, got.body)
+		}
+	}
+
+	// An unset list is sent as null (the server default); an explicit empty list
+	// stays empty (none).
+	body, _ := json.Marshal(ReplyIntentSettings{})
+	if !strings.Contains(string(body), `"crm_task_intents":null`) {
+		t.Errorf("nil intents = %s", body)
+	}
+	body, _ = json.Marshal(ReplyIntentSettings{CRMTaskIntents: []string{}})
+	if !strings.Contains(string(body), `"crm_task_intents":[]`) {
+		t.Errorf("empty intents = %s", body)
 	}
 }

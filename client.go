@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the SDK version, reported in the default User-Agent.
-const Version = "0.3.1"
+const Version = "0.4.0"
 
 const (
 	defaultBaseURL   = "https://api.warmbly.com/v1/"
@@ -60,6 +60,8 @@ type Client struct {
 	Contacts *ContactService
 	// Segments are saved contact audiences evaluated live.
 	Segments *SegmentService
+	// Placement runs inbox placement tests and batches against seed inboxes.
+	Placement *PlacementService
 	// Suppressions is the workspace's do-not-contact list.
 	Suppressions *SuppressionService
 	// Forms are hosted lead-capture forms and their submissions.
@@ -68,6 +70,8 @@ type Client struct {
 	Unibox *UniboxService
 	// Templates manages reusable reply templates.
 	Templates *TemplateService
+	// EmailImages is the workspace's image library for email bodies.
+	EmailImages *EmailImageService
 	// Analytics reads aggregate analytics and deliverability health.
 	Analytics *AnalyticsService
 	// Advisor reads and acts on continuous checks of the sending posture.
@@ -184,10 +188,12 @@ func New(opts ...Option) (*Client, error) {
 	c.Campaigns = (*CampaignService)(&c.common)
 	c.Contacts = (*ContactService)(&c.common)
 	c.Segments = (*SegmentService)(&c.common)
+	c.Placement = (*PlacementService)(&c.common)
 	c.Suppressions = (*SuppressionService)(&c.common)
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
 	c.Templates = (*TemplateService)(&c.common)
+	c.EmailImages = (*EmailImageService)(&c.common)
 	c.Analytics = (*AnalyticsService)(&c.common)
 	c.Advisor = (*AdvisorService)(&c.common)
 

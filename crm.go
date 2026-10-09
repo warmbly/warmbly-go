@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -492,6 +493,67 @@ func (s *CRMService) DeleteTaskType(ctx context.Context, id string, opts ...Requ
 // deal, assignee or status.
 func (s *CRMService) ListTasks(ctx context.Context, params *CRMTaskListParams, opts ...RequestOption) (*Page[CRMTask], error) {
 	return listJSON[CRMTask](ctx, s.client, "crm/tasks", params.values(), opts...)
+}
+
+// Limits on a bulk task selection.
+const (
+	// MaxTaskBatchIDs bounds an explicit id list in one bulk task request. Past
+	// it the server fails with code "too_many_tasks", as it does for more than
+	// [MaxTaskBulkSelection] exclusions.
+	MaxTaskBatchIDs = 1000
+	// MaxTaskBulkSelection bounds how many tasks one filter selection may
+	// resolve to, and how many exclusions it may carry. A larger match fails
+	// with code "selection_too_large" and nothing is changed.
+	MaxTaskBulkSelection = 50000
+)
+
+// TaskSelection names the tasks a bulk action applies to, either by id (Tasks,
+// up to [MaxTaskBatchIDs]) or by a search: All with Filters, the same body
+// [CRMService.SearchTasks] takes, minus the ids in Exclude (ignored unless All
+// is set). A selection that names both prefers the filter.
+type TaskSelection struct {
+	Tasks   []string          `json:"tasks,omitempty"`
+	All     bool              `json:"all,omitempty"`
+	Filters *TaskSearchParams `json:"filters,omitempty"`
+	Exclude []string          `json:"exclude,omitempty"`
+}
+
+// TaskBulkUpdateParams writes the same fields on every task in a selection. At
+// least one of Status and Priority is required.
+type TaskBulkUpdateParams struct {
+	TaskSelection
+	// Status is one of the TaskStatus* constants.
+	Status *string `json:"status,omitempty"`
+	// Priority is one of the TaskPriority* constants.
+	Priority *string `json:"priority,omitempty"`
+}
+
+// BulkUpdateTasks sets a status and/or priority on a [TaskSelection] and
+// returns how many tasks it changed. A bulk write raises the crm.task_updated
+// webhook once for the whole call, with no entity id: treat a missing id as
+// "re-read the tasks you track".
+func (s *CRMService) BulkUpdateTasks(ctx context.Context, params *TaskBulkUpdateParams, opts ...RequestOption) (int64, *Response, error) {
+	var out struct {
+		Affected int64 `json:"affected"`
+	}
+	resp, err := s.client.patch(ctx, "crm/tasks", params, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return out.Affected, resp, nil
+}
+
+// BulkDeleteTasks removes every task in a [TaskSelection] and returns how many
+// it deleted.
+func (s *CRMService) BulkDeleteTasks(ctx context.Context, sel *TaskSelection, opts ...RequestOption) (int64, *Response, error) {
+	var out struct {
+		Affected int64 `json:"affected"`
+	}
+	resp, err := s.client.call(ctx, http.MethodDelete, "crm/tasks", sel, &out, opts)
+	if err != nil {
+		return 0, resp, err
+	}
+	return out.Affected, resp, nil
 }
 
 // SearchTasks returns a page of tasks matching a faceted filter. Its page

@@ -33,7 +33,8 @@ const (
 	IntentContact = "CONTACT"
 	// IntentAccount covers mailbox connection, sync and health transitions.
 	IntentAccount = "ACCOUNT"
-	// IntentWarmup covers warmup health and placement changes.
+	// IntentWarmup covers warmup health and warmup placement changes
+	// ([EventWarmupPlacement]). Inbox placement tests are [IntentPlacement].
 	IntentWarmup = "WARMUP"
 	// IntentBulk covers bulk import and export progress. Those events are
 	// user-scoped and never reach the workspace channel, so this only narrows
@@ -61,6 +62,22 @@ const (
 	// IntentForm covers hosted form submissions
 	// ([EventFormSubmissionCreated]).
 	IntentForm = "FORM"
+	// IntentDirectEmail covers opens and clicks on email sent straight from a
+	// mailbox rather than a campaign ([EventDirectEmailOpened],
+	// [EventDirectEmailClicked]). [IntentEmail] covers them too.
+	IntentDirectEmail = "DIRECT_EMAIL_"
+	// IntentPlacement covers inbox placement test and batch updates
+	// ([EventPlacementTestUpdated]). It is "PLACEMENT_TEST" rather than
+	// "PLACEMENT" so it does not also admit [EventWarmupPlacement], which
+	// belongs to [IntentWarmup].
+	IntentPlacement = "PLACEMENT_TEST"
+	// IntentMailboxImport covers mailbox import progress
+	// ([EventMailboxImportProgress]). [IntentAccount] does not: the event
+	// type has no ACCOUNT in it.
+	IntentMailboxImport = "MAILBOX_IMPORT"
+	// IntentContactImport covers background contact import progress
+	// ([EventContactImportProgress]). [IntentContact] covers it too.
+	IntentContactImport = "CONTACT_IMPORT"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
 )
