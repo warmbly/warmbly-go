@@ -183,7 +183,7 @@ type TemplateAnalysis struct {
 
 // TemplateAnalyzeParams is the copy to analyze. Pass whichever parts exist; at
 // least one must hold text, and the three together may not exceed 60,000
-// characters.
+// bytes.
 type TemplateAnalyzeParams struct {
 	Subject   string `json:"subject,omitempty"`
 	BodyHTML  string `json:"body_html,omitempty"`

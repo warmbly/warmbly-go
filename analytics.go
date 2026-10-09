@@ -3,6 +3,7 @@ package warmbly
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -726,9 +727,13 @@ func (s *AnalyticsService) Accounts(ctx context.Context, opts ...RequestOption) 
 		if !page.HasMore() {
 			return out, page.Response(), nil
 		}
+		cursor := page.NextCursor()
 		next, err := page.Next(ctx)
 		if err != nil {
 			return nil, page.Response(), err
+		}
+		if next.HasMore() && next.NextCursor() == cursor {
+			return nil, next.Response(), fmt.Errorf("warmbly: account status pagination repeated cursor %q", cursor)
 		}
 		page = next
 	}

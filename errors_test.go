@@ -233,7 +233,7 @@ func TestErrorCodeCatalogIsWellFormed(t *testing.T) {
 // TestTemporaryTreatsMissingFeaturesAsPermanent covers the 503s that retrying
 // cannot fix.
 func TestTemporaryTreatsMissingFeaturesAsPermanent(t *testing.T) {
-	for _, code := range []string{ErrCodeAINotConfigured, ErrCodeSlackNotConfigured} {
+	for _, code := range []string{ErrCodeAINotConfigured, ErrCodeSlackNotConfigured, ErrCodeMailboxProviderNotConfigured} {
 		e := &Error{StatusCode: http.StatusServiceUnavailable, Code: code}
 		if e.Temporary() {
 			t.Errorf("%s: Temporary() = true, want false", code)
@@ -241,6 +241,9 @@ func TestTemporaryTreatsMissingFeaturesAsPermanent(t *testing.T) {
 	}
 	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeServiceUnavailable}).Temporary() {
 		t.Error("a plain 503 should stay temporary")
+	}
+	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeMailboxWorkerUnreachable}).Temporary() {
+		t.Error("an unreachable mailbox worker should stay temporary")
 	}
 	if !(&Error{StatusCode: http.StatusTooManyRequests, Code: ErrCodeMailboxVendorRateLimited}).Temporary() {
 		t.Error("a vendor rate limit should stay temporary")

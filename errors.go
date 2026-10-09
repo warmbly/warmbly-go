@@ -103,12 +103,12 @@ func (e *Error) HasCode(code string) bool {
 //
 // It is a status-level guess, with one correction: a 503 that says the
 // deployment simply lacks a feature ([ErrCodeAINotConfigured],
-// [ErrCodeSlackNotConfigured]) is not transient and reports false. Two other
-// 5xx codes are not transient either — [ErrCodeMailboxProviderNotConfigured]
-// and, on the mailbox delete path, [ErrCodeMailboxWorkerUnreachable] — so check
-// [Error.HasCode] before building a retry loop around them.
+// [ErrCodeSlackNotConfigured], [ErrCodeMailboxProviderNotConfigured]) is not
+// transient and reports false. [ErrCodeMailboxWorkerUnreachable] is transient:
+// nothing was removed, and the same call can succeed a moment later.
 func (e *Error) Temporary() bool {
-	if e.HasCode(ErrCodeAINotConfigured) || e.HasCode(ErrCodeSlackNotConfigured) {
+	if e.HasCode(ErrCodeAINotConfigured) || e.HasCode(ErrCodeSlackNotConfigured) ||
+		e.HasCode(ErrCodeMailboxProviderNotConfigured) {
 		return false
 	}
 	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500

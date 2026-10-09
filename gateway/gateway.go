@@ -405,6 +405,10 @@ func WithResumeFrom(seq int) Option {
 // single-use ticket a signed-in session mints with Meta.GatewayTicket. The
 // gateway no longer accepts a bare session access token. It does not connect;
 // call [Client.Open].
+//
+// A ticket expires after GatewayTicket.ExpiresIn, and the client presents the
+// same token on every reconnect, so a reconnect after that is refused. Use an
+// API key or OAuth access token for a connection meant to outlive its ticket.
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,

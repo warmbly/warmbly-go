@@ -15,6 +15,7 @@ Syncs the SDK with the v1 API as of server commit 2032b0492: inbox placement, co
 - `Campaign.Kind`, `CampaignCreateParams.Kind`, `CampaignListParams.Kind`, `CampaignsOverview.OneTime` and the `CampaignKind*` constants are Deprecated. One-time campaigns no longer exist on the server; the field is never sent and the filter has no effect.
 - `WarmupDomainPlacement.Domain` is Deprecated in favour of `Label`; `WarmupHealth.SpamScore` is Deprecated (always 0).
 - `AnalyticsService.Accounts` now follows every page of mailbox statuses instead of stopping at the first 1000.
+- `Error.Temporary` reports false for `ai_not_configured`, `slack_not_configured` and `mailbox_provider_not_configured`, which a retry cannot fix.
 - Step analytics `Position` is 1-based. `ContactBulkUpdateParams.Contacts` and `ContactVerificationParams.Contacts` are omitted when nil.
 - Realtime: the gateway accepts an API key, an OAuth token or the ticket from `Meta.GatewayTicket`, not a bare session token. Session callers creating API keys, transferring a workspace or scheduling its deletion need `Auth.Reauth` first (`reauth_required`).
 

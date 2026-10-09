@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -279,5 +280,20 @@ func TestAccountsFollowsCursor(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ids, []string{"em_1", "em_2", "em_3"}) {
 		t.Errorf("ids = %v", ids)
+	}
+}
+
+func TestAccountsStopsOnRepeatedCursor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"em_1"}],"pagination":{"has_more":true,"next_cursor":"c2"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(WithAPIKey("wmbly_test"), WithBaseURL(srv.URL+"/v1/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Analytics.Accounts(context.Background()); err == nil || !strings.Contains(err.Error(), "repeated cursor") {
+		t.Fatalf("Accounts err = %v, want a repeated cursor error", err)
 	}
 }

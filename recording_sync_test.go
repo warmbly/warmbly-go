@@ -18,6 +18,7 @@ type syncCapture struct {
 	rawQuery    string
 	body        string
 	contentType string
+	idempotency string
 }
 
 // respondingClient answers every request with one canned status and body, and
@@ -36,6 +37,7 @@ func respondingClientType(t *testing.T, got *syncCapture, status int, contentTyp
 		got.path = r.URL.Path
 		got.rawQuery = r.URL.RawQuery
 		got.contentType = r.Header.Get("Content-Type")
+		got.idempotency = r.Header.Get("Idempotency-Key")
 		raw, _ := io.ReadAll(r.Body)
 		got.body = string(raw)
 		if status == http.StatusNoContent {

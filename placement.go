@@ -787,18 +787,31 @@ type placementWrapped[T any] struct {
 	Data T `json:"data"`
 }
 
+// placementGet and placementSend always return a non-nil result on success,
+// as [send] does, even if the server's data field is missing.
 func placementGet[T any](ctx context.Context, c *Client, path string, opts []RequestOption) (*T, *Response, error) {
-	var env placementWrapped[*T]
+	var env placementWrapped[T]
 	resp, err := c.get(ctx, path, &env, opts...)
 	if err != nil {
 		return nil, resp, err
 	}
-	return env.Data, resp, nil
+	return &env.Data, resp, nil
 }
 
 func placementSend[T any](ctx context.Context, verb bodyVerb, path string, body any, opts []RequestOption) (*T, *Response, error) {
-	var env placementWrapped[*T]
+	var env placementWrapped[T]
 	resp, err := verb(ctx, path, body, &env, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return &env.Data, resp, nil
+}
+
+// placementGetOptional is placementGet for a resource that may not exist, where
+// "data": null means absent and yields a nil result.
+func placementGetOptional[T any](ctx context.Context, c *Client, path string, opts []RequestOption) (*T, *Response, error) {
+	var env placementWrapped[*T]
+	resp, err := c.get(ctx, path, &env, opts...)
 	if err != nil {
 		return nil, resp, err
 	}
@@ -948,7 +961,7 @@ func (s *PlacementService) SetSeed(ctx context.Context, emailAccountID string, s
 //
 // Requires [PermReadCampaigns].
 func (s *CampaignService) PlacementMonitor(ctx context.Context, id string, opts ...RequestOption) (*PlacementMonitor, *Response, error) {
-	return placementGet[PlacementMonitor](ctx, s.client, "campaigns/"+url.PathEscape(id)+"/placement-monitor", opts)
+	return placementGetOptional[PlacementMonitor](ctx, s.client, "campaigns/"+url.PathEscape(id)+"/placement-monitor", opts)
 }
 
 // SetPlacementMonitor creates the campaign's scheduled placement test or

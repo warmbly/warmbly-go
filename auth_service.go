@@ -162,7 +162,7 @@ type TwoFAStatus struct {
 	// ConfirmedAt is when two-factor was switched on, nil while it is off.
 	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
 	// RecoveryCodesRemaining of RecoveryCodesTotal are still unused. Regenerate
-	// the set with [AuthService.RegenerateTwoFARecoveryCodes] before they run
+	// the set with [AuthService.RegenerateRecoveryCodes] before they run
 	// out.
 	RecoveryCodesRemaining int `json:"recovery_codes_remaining"`
 	RecoveryCodesTotal     int `json:"recovery_codes_total"`
@@ -703,7 +703,7 @@ func (s *AuthService) BeginSSO(ctx context.Context, provider string, opts ...Req
 // link cannot sign its recipient in. Two-factor applies here like everywhere
 // else; see [Session.TwoFARequired]. When the provider's address already
 // belongs to a password account the result is [Session.LinkRequired] instead of
-// a session: finish with [AuthService.LinkSSO].
+// a session: finish with [AuthService.SSOLink].
 //
 // The route is POST /auth/sso/exchange; the server also keeps the older
 // POST /auth/oidc/exchange as an alias for the same handler.
@@ -859,7 +859,7 @@ func (s *AuthService) DenyCLIAuth(ctx context.Context, userCode string, opts ...
 // token's signature is the credential, so this needs no prior sign-in. When the
 // token's address already belongs to a password account the result is
 // [Session.LinkRequired] instead of a session: finish with
-// [AuthService.LinkSSO].
+// [AuthService.SSOLink].
 func (s *AuthService) LoginWithApple(ctx context.Context, identityToken string, opts ...RequestOption) (*Session, *Response, error) {
 	return s.tokenLogin(ctx, "auth/apple", identityToken, opts)
 }

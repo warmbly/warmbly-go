@@ -39,6 +39,9 @@ func TestTemplateAnalyze(t *testing.T) {
 	}
 	got.wantRequest(t, "POST", "/v1/templates/analyze", "")
 	got.wantBody(t, `{"subject":"FREE money","body_html":"<p>Please act now</p>"}`)
+	if got.idempotency != "idem-1" {
+		t.Errorf("Idempotency-Key = %q, want idem-1", got.idempotency)
+	}
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}

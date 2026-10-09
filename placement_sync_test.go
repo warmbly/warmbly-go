@@ -501,3 +501,17 @@ func TestPlacementMonitorDecode(t *testing.T) {
 		t.Errorf("got %s %s", got.method, got.body)
 	}
 }
+
+func TestPlacementNullDataNeverNil(t *testing.T) {
+	ctx := context.Background()
+	var got syncCapture
+	c := respondingClient(t, &got, 200, `{"data":null}`)
+	batch, _, err := c.Placement.GetBatch(ctx, "pb_1")
+	if err != nil || batch == nil {
+		t.Fatalf("GetBatch = %v, %v; want a non-nil result", batch, err)
+	}
+	monitor, _, err := c.Campaigns.PlacementMonitor(ctx, "camp_1")
+	if err != nil || monitor != nil {
+		t.Fatalf("PlacementMonitor = %v, %v; want nil for an absent monitor", monitor, err)
+	}
+}

@@ -351,8 +351,9 @@ type EmailUpdateParams struct {
 	ReplyTo     *string `json:"reply_to,omitempty"`
 
 	// Timezone is the mailbox's own IANA zone, such as "America/Denver". Send
-	// an empty string to clear it, which leaves only the campaign's own window
-	// applying.
+	// an empty string to clear it: the mailbox then follows the workspace timezone
+	// ([Organization.Timezone]) for warmup, sending behavior and business hours,
+	// and the campaign's own window for sending.
 	Timezone *string `json:"timezone,omitempty"`
 
 	// SaveToSent controls the Sent-folder copy on SMTP/IMAP mailboxes. Turn it
