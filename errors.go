@@ -140,7 +140,9 @@ const (
 	// ErrCodeRateLimitExceeded is the 429 for the per-key request rate. Honor
 	// [Error.RetryAfter]; the client's own retry does.
 	ErrCodeRateLimitExceeded = "rate_limit_exceeded"
-	// ErrCodeInternalError is the generic 500. Retry once, then quote
+	// ErrCodeInternalError is the generic 500. Its message is always the
+	// fixed "Something went wrong." (the detail is logged server-side against
+	// the request id), so do not parse it. Retry once, then quote
 	// [Error.RequestID] to support.
 	ErrCodeInternalError = "internal_error"
 	// ErrCodeNotImplemented is the 501 for a feature this deployment does not
@@ -221,6 +223,79 @@ const (
 	// sign-in was given. The handoff is deliberately non-transferable: a
 	// forwarded sign-in link cannot sign the recipient in.
 	ErrCodeSSOWrongBrowser = "sso_wrong_browser"
+	// ErrCodeSSOLinkExpired is the 400 for a pending link_required sign-in
+	// token that is unknown, expired (ten minutes), already used, or has had
+	// three wrong passwords. Start the provider sign-in again.
+	ErrCodeSSOLinkExpired = "sso_link_expired"
+	// ErrCodePasswordBreached is the 400 for a password that appears in a
+	// public breach corpus. Length is not the problem; choose another one.
+	ErrCodePasswordBreached = "password_breached"
+	// ErrCodePasswordChangedSignInAgain is the 409 from a password change that
+	// stored the new password but could not issue the calling device a new
+	// session. Every earlier token is invalid; sign in again.
+	ErrCodePasswordChangedSignInAgain = "password_changed_sign_in_again"
+	// ErrCodePasskeyUserVerificationRequired is the 400 for a passkey sign-in
+	// whose authenticator did not verify the user with a PIN or biometric.
+	ErrCodePasskeyUserVerificationRequired = "passkey_user_verification_required"
+	// ErrCodeTwoFAInvalidCode is the 400 for an authenticator or recovery code
+	// that did not match. The login challenge allows five attempts per
+	// pending session.
+	ErrCodeTwoFAInvalidCode = "two_fa_invalid_code"
+
+	// ErrCodeReauthRequired guards actions that need a proof of identity
+	// newer than the session: handing out a durable credential, revealing a
+	// signing secret, changing who can get in. It is a 403 for a session that
+	// has not confirmed recently (confirm, then retry) and a 401 when the
+	// route was reached without a signed-in session at all. API keys and
+	// OAuth tokens are never asked for it.
+	ErrCodeReauthRequired = "reauth_required"
+	// ErrCodeReauthLimited is the 400 for too many failed confirmations within
+	// the hour. A fresh sign-in counts as a confirmation for five minutes.
+	ErrCodeReauthLimited = "reauth_limited"
+	// ErrCodeReauthNoFactor is the 400 for an account with neither a password
+	// nor two-factor authentication, so nothing to confirm with. Sign in again
+	// and repeat the action within five minutes.
+	ErrCodeReauthNoFactor = "reauth_no_factor"
+
+	// ErrCodeAPIKeyHolderLeft is the 401 for an API key whose creator is no
+	// longer a member of the workspace. The key will not work again; create a
+	// new one from a current member. The realtime gateway refuses it too.
+	ErrCodeAPIKeyHolderLeft = "api_key_holder_left"
+	// ErrCodeAPIKeyMailboxLimited is the 403 for an API key limited to some
+	// mailboxes calling a surface that acts across the workspace: the AI tool
+	// and MCP endpoints, a campaign sender pool resolved from mailbox tags, or
+	// starting a campaign whose pool is not an explicit list of the key's own
+	// mailboxes.
+	ErrCodeAPIKeyMailboxLimited = "api_key_mailbox_limited"
+	// ErrCodeAPIKeyPermissionsExceedCaller is the 403 for creating or editing
+	// an API key with more than its creator holds: a permission the member's
+	// role does not cover or, for an API key caller, a permission, mailbox or
+	// IP address the calling key does not have.
+	ErrCodeAPIKeyPermissionsExceedCaller = "api_key_permissions_exceed_caller"
+	// ErrCodeOAuthTokenNotAllowed is the 403 for an OAuth access token calling
+	// a route that manages credentials: API keys and OAuth applications. Use
+	// an API key or the dashboard.
+	ErrCodeOAuthTokenNotAllowed = "oauth_token_not_allowed"
+	// ErrCodeMemberAccessRestricted is the 403 for a member restricted to
+	// selected campaigns, folders and mailboxes, or a key or app acting for
+	// one, calling a route outside that scope. Resource writes and
+	// workspace-wide surfaces such as contacts and settings are refused.
+	ErrCodeMemberAccessRestricted = "member_access_restricted"
+
+	// ErrCodeSelectionTooLarge is the 400 for an "all": true bulk selection
+	// that resolved past its limit (250,000 contacts, or 50,000 CRM tasks).
+	// Nothing was changed; narrow the filter and run it in parts.
+	ErrCodeSelectionTooLarge = "selection_too_large"
+	// ErrCodeInvalidRecipient is the 400 for a to, cc or bcc entry that is not
+	// exactly one email address, or a send with no to address at all.
+	ErrCodeInvalidRecipient = "invalid_recipient"
+	// ErrCodeInvalidMessageID is the 400 for an in_reply_to entry that is not
+	// one Message-ID.
+	ErrCodeInvalidMessageID = "invalid_message_id"
+	// ErrCodeInvalidName is the 400 for a person, workspace, company, OAuth
+	// app or mailbox display name that breaks the naming rules. The message
+	// names the field and the rule.
+	ErrCodeInvalidName = "invalid_name"
 )
 
 // Sentinel errors for matching API failures with errors.Is. They carry only a

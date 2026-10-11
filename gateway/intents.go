@@ -26,14 +26,17 @@ const (
 	// IntentCampaign covers campaign lifecycle and progress, including
 	// [EventCampaignIdle].
 	IntentCampaign = "CAMPAIGN"
-	// IntentEmail covers the per-message pulse — sent, opened, clicked,
-	// replied, bounced — and inbox arrivals. It is the highest-volume family.
+	// IntentEmail covers the per-message pulse (sent, opened, clicked,
+	// replied, bounced), including direct (non-campaign) opens and clicks,
+	// and inbox arrivals. It is the highest-volume family.
 	IntentEmail = "EMAIL"
-	// IntentContact covers contact creation, updates and deletion.
+	// IntentContact covers contact creation, updates and deletion, plus
+	// CONTACTS_RELOAD and [EventContactImportProgress].
 	IntentContact = "CONTACT"
 	// IntentAccount covers mailbox connection, sync and health transitions.
 	IntentAccount = "ACCOUNT"
-	// IntentWarmup covers warmup health and placement changes.
+	// IntentWarmup covers warmup placement sightings
+	// ([EventWarmupPlacement]).
 	IntentWarmup = "WARMUP"
 	// IntentBulk covers bulk import and export progress. Those events are
 	// user-scoped and never reach the workspace channel, so this only narrows
@@ -63,4 +66,35 @@ const (
 	IntentForm = "FORM"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
+	// IntentDirectEmail covers engagement on tracked emails sent outside a
+	// campaign ([EventDirectEmailOpened], [EventDirectEmailClicked]). Note
+	// that [IntentEmail], and any intent naming EMAIL_OPENED or EMAIL_CLICKED,
+	// also matches these.
+	IntentDirectEmail = "DIRECT_EMAIL"
+	// IntentPlacementTest covers inbox placement tests and batches
+	// ([EventPlacementTestUpdated]). A bare "PLACEMENT" would also match
+	// [EventWarmupPlacement].
+	IntentPlacementTest = "PLACEMENT_TEST"
+	// IntentImport covers mailbox and contact import progress
+	// ([EventMailboxImportProgress], [EventContactImportProgress]).
+	IntentImport = "_IMPORT_"
+	// IntentCRM covers CRM sync signals ([EventCRMSynced]).
+	IntentCRM = "CRM_"
+)
+
+// Exact intents. Each matches one event type and nothing else today, because
+// no other event type contains it. Use one where a family intent is wider
+// than you want. A full event name is not always exact: EMAIL_OPENED is a
+// substring of DIRECT_EMAIL_OPENED, so that intent receives both.
+const (
+	IntentCampaignIdle          = EventCampaignIdle
+	IntentWarmupPlacement       = EventWarmupPlacement
+	IntentPlacementTestUpdated  = EventPlacementTestUpdated
+	IntentMailboxImportProgress = EventMailboxImportProgress
+	IntentContactImportProgress = EventContactImportProgress
+	IntentCRMSynced             = EventCRMSynced
+	IntentAuditCreated          = EventAuditCreated
+	IntentFormSubmissionCreated = EventFormSubmissionCreated
+	IntentPageHit               = EventPageHit
+	IntentAIDraftReady          = EventAIDraftReady
 )

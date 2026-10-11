@@ -23,7 +23,7 @@ var (
 		ClientID:     os.Getenv("WARMBLY_CLIENT_ID"),
 		ClientSecret: os.Getenv("WARMBLY_CLIENT_SECRET"),
 		RedirectURL:  "http://localhost:8080/callback",
-		Scopes:       []string{"campaigns:read", "contacts:read"},
+		Scopes:       []string{warmbly.ScopeReadCampaigns, warmbly.ScopeReadContacts},
 	}
 	verifier = warmbly.GenerateVerifier()
 	state    = "demo-state"

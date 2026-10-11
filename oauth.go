@@ -18,6 +18,9 @@ type OAuthAppService service
 // OAuth application states returned in [OAuthApp.Status].
 const (
 	OAuthAppActive   = "active"
+	OAuthAppDisabled = "disabled"
+	// Deprecated: the API reports a switched-off app as [OAuthAppDisabled];
+	// it never sends "inactive".
 	OAuthAppInactive = "inactive"
 )
 
@@ -53,8 +56,14 @@ type OAuthApp struct {
 	// event the grant's scopes allow.
 	WebhookEvents []string `json:"webhook_events,omitempty"`
 
-	// Status is [OAuthAppActive] or [OAuthAppInactive].
+	// Status is [OAuthAppActive] or [OAuthAppDisabled].
 	Status string `json:"status"`
+	// SuspendedAt is set while the instance's operators have suspended the
+	// app, with SuspendedReason saying why. The owner cannot lift it. A
+	// suspended app cannot authorize, issue or accept tokens, and edits and
+	// logo uploads answer 409 app_suspended.
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason string     `json:"suspended_reason,omitempty"`
 	// IsPublic marks a client that authenticates with PKCE and no secret, such
 	// as a native app or an MCP client. PKCE is mandatory for these.
 	IsPublic bool `json:"is_public"`

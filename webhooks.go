@@ -415,6 +415,41 @@ type FormSubmittedPayload struct {
 	CampaignID string `json:"campaign_id,omitempty"`
 }
 
+// WarmupHealthPayload is the body of [EventWarmupHealthChanged],
+// [EventWarmupQuarantined] and [EventWarmupBlocked].
+//
+// Every health transition fires [EventWarmupHealthChanged] exactly once. A
+// transition into quarantine or a block also fires [EventWarmupQuarantined] or
+// [EventWarmupBlocked] exactly once, with the same body, so a subscriber to
+// either kind hears the change once. The events are sent after the change
+// commits.
+type WarmupHealthPayload struct {
+	EmailAccountID string `json:"email_account_id"`
+	Email          string `json:"email"`
+	// PreviousState and NewState are warmup health states, for example
+	// "healthy", "watch", "throttled", "quarantined" or "blocked".
+	PreviousState string `json:"previous_state"`
+	NewState      string `json:"new_state"`
+	// Reason is why the state changed, in words.
+	Reason string `json:"reason"`
+}
+
+// WarmupPlacementInSpamPayload is the [EventWarmupPlacementInSpam] body: a
+// warmup partner found one of the mailbox's warmup emails in spam.
+type WarmupPlacementInSpamPayload struct {
+	// EmailAccountID and Email are the sending mailbox.
+	EmailAccountID string `json:"email_account_id"`
+	Email          string `json:"email"`
+	ContentSource  string `json:"content_source"`
+	// RecipientProvider is the receiving mailbox's provider, and
+	// RecipientHost who hosts its mail, for example "gmail",
+	// "google_workspace" or "microsoft365", empty when unknown. The receiving
+	// mailbox usually belongs to another workspace, so its address and domain
+	// are never sent; earlier releases sent a recipient_domain field instead.
+	RecipientProvider string `json:"recipient_provider"`
+	RecipientHost     string `json:"recipient_host"`
+}
+
 // WebhookChallengePayload is the [EventEndpointTest] body, delivered only to
 // the endpoint being verified. Echo [WebhookChallengePayload.Challenge] back —
 // in your response body, or in the [WebhookChallengeHeader] — to confirm the
