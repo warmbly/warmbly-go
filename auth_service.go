@@ -29,6 +29,30 @@ import (
 // [Session.PendingToken] to finish through [AuthService.VerifyTwoFA].
 type AuthService service
 
+// Error codes carried in [Error.Code] by sign-in and session confirmation.
+const (
+	// ErrCodeReauthRequired is the 403 from a sensitive change the session
+	// has not confirmed recently. Call [AuthService.Reauth] and retry. A 401
+	// with the same code means the call needs a signed-in session at all.
+	ErrCodeReauthRequired = "reauth_required"
+	// ErrCodeReauthNoFactor is the 400 from [AuthService.Reauth] for an
+	// account with no password and no two-factor. Sign in again and repeat the
+	// change within five minutes, or enroll two-factor.
+	ErrCodeReauthNoFactor = "reauth_no_factor"
+	// ErrCodeReauthLimited is the 400 once [AuthService.Reauth] has seen too
+	// many wrong attempts in the hour.
+	ErrCodeReauthLimited = "reauth_limited"
+	// ErrCodeSSOLinkExpired is the 400 from [AuthService.LinkSSO] for an
+	// unknown or expired pending token, or after too many wrong passwords.
+	ErrCodeSSOLinkExpired = "sso_link_expired"
+	// ErrCodePasskeyUserVerification is the 400 for a passkey assertion the
+	// authenticator did not verify with a PIN or biometric.
+	ErrCodePasskeyUserVerification = "passkey_user_verification_required"
+	// ErrCodeCLIAuthScopesRole is the 403 from [AuthService.ApproveCLIAuth]
+	// when the approver's role allows none of the requested scopes.
+	ErrCodeCLIAuthScopesRole = "cli_auth_scopes_role"
+)
+
 // Session is a signed-in session's token pair.
 type Session struct {
 	AccessToken           string    `json:"access_token"`
@@ -40,10 +64,27 @@ type Session struct {
 	// fields are then empty; finish with [AuthService.VerifyTwoFA] using
 	// PendingToken.
 	TwoFARequired bool `json:"two_fa_required,omitempty"`
-	// PendingToken is the single-use handle for the 2FA step.
+	// PendingToken is the single-use handle for the 2FA step, or for the
+	// password step when LinkRequired is set.
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// DeviceToken is set by [AuthService.LoginConfirm] when
+	// [ConfirmParams.RememberDevice] asked to remember this browser. Send it
+	// back as [LoginParams.DeviceToken] on later sign-ins to skip the emailed
+	// code for 30 days. [AuthService.LogoutAll] forgets every remembered
+	// device.
+	DeviceToken string `json:"device_token,omitempty"`
+
+	// LinkRequired is set by a browser SSO sign-in ([AuthService.ExchangeSSO])
+	// whose verified address belongs to an existing password account. No
+	// session is issued until that account's password is given to
+	// [AuthService.LinkSSO] with PendingToken; LinkEmail and LinkProvider are
+	// the address and provider to show while asking for it.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -65,6 +106,28 @@ type LoginParams struct {
 	// on a closed deployment fails with "registration_invite_only" or
 	// "registration_closed".
 	Invite string `json:"invite,omitempty"`
+
+	// DeviceToken is the [Session.DeviceToken] a previous confirmed sign-in
+	// from this browser returned. Login only: it skips the emailed code under
+	// the [LoginCodeNewDevice] policy while it is valid.
+	DeviceToken string `json:"device_token,omitempty"`
+	// Acquisition is where the signup came from, recorded once on the new
+	// workspace. Register only; nil for a direct visit.
+	Acquisition *SignupAcquisition `json:"acquisition,omitempty"`
+}
+
+// SignupAcquisition is the marketing attribution a signup carries, usually
+// read from the landing page's URL. Every field is optional and trimmed and
+// truncated by the server; the landing path is reduced to a path and the
+// referrer to a bare host.
+type SignupAcquisition struct {
+	LandingPath  string `json:"landing_path,omitempty"`
+	ReferrerHost string `json:"referrer_host,omitempty"`
+	UTMSource    string `json:"utm_source,omitempty"`
+	UTMMedium    string `json:"utm_medium,omitempty"`
+	UTMCampaign  string `json:"utm_campaign,omitempty"`
+	UTMTerm      string `json:"utm_term,omitempty"`
+	UTMContent   string `json:"utm_content,omitempty"`
 }
 
 // AuthStep is the outcome of the first step of a sign-in or signup. Either
@@ -107,6 +170,10 @@ type ConfirmParams struct {
 	Session   string `json:"session"`
 	Code      string `json:"code"`
 	Turnstile string `json:"turnstile,omitempty"`
+	// RememberDevice asks [AuthService.LoginConfirm] for a
+	// [Session.DeviceToken] so the next sign-in from this browser skips the
+	// emailed code. Login only.
+	RememberDevice bool `json:"remember_device,omitempty"`
 }
 
 // UserSession is one active session on the account.
@@ -147,9 +214,16 @@ type OnboardingParams struct {
 	TeamSize       string `json:"team_size,omitempty"`
 }
 
-// TwoFAStatus reports whether the account has two-factor enabled.
+// TwoFAStatus reports whether the account has two-factor enabled and how many
+// recovery codes are left.
 type TwoFAStatus struct {
 	Enabled bool `json:"enabled"`
+	// ConfirmedAt is when the authenticator was confirmed.
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
+	// RecoveryCodesRemaining of RecoveryCodesTotal are still unused. Issue a
+	// fresh set with [AuthService.RegenerateRecoveryCodes] before they run out.
+	RecoveryCodesRemaining int `json:"recovery_codes_remaining"`
+	RecoveryCodesTotal     int `json:"recovery_codes_total"`
 }
 
 // TwoFAEnrollment is what a new authenticator needs to be set up.
@@ -158,6 +232,28 @@ type TwoFAEnrollment struct {
 	// scannable otpauth:// URL.
 	Secret     string `json:"secret"`
 	OTPAuthURI string `json:"otpauth_uri"`
+	// Issuer, Account, Algorithm, Digits and Period spell out the URI's
+	// parameters for manual entry, so a client never parses them back out.
+	Issuer    string `json:"issuer"`
+	Account   string `json:"account"`
+	Algorithm string `json:"algorithm"`
+	Digits    int    `json:"digits"`
+	Period    int    `json:"period"`
+}
+
+// ReauthParams re-proves the account holder behind a live session. Give the
+// password, or a current TOTP or recovery code; an account without a password
+// (passkey or SSO only) confirms with a code.
+type ReauthParams struct {
+	Password string `json:"password,omitempty"`
+	Code     string `json:"code,omitempty"`
+}
+
+// ReauthResult is a successful [AuthService.Reauth].
+type ReauthResult struct {
+	// ValidForSeconds is how long the confirmation lasts, so a client can ask
+	// again before the next sensitive call rather than letting it fail.
+	ValidForSeconds int `json:"valid_for_seconds"`
 }
 
 // TwoFARecoveryCodes are the single-use codes that get an account back when the
@@ -411,6 +507,11 @@ type CLIAuthRequest struct {
 	CLIVersion string   `json:"cli_version"`
 	Scopes     uint64   `json:"scopes"`
 	ScopeNames []string `json:"scope_names"`
+	// GrantedScopes and GrantedScopeNames are what approving into the
+	// workspace named to [AuthService.CLIAuthRequestIn] would mint: Scopes
+	// capped to the caller's role there. Nil from [AuthService.CLIAuthRequest].
+	GrantedScopes     *uint64  `json:"granted_scopes,omitempty"`
+	GrantedScopeNames []string `json:"granted_scope_names,omitempty"`
 	// Status is one of the CLIAuth* constants.
 	Status string `json:"status"`
 	// OrganizationID is the workspace the key was minted in, once approved.
@@ -542,7 +643,8 @@ func (s *AuthService) Login(ctx context.Context, params *LoginParams, opts ...Re
 
 // LoginConfirm exchanges the session handle and emailed code for tokens. When
 // the account has two-factor enabled the result carries
-// [Session.TwoFARequired] instead.
+// [Session.TwoFARequired] instead. With [ConfirmParams.RememberDevice] the
+// result also carries a [Session.DeviceToken] for skipping the code next time.
 func (s *AuthService) LoginConfirm(ctx context.Context, params *ConfirmParams, opts ...RequestOption) (*Session, *Response, error) {
 	return send[Session](ctx, s.client.post, "auth/login/confirm", params, opts)
 }
@@ -643,7 +745,9 @@ func (s *AuthService) BeginSSO(ctx context.Context, provider string, opts ...Req
 // use. A code presented without the binding of the browser that began the
 // sign-in fails with code "sso_wrong_browser", by design: a forwarded handoff
 // link cannot sign its recipient in. Two-factor applies here like everywhere
-// else; see [Session.TwoFARequired].
+// else; see [Session.TwoFARequired]. When the provider's address belongs to an
+// existing password account the result carries [Session.LinkRequired] and no
+// tokens; finish with [AuthService.LinkSSO].
 //
 // The route is POST /auth/sso/exchange; the server also keeps the older
 // POST /auth/oidc/exchange as an alias for the same handler.
@@ -653,6 +757,24 @@ func (s *AuthService) ExchangeSSO(ctx context.Context, code, binding string, opt
 		Binding string `json:"binding"`
 	}{Code: code, Binding: binding}
 	return send[Session](ctx, s.client.post, "auth/sso/exchange", body, opts)
+}
+
+// LinkSSO finishes a browser SSO sign-in that came back with
+// [Session.LinkRequired]: the provider verified an address that belongs to an
+// existing password account, so the identity is attached, and a session
+// issued, only once that account's password is given here with the
+// [Session.PendingToken]. Two-factor still applies, so the result can carry
+// [Session.TwoFARequired] instead of tokens.
+//
+// It needs no credentials. A wrong password fails like a wrong sign-in; an
+// unknown or expired pending token, or too many wrong passwords, fails with
+// [ErrCodeSSOLinkExpired], after which the sign-in starts over.
+func (s *AuthService) LinkSSO(ctx context.Context, pendingToken, password string, opts ...RequestOption) (*Session, *Response, error) {
+	body := struct {
+		PendingToken string `json:"pending_token"`
+		Password     string `json:"password"`
+	}{PendingToken: pendingToken, Password: password}
+	return send[Session](ctx, s.client.post, "auth/sso/link", body, opts)
 }
 
 // --- CLI device flow ---
@@ -773,14 +895,28 @@ func (s *AuthService) CLIAuthRequest(ctx context.Context, userCode string, opts 
 	return fetch[CLIAuthRequest](ctx, s.client, "auth/cli/codes/"+url.PathEscape(userCode), opts)
 }
 
+// CLIAuthRequestIn is [AuthService.CLIAuthRequest] for a chosen workspace: it
+// also fills [CLIAuthRequest.GrantedScopes] with exactly what approving into
+// organizationID would mint, the requested scopes capped to the caller's role
+// there. A caller who is not a member of it gets a 403. This route is
+// session-only.
+func (s *AuthService) CLIAuthRequestIn(ctx context.Context, userCode, organizationID string, opts ...RequestOption) (*CLIAuthRequest, *Response, error) {
+	q := url.Values{"organization_id": {organizationID}}
+	return fetch[CLIAuthRequest](ctx, s.client, withQuery("auth/cli/codes/"+url.PathEscape(userCode), q), opts)
+}
+
 // ApproveCLIAuth approves a handshake and mints an ordinary API key into the
 // given workspace — not necessarily the session's, because a member of
 // several workspaces picks one on screen. An empty organizationID uses the
 // session's workspace. The key shows up under Settings > API keys and the
 // result's [CLIAuthRequest.APIKeyID] names it. This route is session-only and
 // needs the manage-API-keys organization permission ([OrgPermManageAPIKeys]):
-// an API key must not be able to mint another one this way. A code that is no
-// longer pending answers 409.
+// an API key must not be able to mint another one this way. The session must
+// also have confirmed recently with [AuthService.Reauth], or the call fails
+// with [ErrCodeReauthRequired]. The key holds the requested scopes capped to
+// the approver's role in that workspace (the result's Scopes); when that
+// leaves nothing the call fails with [ErrCodeCLIAuthScopesRole]. A code that
+// is no longer pending answers 409.
 func (s *AuthService) ApproveCLIAuth(ctx context.Context, userCode, organizationID string, opts ...RequestOption) (*CLIAuthRequest, *Response, error) {
 	body := struct {
 		OrganizationID string `json:"organization_id,omitempty"`
@@ -818,7 +954,9 @@ func (s *AuthService) Logout(ctx context.Context, opts ...RequestOption) (*Respo
 	return s.client.post(ctx, "auth/logout", nil, nil, opts...)
 }
 
-// LogoutAll revokes every session on the account, including this one.
+// LogoutAll revokes every session on the account, including this one, and
+// forgets every remembered device, so each asks for an emailed login code
+// again.
 func (s *AuthService) LogoutAll(ctx context.Context, opts ...RequestOption) (*Response, error) {
 	return s.client.post(ctx, "auth/logout-all", nil, nil, opts...)
 }
@@ -840,8 +978,9 @@ func (s *AuthService) RevokeOtherSessions(ctx context.Context, opts ...RequestOp
 
 // --- profile ---
 
-// Me returns the caller's own profile, including their folder, tag and
-// category sets.
+// Me returns the caller's own profile, including the folder, tag and category
+// sets of the session's current workspace (empty when none is selected, and
+// narrowed to a restricted member's grants).
 func (s *AuthService) Me(ctx context.Context, opts ...RequestOption) (*User, *Response, error) {
 	return fetch[User](ctx, s.client, "auth/me", opts)
 }
@@ -875,13 +1014,56 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, opts ...RequestOption) (
 	return s.client.delete(ctx, "auth/me/avatar", opts...)
 }
 
-// ChangePassword sets a new password, which requires the current one.
-func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Response, error) {
+// ChangePassword sets a new password, which requires the current one. Every
+// session on the account ends with it, this one included, and the result is
+// the token pair of a new session for this device that keeps its workspace
+// and sign-in method: switch to it at once, since the token the call was made
+// with no longer works. The result is nil only when the server issued no new
+// session.
+func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Session, *Response, error) {
 	body := struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
 	}{CurrentPassword: currentPassword, NewPassword: newPassword}
-	return s.client.post(ctx, "auth/me/password", body, nil, opts...)
+	out, resp, err := send[Session](ctx, s.client.post, "auth/me/password", body, opts)
+	if err != nil {
+		return nil, resp, err
+	}
+	if out.AccessToken == "" {
+		return nil, resp, nil
+	}
+	return out, resp, nil
+}
+
+// CompleteProductTour records that the caller finished or skipped the
+// dashboard's product tour and returns when, as also reported in
+// [User.ProductTourCompletedAt]. Repeating it keeps the first time.
+func (s *AuthService) CompleteProductTour(ctx context.Context, opts ...RequestOption) (time.Time, *Response, error) {
+	var out struct {
+		CompletedAt time.Time `json:"product_tour_completed_at"`
+	}
+	resp, err := s.client.put(ctx, "auth/me/product-tour", nil, &out, opts...)
+	if err != nil {
+		return time.Time{}, resp, err
+	}
+	return out.CompletedAt, resp, nil
+}
+
+// Reauth re-proves the account holder behind the current session with the
+// password or a two-factor code. Sensitive changes (minting an API key,
+// approving an OAuth or CLI request, registering or deleting a passkey,
+// rotating a signing secret, transferring or deleting a workspace) need a
+// confirmation this recent, and fail with [ErrCodeReauthRequired] without one.
+// API keys and OAuth tokens are never asked.
+//
+// A wrong factor fails with a 400; past the hourly attempt budget the call
+// fails with [ErrCodeReauthLimited], and an account with neither a password
+// nor two-factor with [ErrCodeReauthNoFactor] (sign in again instead).
+func (s *AuthService) Reauth(ctx context.Context, params *ReauthParams, opts ...RequestOption) (*ReauthResult, *Response, error) {
+	if params == nil {
+		params = &ReauthParams{}
+	}
+	return send[ReauthResult](ctx, s.client.post, "auth/reauth", params, opts)
 }
 
 // SetUndoSendSeconds sets how long an instant send is held, and stays
@@ -901,7 +1083,10 @@ func (s *AuthService) TwoFAStatus(ctx context.Context, opts ...RequestOption) (*
 }
 
 // EnrollTwoFA begins two-factor setup and returns the shared secret. Confirm it
-// with [AuthService.ConfirmTwoFA] before it takes effect.
+// with [AuthService.ConfirmTwoFA] before it takes effect. Both steps need a
+// recent [AuthService.Reauth] when the account already has a password; an
+// account with neither a password nor two-factor may enroll only within a few
+// minutes of signing in.
 func (s *AuthService) EnrollTwoFA(ctx context.Context, opts ...RequestOption) (*TwoFAEnrollment, *Response, error) {
 	return send[TwoFAEnrollment](ctx, s.client.post, "auth/2fa/enroll/start", nil, opts)
 }
@@ -922,6 +1107,17 @@ func (s *AuthService) DisableTwoFA(ctx context.Context, code string, opts ...Req
 		Code string `json:"code"`
 	}{Code: code}
 	return s.client.deleteBody(ctx, "auth/2fa", body, opts...)
+}
+
+// RegenerateRecoveryCodes replaces every recovery code with a fresh set and
+// returns it, shown exactly once. It needs a current TOTP code or an unused
+// recovery code as proof. The code is single-use, so a retry is refused
+// rather than rotating twice; do not send an idempotency key.
+func (s *AuthService) RegenerateRecoveryCodes(ctx context.Context, code string, opts ...RequestOption) (*TwoFARecoveryCodes, *Response, error) {
+	body := struct {
+		Code string `json:"code"`
+	}{Code: code}
+	return send[TwoFARecoveryCodes](ctx, s.client.post, "auth/2fa/recovery-codes", body, opts)
 }
 
 // VerifyTwoFA completes a sign-in that stopped at the two-factor step, using
@@ -958,8 +1154,10 @@ func (s *AuthService) BeginPasskeyLogin(ctx context.Context, opts ...RequestOpti
 
 // FinishPasskeyLogin completes a passkey sign-in with the handle from
 // [PasskeyLoginChallenge.Session] and the authenticator's assertion, and
-// returns the session. It is a single step with no emailed code; two-factor
-// still applies ([Session.TwoFARequired]).
+// returns the session. It is a single step with no emailed code and no TOTP
+// step: the authenticator must verify the user (a PIN or biometric), which
+// makes the passkey multi-factor on its own. An assertion without user
+// verification fails with [ErrCodePasskeyUserVerification].
 func (s *AuthService) FinishPasskeyLogin(ctx context.Context, session string, assertion json.RawMessage, opts ...RequestOption) (*Session, *Response, error) {
 	body := struct {
 		Session    string          `json:"session"`
@@ -969,7 +1167,10 @@ func (s *AuthService) FinishPasskeyLogin(ctx context.Context, session string, as
 }
 
 // BeginPasskeyRegistration starts enrolling a passkey on the signed-in account
-// and returns the WebAuthn creation options.
+// and returns the WebAuthn creation options, which require user verification.
+// A passkey signs in on its own, so this and
+// [AuthService.FinishPasskeyRegistration] need a recent [AuthService.Reauth]
+// and fail with [ErrCodeReauthRequired] without one.
 func (s *AuthService) BeginPasskeyRegistration(ctx context.Context, opts ...RequestOption) (json.RawMessage, *Response, error) {
 	return s.passkeyStep(ctx, "auth/passkey/register/begin", nil, opts)
 }
@@ -1002,7 +1203,8 @@ func (s *AuthService) RenamePasskey(ctx context.Context, id, name string, opts .
 	return send[PasskeyCredential](ctx, s.client.patch, "auth/passkey/credentials/"+url.PathEscape(id), body, opts)
 }
 
-// DeletePasskey removes a registered credential.
+// DeletePasskey removes a registered credential. It needs a recent
+// [AuthService.Reauth], like registering one.
 func (s *AuthService) DeletePasskey(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "auth/passkey/credentials/"+url.PathEscape(id), opts...)
 }

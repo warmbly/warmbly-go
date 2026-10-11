@@ -96,6 +96,13 @@ type User struct {
 
 	ReferralSource        *string    `json:"referral_source,omitempty"`
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// ProductTourCompletedAt is when the dashboard's product tour was
+	// finished or skipped ([AuthService.CompleteProductTour]); nil shows it.
+	ProductTourCompletedAt *time.Time `json:"product_tour_completed_at,omitempty"`
+	// SessionMFAVerified reports whether the session making the request
+	// presented a second factor (TOTP, a recovery code or a passkey). Only on
+	// the caller's own profile.
+	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	MaxOrganizations int  `json:"max_organizations,omitempty"`
 	FreeTrialUsed    bool `json:"free_trial_used,omitempty"`
