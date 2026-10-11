@@ -20,6 +20,10 @@ import (
 // a suggested mapping, then [LeadSyncService.Create] to save it. Preview
 // returns the same shape as the contact importer, so one column mapper serves
 // both.
+//
+// Every route needs [PermWriteContacts] for an API key, or manage-contacts
+// ([OrgPermManageContacts]) for a session, because a sync ultimately upserts
+// contacts.
 type LeadSyncService service
 
 // Source states returned in [LeadSyncSource.Status].
@@ -86,8 +90,12 @@ type LeadSyncSource struct {
 
 	// TargetCampaignID, when set, enrolls every new or updated lead in that
 	// campaign on each sync.
-	TargetCampaignID  *string  `json:"target_campaign_id,omitempty"`
-	CategoryIDs       []string `json:"category_ids"`
+	TargetCampaignID *string  `json:"target_campaign_id,omitempty"`
+	CategoryIDs      []string `json:"category_ids"`
+	// SegmentIDs pins every synced row into these segments as an include
+	// override, the same write a file import's segment targets make. A
+	// segment deleted later is dropped from the run rather than failing it.
+	SegmentIDs        []string `json:"segment_ids"`
 	SubscribedDefault bool     `json:"subscribed_default"`
 
 	Label string `json:"label,omitempty"`
@@ -119,8 +127,11 @@ type LeadSyncCreateParams struct {
 	// Dedup is one of the ImportDedup* constants.
 	Dedup string `json:"dedup,omitempty"`
 
-	TargetCampaignID  *string  `json:"target_campaign_id,omitempty"`
-	CategoryIDs       []string `json:"category_ids,omitempty"`
+	TargetCampaignID *string  `json:"target_campaign_id,omitempty"`
+	CategoryIDs      []string `json:"category_ids,omitempty"`
+	// SegmentIDs are segments every synced row is pinned into. Each id must
+	// name a segment in the workspace or the save is a 400.
+	SegmentIDs        []string `json:"segment_ids,omitempty"`
 	SubscribedDefault *bool    `json:"subscribed_default,omitempty"`
 	Label             string   `json:"label,omitempty"`
 }
@@ -140,8 +151,11 @@ type LeadSyncUpdateParams struct {
 	TargetCampaignID *string `json:"target_campaign_id,omitempty"`
 	// ClearCampaign detaches the target campaign. Use it instead of a nil
 	// TargetCampaignID, which means "leave unchanged".
-	ClearCampaign     bool      `json:"clear_campaign,omitempty"`
-	CategoryIDs       *[]string `json:"category_ids,omitempty"`
+	ClearCampaign bool      `json:"clear_campaign,omitempty"`
+	CategoryIDs   *[]string `json:"category_ids,omitempty"`
+	// SegmentIDs, when non-nil, replaces the segment targets; an empty slice
+	// clears them and an unknown id is a 400.
+	SegmentIDs        *[]string `json:"segment_ids,omitempty"`
 	SubscribedDefault *bool     `json:"subscribed_default,omitempty"`
 	Label             *string   `json:"label,omitempty"`
 }
@@ -153,13 +167,14 @@ type LeadSyncResult struct {
 	Result   *ContactImportResult `json:"result"`
 }
 
-// Connection reports whether a Google account is connected for lead sync.
+// Connection reports whether a Google account is connected for lead sync. It
+// needs [PermWriteContacts].
 func (s *LeadSyncService) Connection(ctx context.Context, opts ...RequestOption) (*LeadSyncConnection, *Response, error) {
 	return fetch[LeadSyncConnection](ctx, s.client, "lead-sync/google/connection", opts)
 }
 
 // Spreadsheet returns a workbook's title and tabs, so a tab can be chosen
-// before mapping columns.
+// before mapping columns. It needs [PermWriteContacts].
 func (s *LeadSyncService) Spreadsheet(ctx context.Context, connectionID, sheetID string, opts ...RequestOption) (*Spreadsheet, *Response, error) {
 	body := struct {
 		ConnectionID string `json:"connection_id"`
@@ -169,7 +184,8 @@ func (s *LeadSyncService) Spreadsheet(ctx context.Context, connectionID, sheetID
 }
 
 // Preview reads the top rows of a tab and returns the same shape as
-// [ContactService.ImportPreview], including a suggested column mapping.
+// [ContactService.ImportPreview], including a suggested column mapping. It
+// needs [PermWriteContacts].
 func (s *LeadSyncService) Preview(ctx context.Context, connectionID, sheetID, tabTitle string, opts ...RequestOption) (*ContactImportPreview, *Response, error) {
 	body := struct {
 		ConnectionID string `json:"connection_id"`
@@ -179,40 +195,49 @@ func (s *LeadSyncService) Preview(ctx context.Context, connectionID, sheetID, ta
 	return send[ContactImportPreview](ctx, s.client.post, "lead-sync/google/preview", body, opts)
 }
 
-// Sources returns the workspace's saved sync sources.
+// Sources returns the workspace's saved sync sources. It needs
+// [PermWriteContacts].
 func (s *LeadSyncService) Sources(ctx context.Context, opts ...RequestOption) ([]LeadSyncSource, *Response, error) {
 	return fetchData[LeadSyncSource](ctx, s.client, "lead-sync/sources", opts)
 }
 
 // SourcesForCampaign returns the saved sync sources that enroll their leads
-// in the given campaign.
+// in the given campaign. It needs [PermWriteContacts].
 func (s *LeadSyncService) SourcesForCampaign(ctx context.Context, campaignID string, opts ...RequestOption) ([]LeadSyncSource, *Response, error) {
 	q := url.Values{"campaign_id": {campaignID}}
 	return fetchData[LeadSyncSource](ctx, s.client, withQuery("lead-sync/sources", q), opts)
 }
 
-// Create saves a new sync source.
+// SourcesForSegment returns the saved sync sources that pin their rows into
+// the given segment. It needs [PermWriteContacts].
+func (s *LeadSyncService) SourcesForSegment(ctx context.Context, segmentID string, opts ...RequestOption) ([]LeadSyncSource, *Response, error) {
+	q := url.Values{"segment_id": {segmentID}}
+	return fetchData[LeadSyncSource](ctx, s.client, withQuery("lead-sync/sources", q), opts)
+}
+
+// Create saves a new sync source. It needs [PermWriteContacts].
 func (s *LeadSyncService) Create(ctx context.Context, params *LeadSyncCreateParams, opts ...RequestOption) (*LeadSyncSource, *Response, error) {
 	return send[LeadSyncSource](ctx, s.client.post, "lead-sync/sources", params, opts)
 }
 
-// Get retrieves a saved sync source.
+// Get retrieves a saved sync source. It needs [PermWriteContacts].
 func (s *LeadSyncService) Get(ctx context.Context, id string, opts ...RequestOption) (*LeadSyncSource, *Response, error) {
 	return fetch[LeadSyncSource](ctx, s.client, "lead-sync/sources/"+url.PathEscape(id), opts)
 }
 
-// Update edits a saved sync source.
+// Update edits a saved sync source. It needs [PermWriteContacts].
 func (s *LeadSyncService) Update(ctx context.Context, id string, params *LeadSyncUpdateParams, opts ...RequestOption) (*LeadSyncSource, *Response, error) {
 	return send[LeadSyncSource](ctx, s.client.patch, "lead-sync/sources/"+url.PathEscape(id), params, opts)
 }
 
-// Delete removes a saved sync source. The contacts it imported stay.
+// Delete removes a saved sync source. The contacts it imported stay. It needs
+// [PermWriteContacts].
 func (s *LeadSyncService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "lead-sync/sources/"+url.PathEscape(id), opts...)
 }
 
 // Sync runs a source now and returns the import counts. It runs in the
-// request, so a large sheet takes a while.
+// request, so a large sheet takes a while. It needs [PermWriteContacts].
 func (s *LeadSyncService) Sync(ctx context.Context, id string, opts ...RequestOption) (*LeadSyncResult, *Response, error) {
 	return send[LeadSyncResult](ctx, s.client.post, "lead-sync/sources/"+url.PathEscape(id)+"/sync", nil, opts)
 }

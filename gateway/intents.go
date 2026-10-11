@@ -13,31 +13,35 @@ package gateway
 // fragment of an event type.
 //
 // The flip side of a substring test is that a short token matches more than it
-// looks like it should — "AI" is a substring of both EMAIL_SENT and
+// looks like it should: "AI" is a substring of both EMAIL_SENT and
 // CAMPAIGN_PAUSED. The constants below are chosen to avoid that; prefer them to
 // hand-written tokens, and include the trailing underscore if you write your
-// own short one.
+// own short one. A full event type is not always exact either: EMAIL_OPENED is
+// a substring of DIRECT_EMAIL_OPENED, so that intent receives both.
 //
 // Intents only ever subtract. They cannot widen what a credential may see: a
 // key without unibox access receives no inbox events however it asks. They also
-// apply to the workspace channel only — the extra topics from [WithTopics] are
+// apply to the workspace channel only. The extra topics from [WithTopics] are
 // already scoped to a single resource, and the server ignores intents on them.
 const (
 	// IntentCampaign covers campaign lifecycle and progress, including
 	// [EventCampaignIdle].
 	IntentCampaign = "CAMPAIGN"
-	// IntentEmail covers the per-message pulse — sent, opened, clicked,
-	// replied, bounced — and inbox arrivals. It is the highest-volume family.
+	// IntentEmail covers the per-message pulse (sent, opened, clicked,
+	// replied, bounced), including direct (non-campaign) opens and clicks,
+	// and inbox arrivals. It is the highest-volume family.
 	IntentEmail = "EMAIL"
-	// IntentContact covers contact creation, updates and deletion.
+	// IntentContact covers contact creation, updates and deletion, plus
+	// [EventContactsReload] and [EventContactImportProgress].
 	IntentContact = "CONTACT"
 	// IntentAccount covers mailbox connection, sync and health transitions.
 	IntentAccount = "ACCOUNT"
-	// IntentWarmup covers warmup health and placement changes.
+	// IntentWarmup covers warmup placement sightings
+	// ([EventWarmupPlacement]). Inbox placement tests are [IntentPlacement].
 	IntentWarmup = "WARMUP"
 	// IntentBulk covers bulk import and export progress. Those events are
 	// user-scoped and never reach the workspace channel, so this only narrows
-	// a [UserTopic] stream if you also declare it there — which the server
+	// a [UserTopic] stream if you also declare it there, which the server
 	// does not read. Kept for completeness.
 	IntentBulk = "BULK"
 	// IntentTask covers send-task progress.
@@ -61,6 +65,24 @@ const (
 	// IntentForm covers hosted form submissions
 	// ([EventFormSubmissionCreated]).
 	IntentForm = "FORM"
+	// IntentDirectEmail covers opens and clicks on email sent straight from a
+	// mailbox rather than a campaign ([EventDirectEmailOpened],
+	// [EventDirectEmailClicked]). [IntentEmail] covers them too.
+	IntentDirectEmail = "DIRECT_EMAIL_"
+	// IntentPlacement covers inbox placement test and batch updates
+	// ([EventPlacementTestUpdated]). It is "PLACEMENT_TEST" rather than
+	// "PLACEMENT" so it does not also admit [EventWarmupPlacement], which
+	// belongs to [IntentWarmup].
+	IntentPlacement = "PLACEMENT_TEST"
+	// IntentMailboxImport covers mailbox import progress
+	// ([EventMailboxImportProgress]). [IntentAccount] does not: the event
+	// type has no ACCOUNT in it.
+	IntentMailboxImport = "MAILBOX_IMPORT"
+	// IntentContactImport covers background contact import progress
+	// ([EventContactImportProgress]). [IntentContact] covers it too.
+	IntentContactImport = "CONTACT_IMPORT"
+	// IntentCRM covers CRM sync signals ([EventCRMSynced]).
+	IntentCRM = "CRM_"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
 )

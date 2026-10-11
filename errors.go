@@ -101,11 +101,20 @@ func (e *Error) HasCode(code string) bool {
 // Temporary reports whether the error is likely transient and worth retrying:
 // rate limiting (429) or server errors (5xx).
 //
-// It is a status-level guess. Two 5xx codes are not transient at all —
-// [ErrCodeMailboxProviderNotConfigured] and, on the mailbox delete path,
-// [ErrCodeMailboxWorkerUnreachable] — so check [Error.HasCode] before building
-// a retry loop around them.
+// It is a status-level guess, with one correction: a 503 that says the
+// deployment simply lacks a feature ([ErrCodeAINotConfigured],
+// [ErrCodeSlackNotConfigured], [ErrCodeMailboxProviderNotConfigured]) is not
+// transient and reports false. [ErrCodeMailboxWorkerUnreachable] is transient:
+// nothing was removed, and the same call can succeed a moment later. So is
+// [ErrCodeSalesforceUnreachable], although the server sends it as a 400.
 func (e *Error) Temporary() bool {
+	if e.HasCode(ErrCodeAINotConfigured) || e.HasCode(ErrCodeSlackNotConfigured) ||
+		e.HasCode(ErrCodeMailboxProviderNotConfigured) {
+		return false
+	}
+	if e.HasCode(ErrCodeSalesforceUnreachable) {
+		return true
+	}
 	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500
 }
 
@@ -117,7 +126,10 @@ func (e *Error) Temporary() bool {
 // answers with the generic code for its status class. A few codes live with the
 // service they belong to instead of here — [ErrCodeMailboxAllowanceReached],
 // [ErrCodeMailboxWorkerUnreachable], [ErrCodeListBounceRisk] and
-// [ErrCodeLeadsUndeliverable].
+// [ErrCodeLeadsUndeliverable]. The refusals added for sign-in confirmation,
+// request validation, mailbox connection and import, sending domains, inbox
+// placement, CRM provider mode, Salesforce, integrations and Slack are at the
+// end of the block.
 const (
 	// ErrCodeBadRequest is the generic 400: malformed JSON, a missing required
 	// field, a value out of range.
@@ -140,7 +152,9 @@ const (
 	// ErrCodeRateLimitExceeded is the 429 for the per-key request rate. Honor
 	// [Error.RetryAfter]; the client's own retry does.
 	ErrCodeRateLimitExceeded = "rate_limit_exceeded"
-	// ErrCodeInternalError is the generic 500. Retry once, then quote
+	// ErrCodeInternalError is the generic 500. Its message is normally the
+	// fixed "Something went wrong." (the detail is logged server-side against
+	// the request id), so do not parse it. Retry once, then quote
 	// [Error.RequestID] to support.
 	ErrCodeInternalError = "internal_error"
 	// ErrCodeNotImplemented is the 501 for a feature this deployment does not
@@ -221,6 +235,306 @@ const (
 	// sign-in was given. The handoff is deliberately non-transferable: a
 	// forwarded sign-in link cannot sign the recipient in.
 	ErrCodeSSOWrongBrowser = "sso_wrong_browser"
+
+	// Sign-in, password and confirmation refusals.
+	// ErrCodePasswordBreached is a 400: the password appears in a public list of breached passwords. Choose another.
+	ErrCodePasswordBreached = "password_breached"
+	// ErrCodeSSOLinkExpired is a 400: the pending token from a link_required single sign-on attempt is unknown, expired, used, or had three wrong passwords. Start the provider sign-in again.
+	ErrCodeSSOLinkExpired = "sso_link_expired"
+	// ErrCodeInvalidName is a 400: a person, workspace, company, OAuth app or mailbox display name broke the naming rules (no links, markup or control characters). The message names the field and the rule.
+	ErrCodeInvalidName = "invalid_name"
+	// ErrCodePasskeyUserVerificationRequired is a 400: a passkey sign-in came from an authenticator that did not verify the user with a PIN or biometric.
+	ErrCodePasskeyUserVerificationRequired = "passkey_user_verification_required"
+	// ErrCodeTwoFAInvalidCode is a 400: the authenticator or recovery code did not match. The login challenge allows five attempts per pending session.
+	ErrCodeTwoFAInvalidCode = "two_fa_invalid_code"
+	// ErrCodeReauthRequired is a 403: the action needs a proof of identity newer than the session. Confirm with Auth.Reauth, then retry. It is a 401 when the route was reached without a signed-in session at all. API keys and OAuth tokens are never asked for it.
+	ErrCodeReauthRequired = "reauth_required"
+	// ErrCodeReauthLimited is a 400: too many failed confirmations within the hour. A fresh sign-in counts as a confirmation for five minutes.
+	ErrCodeReauthLimited = "reauth_limited"
+	// ErrCodeReauthNoFactor is a 400: the account has neither a password nor two-factor authentication, so there is nothing to confirm with.
+	ErrCodeReauthNoFactor = "reauth_no_factor"
+	// ErrCodeAdminMFARequired is a 403: an admin route was reached by a session that did not present a second factor.
+	ErrCodeAdminMFARequired = "admin_mfa_required"
+	// ErrCodePasswordChangedSignInAgain is a 409: the new password was stored but the calling device could not be given a new session. Every earlier token is invalid; sign in again.
+	ErrCodePasswordChangedSignInAgain = "password_changed_sign_in_again"
+
+	// Request validation refusals (400 unless noted).
+	// ErrCodeInvalidSlug is a 400: a workspace slug that is not 2 to 80 lowercase letters, numbers or dashes starting and ending with a letter or number.
+	ErrCodeInvalidSlug = "invalid_slug"
+	// ErrCodeInvalidSetting is a 400: an outreach or campaign advanced setting outside the documented vocabulary.
+	ErrCodeInvalidSetting = "invalid_setting"
+	// ErrCodeInvalidSyncFolder is a 400: a mailbox sync folder selection the sync cannot honor: a folder it always follows, an empty, over-long or control-character name, more than 50 names, or a mailbox that is not IMAP. The message names the entry refused.
+	ErrCodeInvalidSyncFolder = "invalid_sync_folder"
+	// ErrCodeInvalidSortBy is a 400: a contact search, export or bulk selection sort_by of the form custom:<key> whose key could never be a custom-field name.
+	ErrCodeInvalidSortBy = "invalid_sort_by"
+	// ErrCodeInvalidMailHost is a 400: a contact filter mail_hosts entry that is not a documented provider value.
+	ErrCodeInvalidMailHost = "invalid_mail_host"
+	// ErrCodeInvalidFilter is a 400: a CRM task filter carried an id that is not one.
+	ErrCodeInvalidFilter = "invalid_filter"
+	// ErrCodeInvalidCursor is a 400: a list cursor this API did not issue. Start again without one.
+	ErrCodeInvalidCursor = "invalid_cursor"
+	// ErrCodeInvalidColumn is a 400: a view update named a column the view cannot render.
+	ErrCodeInvalidColumn = "invalid_column"
+	// ErrCodeDuplicateColumn is a 400: a view update named the same column twice.
+	ErrCodeDuplicateColumn = "duplicate_column"
+	// ErrCodeTooManyColumns is a 400: a view update named more than 64 columns.
+	ErrCodeTooManyColumns = "too_many_columns"
+	// ErrCodeInvalidSort is a 400: a view update sort that names neither a sortable contact column nor a well-formed custom:<key>.
+	ErrCodeInvalidSort = "invalid_sort"
+	// ErrCodeInvalidLayout is a 400: a view layout on a view that has none, or one with an unknown or oversized field.
+	ErrCodeInvalidLayout = "invalid_layout"
+	// ErrCodeUnknownView is a 404: a view name other than contacts, campaign_leads or unibox_rail.
+	ErrCodeUnknownView = "unknown_view"
+	// ErrCodeTooManyTasks is a 400: a CRM task update or delete named more than 1000 ids, or more than 50,000 exclusions. Split it into batches.
+	ErrCodeTooManyTasks = "too_many_tasks"
+	// ErrCodeTooManyContacts is a 400: a contact bulk action named more than 10,000 ids, or more than 250,000 exclusions. Split it, or send a filter selection. An integration push answers it past 500 contacts, however they were selected.
+	ErrCodeTooManyContacts = "too_many_contacts"
+	// ErrCodeSelectionTooLarge is a 400: an all-records bulk selection resolved to more than its limit (250,000 contacts or 50,000 CRM tasks). Nothing was changed.
+	ErrCodeSelectionTooLarge = "selection_too_large"
+	// ErrCodeEmptyStepBody is a 400: a campaign start found an email step with no body, which would send a blank message to every lead.
+	ErrCodeEmptyStepBody = "empty_step_body"
+	// ErrCodeLeadCcLimit is a 400: more than two contacts were set as a lead's CC.
+	ErrCodeLeadCcLimit = "lead_cc_limit"
+	// ErrCodeLeadCcSelf is a 400: a lead was named as a copy on itself.
+	ErrCodeLeadCcSelf = "lead_cc_self"
+	// ErrCodeLeadCcContactNotFound is a 404: a CC contact that is not in the workspace.
+	ErrCodeLeadCcContactNotFound = "lead_cc_contact_not_found"
+	// ErrCodeLeadCcLeadIsCopied is a 409: setting CC on a lead that is itself copied on another lead in the campaign.
+	ErrCodeLeadCcLeadIsCopied = "lead_cc_lead_is_copied"
+	// ErrCodeLeadCcHasCopies is a 409: a CC contact that has copies of their own in the campaign.
+	ErrCodeLeadCcHasCopies = "lead_cc_has_copies"
+	// ErrCodeContactEmailTaken is a 409: an updated contact email that already belongs to another contact.
+	ErrCodeContactEmailTaken = "contact_email_taken"
+	// ErrCodeInvalidRecipient is a 400: a to, cc or bcc entry that is not exactly one email address, or a send with no to address at all.
+	ErrCodeInvalidRecipient = "invalid_recipient"
+	// ErrCodeInvalidMessageID is a 400: an in_reply_to entry that is not one Message-ID.
+	ErrCodeInvalidMessageID = "invalid_message_id"
+
+	// Credential and member access refusals.
+	// ErrCodeAPIKeyHolderLeft is a 401: the API key's creator is no longer a member of the workspace. The key will not work again; create a new one from a current member. The realtime gateway refuses it too.
+	ErrCodeAPIKeyHolderLeft = "api_key_holder_left"
+	// ErrCodeAPIKeyMailboxLimited is a 403: an API key limited to some mailboxes called a surface that acts across the workspace, such as the AI tool and MCP endpoints, a campaign sender pool resolved from mailbox tags, or a campaign start whose pool is not an explicit list of the key's own mailboxes.
+	ErrCodeAPIKeyMailboxLimited = "api_key_mailbox_limited"
+	// ErrCodeAPIKeyPermissionsExceedCaller is a 403: an API key was created or edited with more than its creator holds, a permission the member's roles do not cover or, for an API key caller, a permission, mailbox or IP address the calling key does not have.
+	ErrCodeAPIKeyPermissionsExceedCaller = "api_key_permissions_exceed_caller"
+	// ErrCodeOAuthTokenNotAllowed is a 403: an OAuth access token called a route that manages credentials (API keys and OAuth applications). Use an API key or the dashboard.
+	ErrCodeOAuthTokenNotAllowed = "oauth_token_not_allowed"
+	// ErrCodeMemberAccessRestricted is a 403: a member restricted to selected campaigns, folders and mailboxes, or a key or app acting for one, called a route outside that scope. Resource writes and workspace-wide surfaces such as contacts and settings are refused, and so is creating a workspace for an account with only restricted memberships.
+	ErrCodeMemberAccessRestricted = "member_access_restricted"
+	// ErrCodeInvalidAccessScope is a 400: a member access scope other than workspace or restricted.
+	ErrCodeInvalidAccessScope = "invalid_access_scope"
+	// ErrCodeInvalidAccessResource is a 400: a member access grant names a campaign folder, campaign or mailbox that is not in the workspace.
+	ErrCodeInvalidAccessResource = "invalid_access_resource"
+	// ErrCodeTooManyAccessGrants is a 400: a member access scope grants more campaign folders, campaigns or mailboxes than one scope may hold. The message names the limit.
+	ErrCodeTooManyAccessGrants = "too_many_access_grants"
+	// ErrCodeOwnerAccessUnrestricted is a 403: the workspace owner cannot be restricted to selected resources.
+	ErrCodeOwnerAccessUnrestricted = "owner_access_unrestricted"
+	// ErrCodeOrganizationCloudConnected is a 409: a workspace or account deletion while the workspace, or one the account owns, is still connected to Warmbly Cloud. Disconnect it first.
+	ErrCodeOrganizationCloudConnected = "organization_cloud_connected"
+
+	// Mailbox connect and sync refusals.
+	// ErrCodeMailboxGmailOauthDisabled is a 403: new Gmail mailboxes connect with an app password on this deployment, not with Google sign-in.
+	ErrCodeMailboxGmailOauthDisabled = "mailbox_gmail_oauth_disabled"
+	// ErrCodeMailboxOAuthReturnOrigin is a 400: a mailbox OAuth connect named a dashboard origin this deployment does not allow. Add the exact origin to CORS_ALLOW_ORIGINS.
+	ErrCodeMailboxOAuthReturnOrigin = "mailbox_oauth_return_origin"
+	// ErrCodeAppPasswordInvalid is a 400: an app_password that is not 16 letters once spaces are removed.
+	ErrCodeAppPasswordInvalid = "app_password_invalid"
+	// ErrCodeMailboxNotGoogleSignin is a 409: an app-password switch on a mailbox that is not connected with per-mailbox Google sign-in.
+	ErrCodeMailboxNotGoogleSignin = "mailbox_not_google_signin"
+	// ErrCodeMailboxReauthDelegated is a 409: a re-authorization of a mailbox connected through an admin grant, which has no sign-in of its own.
+	ErrCodeMailboxReauthDelegated = "mailbox_reauth_delegated"
+	// ErrCodeMailboxValidationTimeout is a 400: the mailbox worker did not report back in time, so the mail server was not tested and nothing was saved. Retry.
+	ErrCodeMailboxValidationTimeout = "mailbox_validation_timeout"
+	// ErrCodeMailboxAuthRefused is a 400: the mail server refused the credentials.
+	ErrCodeMailboxAuthRefused = "mailbox_auth_refused"
+	// ErrCodeMailboxUnreachable is a 400: the mail server could not be reached.
+	ErrCodeMailboxUnreachable = "mailbox_unreachable"
+	// ErrCodeMailboxTLSFailed is a 400: the mail server did not complete a secure connection on the chosen port.
+	ErrCodeMailboxTLSFailed = "mailbox_tls_failed"
+	// ErrCodeMailboxServerDeclined is a 400: the sign-in was declined for a reason other than the credentials, such as a login rate limit or an unsupported mechanism.
+	ErrCodeMailboxServerDeclined = "mailbox_server_declined"
+	// ErrCodeMailboxSendAsUnsupported is a 400: a send-as refresh or change on a mailbox whose provider exposes no send-as list (only Gmail and Google Workspace do).
+	ErrCodeMailboxSendAsUnsupported = "mailbox_send_as_unsupported"
+	// ErrCodeMailboxSendAsUnknown is a 400: a send_as_email the provider has not verified for the mailbox.
+	ErrCodeMailboxSendAsUnknown = "mailbox_send_as_unknown"
+	// ErrCodeMailboxIdentityUnavailable is a 503: the worker holding the mailbox could not be reached, so its sending addresses were not refreshed. Retry.
+	ErrCodeMailboxIdentityUnavailable = "mailbox_identity_unavailable"
+	// ErrCodeMailboxSignatureTooLarge is a 400: the provider signature is larger than Warmbly stores.
+	ErrCodeMailboxSignatureTooLarge = "mailbox_signature_too_large"
+	// ErrCodeMailboxIsSeed is a 409: warmup was started or resumed on a placement seed inbox.
+	ErrCodeMailboxIsSeed = "mailbox_is_seed"
+	// ErrCodeMailboxCloudUnenrollFailed is a 409: a mailbox linked to Warmbly Cloud could not be released from it, so its deletion was refused.
+	ErrCodeMailboxCloudUnenrollFailed = "mailbox_cloud_unenroll_failed"
+	// ErrCodePoolLinkCleartextMailbox is a 422: a mailbox with SMTP or IMAP security none cannot be enrolled in Warmbly Cloud.
+	ErrCodePoolLinkCleartextMailbox = "pool_link_cleartext_mailbox"
+	// ErrCodePoolLinkRedirectNotFound is a 404: Warmbly Cloud serves no redirect for the domain for the calling instance.
+	ErrCodePoolLinkRedirectNotFound = "pool_link_redirect_not_found"
+
+	// Mailbox import, vendor and admin grant refusals.
+	// ErrCodeMailboxImportEmpty is a 400: a mailbox import with no file or text, no rows, or only a header row.
+	ErrCodeMailboxImportEmpty = "mailbox_import_empty"
+	// ErrCodeMailboxImportTooLarge is a 400: a mailbox import over 5,000 mailboxes, a file over 10 MB, a pasted list over 2 MB, or a non-multipart body.
+	ErrCodeMailboxImportTooLarge = "mailbox_import_too_large"
+	// ErrCodeMailboxImportNoEmailColumn is a 400: a mailbox import mapping in which no column is email.
+	ErrCodeMailboxImportNoEmailColumn = "mailbox_import_no_email_column"
+	// ErrCodeMailboxImportRowIncomplete is a 400: an import row fix that left the row without servers or a password.
+	ErrCodeMailboxImportRowIncomplete = "mailbox_import_row_incomplete"
+	// ErrCodeMailboxImportRowNotFailed is a 409: an import row fix on a row that did not fail.
+	ErrCodeMailboxImportRowNotFailed = "mailbox_import_row_not_failed"
+	// ErrCodeMailboxImportCredentialsExpired is a 409: an import row retry after its credentials were deleted, 7 days after the import finished.
+	ErrCodeMailboxImportCredentialsExpired = "mailbox_import_credentials_expired"
+	// ErrCodeMailboxImportNothingToRetry is a 409: an import retry that matched no failed row still holding its credentials.
+	ErrCodeMailboxImportNothingToRetry = "mailbox_import_nothing_to_retry"
+	// ErrCodeMailboxVendorUnauthorized is a 400: the inbox vendor did not accept the API key.
+	ErrCodeMailboxVendorUnauthorized = "mailbox_vendor_unauthorized"
+	// ErrCodeMailboxVendorNoWorkspace is a 400: the vendor accepted the key but lists no workspace for it.
+	ErrCodeMailboxVendorNoWorkspace = "mailbox_vendor_no_workspace"
+	// ErrCodeMailboxVendorInvalidFields is a 400: a vendor field is empty or holds control characters.
+	ErrCodeMailboxVendorInvalidFields = "mailbox_vendor_invalid_fields"
+	// ErrCodeMailboxVendorUnknown is a 400: a vendor that is not one of the supported vendors.
+	ErrCodeMailboxVendorUnknown = "mailbox_vendor_unknown"
+	// ErrCodeMailboxVendorRateLimited is a 429: the vendor is rate limiting Warmbly's requests. Retry in a minute.
+	ErrCodeMailboxVendorRateLimited = "mailbox_vendor_rate_limited"
+	// ErrCodeMailboxVendorUnavailable is a 400: the vendor answered unexpectedly, did not answer, or no longer has the mailbox.
+	ErrCodeMailboxVendorUnavailable = "mailbox_vendor_unavailable"
+	// ErrCodeMailboxVendorDomainNotFound is a 404: a vendor forwarding or tracking change on a domain none of the workspace's vendor accounts holds.
+	ErrCodeMailboxVendorDomainNotFound = "mailbox_vendor_domain_not_found"
+	// ErrCodeMailboxVendorDomainUnsupported is a 400: the vendor holding the domain cannot do this through its API.
+	ErrCodeMailboxVendorDomainUnsupported = "mailbox_vendor_domain_unsupported"
+	// ErrCodeMailboxGrantNotConfigured is a 400: this instance has no Google service account or Microsoft app for admin grants.
+	ErrCodeMailboxGrantNotConfigured = "mailbox_grant_not_configured"
+	// ErrCodeGoogleDelegationUnauthorized is a 400: Google refused the domain-wide delegation.
+	ErrCodeGoogleDelegationUnauthorized = "google_delegation_unauthorized"
+	// ErrCodeMicrosoftConsentMissing is a 400: the Microsoft 365 organization has not granted admin consent, or the consent lacks a required permission.
+	ErrCodeMicrosoftConsentMissing = "microsoft_consent_missing"
+	// ErrCodeMailboxGrantStateInvalid is a 400: the grant sign-in or consent state expired, was used, or belongs to another member or workspace.
+	ErrCodeMailboxGrantStateInvalid = "mailbox_grant_state_invalid"
+	// ErrCodeMailboxGrantProofMissing is a 400: the workspace has not proved it controls the domain, or the sign-in was not the domain's administrator.
+	ErrCodeMailboxGrantProofMissing = "mailbox_grant_proof_missing"
+	// ErrCodeMailboxGrantUnavailable is a 503: Google, Microsoft or the DNS lookup did not answer. Nothing was recorded. Retry.
+	ErrCodeMailboxGrantUnavailable = "mailbox_grant_unavailable"
+	// ErrCodeMailboxGrantDomainMismatch is a 400: the admin address or mailbox is on a domain the grant does not cover.
+	ErrCodeMailboxGrantDomainMismatch = "mailbox_grant_domain_mismatch"
+	// ErrCodeMailboxGrantMailboxUnreachable is a 400: Google or Microsoft has no usable mailbox for the account.
+	ErrCodeMailboxGrantMailboxUnreachable = "mailbox_grant_mailbox_unreachable"
+	// ErrCodeMailboxGrantInactive is a 400: the grant failed its last check, so it connects nothing.
+	ErrCodeMailboxGrantInactive = "mailbox_grant_inactive"
+
+	// Sending domain and redirect refusals.
+	// ErrCodeSendingDomainNotInWorkspace is a 404: the workspace has no mailbox on the domain (400 when no domain was given).
+	ErrCodeSendingDomainNotInWorkspace = "sending_domain_not_in_workspace"
+	// ErrCodeSendingDomainSharedProvider is a 400: the domain belongs to a shared email provider, such as gmail.com, and cannot be redirected.
+	ErrCodeSendingDomainSharedProvider = "sending_domain_shared_provider"
+	// ErrCodeSendingDomainBulkInvalid is a 400: a bulk domain setup that named no domain, more than 100, nothing to set, a bad tracking_label, or a bad served_by.
+	ErrCodeSendingDomainBulkInvalid = "sending_domain_bulk_invalid"
+	// ErrCodeDomainRedirectInvalidTarget is a 400: a redirect target that is not an http or https address on a host, or points back at the domain.
+	ErrCodeDomainRedirectInvalidTarget = "domain_redirect_invalid_target"
+	// ErrCodeDomainRedirectTaken is a 409: another workspace on this instance already serves a verified redirect for the domain.
+	ErrCodeDomainRedirectTaken = "domain_redirect_taken"
+	// ErrCodeDomainRedirectLinked is a 409: the domain's redirect is served for a linked self-hosted instance, and only that instance changes it.
+	ErrCodeDomainRedirectLinked = "domain_redirect_linked"
+	// ErrCodeDomainRedirectCloudUnavailable is a 409: served_by is cloud, but this instance is not linked to Warmbly Cloud or Cloud does not serve redirects for it.
+	ErrCodeDomainRedirectCloudUnavailable = "domain_redirect_cloud_unavailable"
+	// ErrCodeDomainRedirectCloudUnreachable is a 503: Warmbly Cloud could not be reached, so nothing changed. Retry.
+	ErrCodeDomainRedirectCloudUnreachable = "domain_redirect_cloud_unreachable"
+	// ErrCodeDomainRedirectLimit is a 409: Warmbly Cloud already serves 200 redirects for the linked instance.
+	ErrCodeDomainRedirectLimit = "domain_redirect_limit"
+	// ErrCodeTrackingHostNotConfigured is a 400: this instance has no tracking host, so it cannot serve a tracking domain or redirect.
+	ErrCodeTrackingHostNotConfigured = "tracking_host_not_configured"
+	// ErrCodeTrackingDomainTaken is a 409: another workspace on this instance already uses the tracking domain. Choose a host on a domain the workspace sends from.
+	ErrCodeTrackingDomainTaken = "tracking_domain_taken"
+
+	// Inbox placement refusals.
+	// ErrCodePlacementNotEntitled is a 402: the workspace has no active trial or subscription, so it cannot start a placement test.
+	ErrCodePlacementNotEntitled = "placement_not_entitled"
+	// ErrCodePlacementQuotaExceeded is a 402: the free placement tests for the month are used up. The message may name a price in credits payable with max_credits.
+	ErrCodePlacementQuotaExceeded = "placement_quota_exceeded"
+	// ErrCodePlacementTooManyRunning is a 429: three placement tests are already running.
+	ErrCodePlacementTooManyRunning = "placement_too_many_running"
+	// ErrCodePlacementTooManyBatches is a 429: five placement batches are already running.
+	ErrCodePlacementTooManyBatches = "placement_too_many_batches"
+	// ErrCodePlacementBatchEmpty is a 400: a placement batch resolved to no sending mailbox.
+	ErrCodePlacementBatchEmpty = "placement_batch_empty"
+	// ErrCodePlacementBatchTooLarge is a 400: a placement batch would hold more mailboxes than the instance allows.
+	ErrCodePlacementBatchTooLarge = "placement_batch_too_large"
+	// ErrCodePlacementBatchNotRunning is a 409: a cancel on a placement batch that has already finished.
+	ErrCodePlacementBatchNotRunning = "placement_batch_not_running"
+	// ErrCodePlacementNotRunning is a 409: a cancel on a placement test that has already finished.
+	ErrCodePlacementNotRunning = "placement_not_running"
+	// ErrCodePlacementDailyBudget is a 409: the mailbox has too little of its daily limit left for a useful test.
+	ErrCodePlacementDailyBudget = "placement_daily_budget"
+	// ErrCodePlacementInvalidSeeds is a 400: seed_ids names a mailbox that is not a connected, running seed inbox of the workspace.
+	ErrCodePlacementInvalidSeeds = "placement_invalid_seeds"
+	// ErrCodePlacementInvalidTracking is a 400: tracking is on or compare for a plain-text campaign.
+	ErrCodePlacementInvalidTracking = "placement_invalid_tracking"
+	// ErrCodePlacementNoSeeds is a 409: the panel has no usable seed inbox.
+	ErrCodePlacementNoSeeds = "placement_no_seeds"
+	// ErrCodePlacementPanelUnavailable is a 409: panel is cloud on an instance that is not linked to Warmbly Cloud.
+	ErrCodePlacementPanelUnavailable = "placement_panel_unavailable"
+	// ErrCodePlacementSeedLimit is a 409: the workspace already has 50 seed inboxes.
+	ErrCodePlacementSeedLimit = "placement_seed_limit"
+	// ErrCodePlacementSeedUnavailable is a 409: the mailbox cannot be marked as a seed inbox right now.
+	ErrCodePlacementSeedUnavailable = "placement_seed_unavailable"
+	// ErrCodePlacementSenderBusy is a 409: the sending mailbox still has copies of another test waiting to be sent.
+	ErrCodePlacementSenderBusy = "placement_sender_busy"
+	// ErrCodePlacementSenderUnavailable is a 409: the sending mailbox is not connected and active, or is itself a seed inbox.
+	ErrCodePlacementSenderUnavailable = "placement_sender_unavailable"
+
+	// CRM provider mode refusals (HubSpot and Pipedrive).
+	// ErrCodeCRMNotConnected is a 409: a provider-mode call while the workspace runs on Warmbly's own CRM. Connect HubSpot or Pipedrive and choose it with CRM.UpdateSettings first. Some calls answer it as a 404 once the mode was switched off.
+	ErrCodeCRMNotConnected = "crm_not_connected"
+	// ErrCodeCRMManagedExternally is a 409: an edit to something the connected CRM owns, such as its pipelines or task types.
+	ErrCodeCRMManagedExternally = "crm_managed_externally"
+	// ErrCodeCRMReauthRequired is a 409: the provider connection was revoked or lacks a permission. Reconnect it under Integrations.
+	ErrCodeCRMReauthRequired = "crm_reauth_required"
+	// ErrCodeCRMContactMissing is a 404: the provider does not have the contact yet. CRM.LinkContactRecord finds or creates it.
+	ErrCodeCRMContactMissing = "crm_contact_missing"
+	// ErrCodeCRMRecordMissing is a 404: the record was deleted in the provider.
+	ErrCodeCRMRecordMissing = "crm_record_missing"
+	// ErrCodeCRMOptedOut is a 409: the contact unsubscribed in the provider.
+	ErrCodeCRMOptedOut = "crm_opted_out"
+	// ErrCodeCRMOwnerUnmapped is a 400: an owner id the provider does not know.
+	ErrCodeCRMOwnerUnmapped = "crm_owner_unmapped"
+	// ErrCodeCRMStageUnknown is a 400 or 409: a pipeline or stage the provider does not have.
+	ErrCodeCRMStageUnknown = "crm_stage_unknown"
+	// ErrCodeCRMProviderRejected is a 422: the provider refused the change. The message carries its reason.
+	ErrCodeCRMProviderRejected = "crm_provider_rejected"
+	// ErrCodeCRMUnavailable is a 503: the provider did not answer. Retry shortly.
+	ErrCodeCRMUnavailable = "crm_unavailable"
+	// ErrCodeCRMSyncRunning is a 429: a sync was requested while one has just started.
+	ErrCodeCRMSyncRunning = "crm_sync_running"
+
+	// Salesforce and integration refusals.
+	// ErrCodeSalesforceReconnectRequired is a 409: the Salesforce connection's access expired or was revoked. Reconnect it.
+	ErrCodeSalesforceReconnectRequired = "salesforce_reconnect_required"
+	// ErrCodeSalesforceRateLimited is a 429: the Salesforce org has used its daily API requests.
+	ErrCodeSalesforceRateLimited = "salesforce_rate_limited"
+	// ErrCodeSalesforceError is a 400: Salesforce refused the call. The message carries its reason.
+	ErrCodeSalesforceError = "salesforce_error"
+	// ErrCodeSalesforceUnreachable is a 400: Salesforce did not answer. Retry shortly.
+	ErrCodeSalesforceUnreachable = "salesforce_unreachable"
+	// ErrCodeSalesforceSyncOff is a 400: Salesforce.SyncNow while the connection's sync is switched off.
+	ErrCodeSalesforceSyncOff = "salesforce_sync_off"
+	// ErrCodeInvalidSalesforceSettings is a 400: Salesforce sync settings the sync cannot run. The message names the field.
+	ErrCodeInvalidSalesforceSettings = "invalid_salesforce_settings"
+	// ErrCodeInvalidSalesforceDomain is a 400: an OAuth start whose Salesforce My Domain is not a usable login host.
+	ErrCodeInvalidSalesforceDomain = "invalid_salesforce_domain"
+	// ErrCodeImportRunning is a 409: a run of a Salesforce import source that is already running.
+	ErrCodeImportRunning = "import_running"
+	// ErrCodeActionProviderMismatch is a 400: an event subscription or automation step whose action belongs to another provider than the connection it runs on.
+	ErrCodeActionProviderMismatch = "action_provider_mismatch"
+
+	// Service availability codes.
+	// ErrCodeAINotConfigured is a 503: the deployment has no AI provider set up. Not transient; retrying will not help.
+	ErrCodeAINotConfigured = "ai_not_configured"
+	// ErrCodeSlackNotConfigured is a 503: this instance is not set up for Slack. Not transient.
+	ErrCodeSlackNotConfigured = "slack_not_configured"
+	// ErrCodeSlackNotConnected is a 404: a Slack route was called for a workspace that has not connected Slack.
+	ErrCodeSlackNotConnected = "slack_not_connected"
+	// ErrCodeSlackLinkInvalid is a 404: the Slack link code is unknown, expired or already used.
+	ErrCodeSlackLinkInvalid = "slack_link_invalid"
+	// ErrCodeSlackNotLinked is a 404: the member has not linked a Slack account in this workspace.
+	ErrCodeSlackNotLinked = "slack_not_linked"
 )
 
 // Sentinel errors for matching API failures with errors.Is. They carry only a

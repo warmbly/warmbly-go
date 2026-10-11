@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -598,5 +599,114 @@ func TestImportCommitDecodesQuality(t *testing.T) {
 	}
 	if !res.ErrorsTruncated || res.Quality == nil || res.Quality.Role != 62 || res.Quality.BadSharePct != 0.3 {
 		t.Errorf("import result: %+v quality=%+v", res, res.Quality)
+	}
+}
+
+// TestContactSelectionBodies checks that a filter selection reaches the wire in
+// the shape the server resolves: all, filters and exclude beside (or instead of)
+// the id list, on both the verb-with-body calls and the id-list helpers.
+func TestContactSelectionBodies(t *testing.T) {
+	var got recordedRequest
+	c := routingClient(t, &got)
+	ctx := context.Background()
+	sel := &ContactSelection{
+		All:     true,
+		Filters: &ContactSearchParams{Query: "acme", MailHosts: []string{MailHostGmail, ""}},
+		Exclude: []string{"ct_9"},
+	}
+	want := []string{`"all":true`, `"query":"acme"`, `"mail_hosts":["gmail",""]`, `"exclude":["ct_9"]`}
+
+	runSyncCases(t, &got, []syncCase{
+		{"BulkDeleteSelection", func() error {
+			_, e := c.Contacts.BulkDeleteSelection(ctx, sel)
+			return e
+		}, "DELETE", "/v1/contacts", "", want},
+		{"RequestVerification by filter", func() error {
+			_, _, e := c.Contacts.RequestVerification(ctx, &ContactVerificationParams{
+				Action: VerificationActionVerify, All: true, Filters: sel.Filters, Exclude: sel.Exclude,
+			})
+			return e
+		}, "POST", "/v1/contacts/verification", "", want},
+		{"BatchResearchSelection", func() error {
+			_, _, e := c.Contacts.BatchResearchSelection(ctx, sel, "find a hook")
+			return e
+		}, "POST", "/v1/contacts/research/batch", "", append([]string{`"objective":"find a hook"`}, want...)},
+		{"BatchResearch ids", func() error {
+			_, _, e := c.Contacts.BatchResearch(ctx, []string{"ct_1"}, "")
+			return e
+		}, "POST", "/v1/contacts/research/batch", "", []string{`"contacts":["ct_1"]`}},
+		{"SetMembersSelection", func() error {
+			_, _, e := c.Segments.SetMembersSelection(ctx, "seg_1", sel, SegmentMemberInclude)
+			return e
+		}, "POST", "/v1/segments/seg_1/members", "", append([]string{`"mode":"include"`}, want...)},
+		{"PushSelection", func() error {
+			_, _, e := c.Integrations.PushSelection(ctx, "conn_1", sel)
+			return e
+		}, "POST", "/v1/integrations/connections/conn_1/push", "", want},
+	})
+}
+
+// TestBulkUpdateByFilterBody checks the bulk update's filter selection; its
+// response is a bare contact array, which the routing fixture does not serve.
+func TestBulkUpdateByFilterBody(t *testing.T) {
+	var got recordedRequest
+	c := accountServer(t, `[]`, &got)
+	_, _, err := c.Contacts.BulkUpdate(context.Background(), &ContactBulkUpdateParams{
+		All:           true,
+		Filters:       &ContactSearchParams{Query: "acme"},
+		Exclude:       []string{"ct_9"},
+		AddCategories: []string{"cat_1"},
+	})
+	if err != nil {
+		t.Fatalf("BulkUpdate: %v", err)
+	}
+	for _, want := range []string{`"all":true`, `"query":"acme"`, `"exclude":["ct_9"]`, `"add_categories":["cat_1"]`} {
+		if !strings.Contains(got.body, want) {
+			t.Errorf("body %s is missing %s", got.body, want)
+		}
+	}
+	if strings.Contains(got.body, `"contacts"`) {
+		t.Errorf("body %s should omit the empty id list", got.body)
+	}
+}
+
+// TestContactDecodesHostHoldAndCC covers the fields added with mail host
+// detection, per-lead holds and CC.
+func TestContactDecodesHostHoldAndCC(t *testing.T) {
+	c := fixtureClient(t, map[string]string{"/v1/contacts/ct_1/campaigns": `{"data": [{
+		"campaign_id": "camp_1", "lead_status": "paused", "steps": [],
+		"sender_id": "mb_1", "sender_email": "me@example.com",
+		"hold": {"since": "2026-09-01T10:00:00Z", "until": "2026-09-08T10:00:00Z", "source": "out_of_office"},
+		"cc": [{"contact_id": "ct_2", "email": "b@x.com", "first_name": "B", "last_name": "C", "status": "bounced", "bounced_at": "2026-09-02T10:00:00Z"}]
+	}]}`})
+	states, _, err := c.Contacts.CampaignStates(context.Background(), "ct_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].LeadStatus != LeadStatusPaused || states[0].SenderEmail != "me@example.com" {
+		t.Fatalf("state = %+v", states)
+	}
+	h := states[0].Hold
+	if h == nil || h.Source != LeadHoldOutOfOffice || h.Until == nil {
+		t.Errorf("hold = %+v", h)
+	}
+	if len(states[0].CC) != 1 || states[0].CC[0].Status != LeadCCStatusBounced || states[0].CC[0].BouncedAt == nil {
+		t.Errorf("cc = %+v", states[0].CC)
+	}
+
+	var ct Contact
+	if err := json.Unmarshal([]byte(`{"id":"ct_1","mail_host":"google_workspace","esp_provider":"gmail","verification_requested_at":"2026-09-01T10:00:00Z"}`), &ct); err != nil {
+		t.Fatal(err)
+	}
+	if ct.MailHost != MailHostGoogleWorkspace || ct.VerificationRequestedAt == nil {
+		t.Errorf("contact = %+v", ct)
+	}
+
+	var counts CampaignLeadCounts
+	if err := json.Unmarshal([]byte(`{"total":9,"paused":2,"providers":{"gmail":4,"outlook":3,"other":1,"undetected":1}}`), &counts); err != nil {
+		t.Fatal(err)
+	}
+	if counts.Paused != 2 || counts.Providers.Google != 4 || counts.Providers.Undetected != 1 {
+		t.Errorf("counts = %+v", counts)
 	}
 }
