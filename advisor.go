@@ -16,8 +16,13 @@ import (
 // and [AdvisorFinding.Snippets] for what the platform cannot reach itself, such
 // as a DNS record.
 //
-// Applying a fix runs through the same permission checks as doing it by hand,
-// so a viewer sees the advice and gets a clean 403 if they try to apply it.
+// Every route except [AdvisorService.AgentFix] and
+// [AdvisorService.UpdateSettings] needs [PermReadAnalytics] for an API key, or
+// the view-analytics organization permission ([OrgPermViewAnalytics]) for a
+// session. Applying a fix then runs through the same permission checks as
+// doing it by hand (a member under their organization permissions, a key under
+// its own scopes and mailbox allowlist), so a viewer sees the advice and gets a
+// clean 403 if they try to apply it.
 type AdvisorService service
 
 // Finding severities returned in [AdvisorFinding.Severity].
@@ -253,30 +258,35 @@ func (p *AdvisorListParams) values() url.Values {
 	return q
 }
 
-// Recommendations returns the workspace's findings.
+// Recommendations returns the workspace's findings. It needs
+// [PermReadAnalytics].
 func (s *AdvisorService) Recommendations(ctx context.Context, params *AdvisorListParams, opts ...RequestOption) ([]AdvisorFinding, *Response, error) {
 	return fetchData[AdvisorFinding](ctx, s.client, withQuery("advisor/recommendations", params.values()), opts)
 }
 
 // Summary returns the workspace health score and the per-surface badge counts.
+// It needs [PermReadAnalytics].
 func (s *AdvisorService) Summary(ctx context.Context, opts ...RequestOption) (*AdvisorSummary, *Response, error) {
 	return fetch[AdvisorSummary](ctx, s.client, "advisor/summary", opts)
 }
 
 // Refresh triggers a re-evaluation and returns the summary. The re-run happens
-// in the background, so the summary may still reflect the previous pass.
+// in the background, so the summary may still reflect the previous pass. It
+// needs [PermReadAnalytics].
 func (s *AdvisorService) Refresh(ctx context.Context, opts ...RequestOption) (*AdvisorSummary, *Response, error) {
 	return send[AdvisorSummary](ctx, s.client.post, "advisor/refresh", nil, opts)
 }
 
 // Apply performs a finding's one-click remedy and returns the updated finding.
-// It runs as the calling member, so it fails with a 403 if they could not make
-// the same change by hand.
+// It needs [PermReadAnalytics], then runs as the caller: it fails with a 403 if
+// the member or key could not make the same change by hand, including when an
+// API key's mailbox allowlist does not cover a mailbox the fix touches.
 func (s *AdvisorService) Apply(ctx context.Context, id string, opts ...RequestOption) (*AdvisorFinding, *Response, error) {
 	return send[AdvisorFinding](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/apply", nil, opts)
 }
 
-// Undo reverts an applied remedy.
+// Undo reverts an applied remedy. It is gated exactly like
+// [AdvisorService.Apply].
 func (s *AdvisorService) Undo(ctx context.Context, id string, opts ...RequestOption) (*AdvisorFinding, *Response, error) {
 	return send[AdvisorFinding](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/undo", nil, opts)
 }
@@ -285,14 +295,15 @@ func (s *AdvisorService) Undo(ctx context.Context, id string, opts ...RequestOpt
 // cannot resolve. It spends AI credits, acts as the calling member inside their
 // permissions, and reports the calls it actually made.
 //
-// This route is session-only: it is not reachable with an API key.
+// This route is session-only: it is not reachable with an API key, and needs
+// the use-AI organization permission ([OrgPermUseAI]).
 func (s *AdvisorService) AgentFix(ctx context.Context, id string, opts ...RequestOption) (*AdvisorAgentResult, *Response, error) {
 	return send[AdvisorAgentResult](ctx, s.client.post, "advisor/recommendations/"+url.PathEscape(id)+"/agent-fix", nil, opts)
 }
 
 // Snooze hides a finding for a bounded number of days, from 1 to 90. An
 // unbounded snooze would be a dismissal in disguise, so use
-// [AdvisorService.Dismiss] for that.
+// [AdvisorService.Dismiss] for that. It needs [PermReadAnalytics].
 func (s *AdvisorService) Snooze(ctx context.Context, id string, days int, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		Days int `json:"days"`
@@ -301,7 +312,7 @@ func (s *AdvisorService) Snooze(ctx context.Context, id string, days int, opts .
 }
 
 // Dismiss rejects a finding. The dismissal sticks until the underlying
-// condition clears and later recurs.
+// condition clears and later recurs. It needs [PermReadAnalytics].
 func (s *AdvisorService) Dismiss(ctx context.Context, id, reason string, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		Reason string `json:"reason,omitempty"`
@@ -310,6 +321,7 @@ func (s *AdvisorService) Dismiss(ctx context.Context, id, reason string, opts ..
 }
 
 // Feedback records whether a finding was helpful, which feeds detector tuning.
+// It needs [PermReadAnalytics].
 func (s *AdvisorService) Feedback(ctx context.Context, id string, helpful bool, reason string, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		Helpful bool   `json:"helpful"`
@@ -318,14 +330,15 @@ func (s *AdvisorService) Feedback(ctx context.Context, id string, helpful bool, 
 	return s.client.post(ctx, "advisor/recommendations/"+url.PathEscape(id)+"/feedback", body, nil, opts...)
 }
 
-// Settings returns which Advisor checks are enabled for the workspace.
+// Settings returns which Advisor checks are enabled for the workspace. It
+// needs [PermReadAnalytics].
 func (s *AdvisorService) Settings(ctx context.Context, opts ...RequestOption) (*AdvisorSettings, *Response, error) {
 	return fetch[AdvisorSettings](ctx, s.client, "advisor/settings", opts)
 }
 
 // UpdateSettings replaces the Advisor configuration. Silencing checks for a
 // whole workspace is governance, so this route is session-only and needs the
-// manage-settings permission.
+// manage-settings organization permission ([OrgPermManageSettings]).
 func (s *AdvisorService) UpdateSettings(ctx context.Context, settings *AdvisorSettings, opts ...RequestOption) (*AdvisorSettings, *Response, error) {
 	return send[AdvisorSettings](ctx, s.client.patch, "advisor/settings", settings, opts)
 }

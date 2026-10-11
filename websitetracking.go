@@ -52,8 +52,8 @@ type WebsiteTrackingSettings struct {
 	OrganizationID string `json:"organization_id"`
 	// Enabled gates ingestion entirely.
 	Enabled bool `json:"enabled"`
-	// SiteKey identifies the workspace in the snippet. It is public — it only
-	// says which workspace a page view belongs to — but a leaked copy can be
+	// SiteKey identifies the workspace in the snippet. It is public (it only
+	// says which workspace a page view belongs to), but a leaked copy can be
 	// retired with [WebsiteTrackingService.RotateKey].
 	SiteKey string `json:"site_key"`
 	// ConsentMode is [WebsiteConsentExplicit] or [WebsiteConsentImplicit].
