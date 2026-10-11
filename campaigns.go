@@ -479,6 +479,13 @@ const (
 	EstimateSenderDomainAuth = "domain_auth"
 	EstimateSenderResting    = "resting"
 	EstimateSenderNoWorker   = "no_worker"
+	// EstimateSenderRecovery is a mailbox under a send-recovery hold.
+	EstimateSenderRecovery = "send_recovery"
+	// EstimateSenderCooldown is a mailbox waiting out a provider cooldown.
+	EstimateSenderCooldown = "send_cooldown"
+	// EstimateSenderAdmission is a mailbox the send-admission check is
+	// holding back.
+	EstimateSenderAdmission = "send_authority"
 )
 
 // CampaignEstimateResult is the projection from [CampaignService.Estimate]. It
@@ -1245,10 +1252,12 @@ func (s *CampaignService) ListSegments(ctx context.Context, id string, opts ...R
 // and turns [Campaign.Continuous] on. Every current member of a newly linked
 // segment is enrolled as a lead immediately, and contacts who enter a linked
 // segment later are enrolled automatically within about two minutes.
-// Enrolment is additive: a contact who leaves a segment keeps their lead row,
-// and unlinking a segment stops future enrolment without touching existing
-// leads. An active campaign wakes to send to the new leads; a completed one
-// restarts through the launch checks when a linked segment grows.
+// A contact who leaves a segment keeps their lead row. Unlinking a segment
+// withdraws the leads it brought, except those the campaign has already
+// written to and those added by hand ([CampaignSegmentsResult.Withdrawn] and
+// [CampaignSegmentsResult.Contacted]). An active campaign wakes to send to the
+// new leads; a completed one restarts through the launch checks when a linked
+// segment grows.
 //
 // An empty segmentIDs detaches every segment (the SDK sends an explicit empty
 // array, which the API requires). The links and the enrolment are written in
@@ -1289,10 +1298,20 @@ func (s *CampaignService) ListSteps(ctx context.Context, id string, opts ...Requ
 }
 
 // CreateStep appends a blank step to the campaign's sequence. Fill it in with
-// [CampaignService.UpdateStep]. New steps are not connected to anything: wire
-// them in through the previous step's Conditions.
+// [CampaignService.UpdateStep], or create it filled in with
+// [CampaignService.CreateStepWithParams]. New steps are not connected to
+// anything: wire them in through the previous step's Conditions.
 func (s *CampaignService) CreateStep(ctx context.Context, id string, opts ...RequestOption) (*Step, *Response, error) {
 	return send[Step](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", nil, opts)
+}
+
+// CreateStepWithParams appends a step and applies params to it in the same
+// request, with the same rules as [CampaignService.UpdateStep]. When params
+// is refused the new step is removed again, so a failed call leaves no blank
+// step behind. It needs the manage-campaigns permission ([PermWriteCampaigns]
+// for an API key).
+func (s *CampaignService) CreateStepWithParams(ctx context.Context, id string, params *StepUpdateParams, opts ...RequestOption) (*Step, *Response, error) {
+	return send[Step](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/steps", params, opts)
 }
 
 // UpdateStep modifies a step's content, delay, routing or kind.

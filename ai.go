@@ -11,6 +11,9 @@ import (
 //
 // Every call here spends AI credits and returns the remaining balance, so a
 // caller can surface cost without a second request. None of them send anything.
+//
+// Every route needs [PermWriteCampaigns] for an API key; a session needs both
+// manage-campaigns ([OrgPermManageCampaigns]) and use-AI ([OrgPermUseAI]).
 type GenerationService service
 
 // Generation is the result of an AI writing call.
@@ -68,18 +71,22 @@ type AIVariableParams struct {
 	ContextAfter  string `json:"context_after,omitempty"`
 }
 
-// Write generates a new piece of copy.
+// Write generates a new piece of copy. It needs [PermWriteCampaigns].
 func (s *GenerationService) Write(ctx context.Context, params *WriteParams, opts ...RequestOption) (*Generation, *Response, error) {
 	return send[Generation](ctx, s.client.post, "generation/write", params, opts)
 }
 
-// Edit rewrites a passage according to an instruction.
+// Edit rewrites a passage according to an instruction. Text and Context are
+// each capped at 8000 characters and Instruction at 2000. It needs
+// [PermWriteCampaigns].
 func (s *GenerationService) Edit(ctx context.Context, params *EditParams, opts ...RequestOption) (*Generation, *Response, error) {
 	return send[Generation](ctx, s.client.post, "generation/edit", params, opts)
 }
 
 // AIVariable previews an AI variable block against a single contact. A prompt
-// that renders empty against the contact costs nothing.
+// that renders empty against the contact costs nothing. It needs
+// [PermWriteCampaigns], and [PermReadContacts] as well when
+// [AIVariableParams.ContactID] is set, since the prompt reads that contact.
 func (s *GenerationService) AIVariable(ctx context.Context, params *AIVariableParams, opts ...RequestOption) (*Generation, *Response, error) {
 	return send[Generation](ctx, s.client.post, "generation/ai-variable", params, opts)
 }
@@ -88,8 +95,12 @@ func (s *GenerationService) AIVariable(ctx context.Context, params *AIVariablePa
 // writing surface, on top of the voice profile on [Organization].
 //
 // An enabled skill applies everywhere the assistant writes, so keep them short
-// and behavioral — "never open with 'I hope this finds you well'" — rather
-// than piling in per-campaign detail.
+// and behavioral ("never open with 'I hope this finds you well'") rather than
+// piling in per-campaign detail.
+//
+// Every route needs [PermAIAgent] for an API key, or manage-settings
+// ([OrgPermManageSettings]) for a session. A key's writes also need the member
+// who created the key to still hold manage-settings.
 type SkillService service
 
 // AISkill is one workspace playbook.
@@ -123,22 +134,22 @@ type SkillUpdateParams struct {
 	Enabled     *bool   `json:"enabled,omitempty"`
 }
 
-// List returns the workspace's AI skills.
+// List returns the workspace's AI skills. It needs [PermAIAgent].
 func (s *SkillService) List(ctx context.Context, opts ...RequestOption) ([]AISkill, *Response, error) {
 	return fetchData[AISkill](ctx, s.client, "ai/skills", opts)
 }
 
-// Create adds an AI skill.
+// Create adds an AI skill. It needs [PermAIAgent].
 func (s *SkillService) Create(ctx context.Context, params *SkillCreateParams, opts ...RequestOption) (*AISkill, *Response, error) {
 	return send[AISkill](ctx, s.client.post, "ai/skills", params, opts)
 }
 
-// Update modifies an AI skill.
+// Update modifies an AI skill. It needs [PermAIAgent].
 func (s *SkillService) Update(ctx context.Context, id string, params *SkillUpdateParams, opts ...RequestOption) (*AISkill, *Response, error) {
 	return send[AISkill](ctx, s.client.patch, "ai/skills/"+url.PathEscape(id), params, opts)
 }
 
-// Delete removes an AI skill.
+// Delete removes an AI skill. It needs [PermAIAgent].
 func (s *SkillService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "ai/skills/"+url.PathEscape(id), opts...)
 }

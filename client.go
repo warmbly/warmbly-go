@@ -86,6 +86,8 @@ type Client struct {
 
 	// Integrations manages third-party connections.
 	Integrations *IntegrationService
+	// Salesforce runs the native Salesforce sync on a connected org.
+	Salesforce *SalesforceService
 	// Automations manages event-triggered flows across those connections.
 	Automations *AutomationService
 	// LeadSync manages Google Sheets to contacts sync.
@@ -202,6 +204,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Meetings = (*MeetingService)(&c.common)
 
 	c.Integrations = (*IntegrationService)(&c.common)
+	c.Salesforce = (*SalesforceService)(&c.common)
 	c.Automations = (*AutomationService)(&c.common)
 	c.LeadSync = (*LeadSyncService)(&c.common)
 
@@ -713,7 +716,7 @@ type FileUpload struct {
 
 // postMultipart uploads a file (plus any extra form fields) as
 // multipart/form-data. The whole body is buffered so retries can replay it.
-func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file *FileUpload, fields map[string]string, out any, opts ...RequestOption) (*Response, error) {
+func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file *FileUpload, fields map[string]string, out any, opts ...RequestOption) (*Response, error) { //nolint:unparam // the form field is chosen per route by the server; every current route reads "file"
 	if file == nil || file.Content == nil {
 		return nil, errors.New("warmbly: a file is required for this upload")
 	}

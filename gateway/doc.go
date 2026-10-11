@@ -5,9 +5,11 @@
 //
 // # Connecting
 //
-// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, with an
-// OAuth access token, or with the ticket Meta.GatewayTicket mints for a
-// session (a bare session access token is refused). Register handlers first, then open the connection:
+// Authenticate with an API key holding the REALTIME_SUBSCRIBE permission, an
+// OAuth access token with the realtime_subscribe scope, or a connection ticket
+// minted for a signed-in session. Keys and OAuth tokens are sent in the
+// X-Warmbly-Token handshake header ([CredentialHeader]), never in the URL.
+// Register handlers first, then open the connection:
 //
 //	client := gateway.New(apiKey, orgID,
 //		gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail))
@@ -53,4 +55,13 @@
 // The gateway enforces the same permissions as the REST API. A credential
 // without unibox access receives no inbox events, whatever intents it declares;
 // intents only ever narrow the stream further.
+//
+// A member restricted to selected campaigns, folders and mailboxes, and any
+// key or OAuth app acting for one, is filtered further by those grants on the
+// workspace channel: inbox events need a granted mailbox, other events a
+// granted campaign or mailbox, and AUDIT_CREATED a granted campaign, folder or
+// mailbox or a change to the member themselves. Events that name no resource
+// are dropped, and such a connection receives no presence. Access is re-read
+// at least every 30 seconds, so a revoked grant stops delivery within that
+// window rather than instantly.
 package gateway

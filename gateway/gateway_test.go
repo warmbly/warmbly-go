@@ -12,6 +12,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -124,13 +126,84 @@ func TestExtractSeq(t *testing.T) {
 	}
 }
 
-func TestSocketURLCarriesCredentialAndVersion(t *testing.T) {
-	c := New("wmbly_key", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
+func TestSocketURLCarriesTicketAndVersion(t *testing.T) {
+	c := New("eyJ.ticket", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
 	got := c.socketURL()
-	for _, want := range []string{"token=wmbly_key", "vsn=" + protocolVersion} {
+	for _, want := range []string{"token=eyJ.ticket", "vsn=" + protocolVersion} {
 		if !strings.Contains(got, want) {
 			t.Errorf("socketURL() = %q, want it to contain %q", got, want)
 		}
+	}
+	if h := c.handshakeHeader(); h != nil {
+		t.Errorf("handshakeHeader() = %v, want none for a ticket", h)
+	}
+}
+
+func TestLongLivedCredentialRidesTheHeader(t *testing.T) {
+	for _, token := range []string{"wmbly_key", "wmat_token"} {
+		c := New(token, "org_1", WithURL("wss://realtime.example.com/socket/websocket?token=stale"))
+		got := c.socketURL()
+		if strings.Contains(got, "token=") {
+			t.Errorf("socketURL() = %q, want no token in the URL", got)
+		}
+		if !strings.Contains(got, "vsn="+protocolVersion) {
+			t.Errorf("socketURL() = %q, want the wire version", got)
+		}
+		if h := c.handshakeHeader(); h.Get(CredentialHeader) != token {
+			t.Errorf("handshakeHeader()[%s] = %q, want %q", CredentialHeader, h.Get(CredentialHeader), token)
+		}
+	}
+}
+
+func TestDialSendsCredentialHeader(t *testing.T) {
+	srv := newPhxServer(t)
+	srv.onJoin = func(int, string) (string, string) { return "ok", helloResponse }
+	c := srv.client(t)
+	if err := c.Open(testContext(t)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	srv.mu.Lock()
+	header, target := srv.lastHeader, srv.lastTarget
+	srv.mu.Unlock()
+	if got := header.Get(CredentialHeader); got != "wmbly_test" {
+		t.Errorf("handshake %s = %q, want the API key", CredentialHeader, got)
+	}
+	if strings.Contains(target, "token=") {
+		t.Errorf("handshake target = %q, want no token in the URL", target)
+	}
+}
+
+func TestExtraTopicCloseEmitsLifecycle(t *testing.T) {
+	srv := newPhxServer(t)
+	srv.onJoin = func(int, string) (string, string) { return "ok", helloResponse }
+	c := srv.client(t, WithTopics(CampaignTopic("c_1")))
+	got := make(chan ChannelClosed, 1)
+	On(c, EventChannelClosed, func(_ context.Context, e *ChannelClosed) {
+		select {
+		case got <- *e:
+		default:
+		}
+	})
+	if err := c.Open(testContext(t)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.joins("campaign:c_1") == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	srv.push("campaign:c_1", "phx_close", `{}`)
+	select {
+	case e := <-got:
+		if e.Topic != "campaign:c_1" || e.Event != "phx_close" {
+			t.Errorf("ChannelClosed = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no EventChannelClosed")
+	}
+	select {
+	case <-c.Done():
+		t.Fatalf("the session ended over an extra topic: %v", c.Err())
+	default:
 	}
 }
 
@@ -614,6 +687,22 @@ func TestDecodeEventPayloads(t *testing.T) {
 		}
 	})
 
+	t.Run("crm synced", func(t *testing.T) {
+		var e CRMSyncedEvent
+		decodeInto(t, `{"event_type":"CRM_SYNCED","org_id":"o_1","objects":["deal","task"],"contact_id":"ct_1"}`, &e)
+		if e.EventType != EventCRMSynced || len(e.Objects) != 2 || e.Objects[0] != CRMObjectDeal || e.ContactID != "ct_1" {
+			t.Errorf("decoded = %+v", e)
+		}
+	})
+
+	t.Run("user-addressed notification", func(t *testing.T) {
+		var e NotificationEvent
+		decodeInto(t, `{"event_type":"NOTIFICATION_CREATED","user_id":"u_1","authorization_org_id":"o_1","notification_id":"n_1","category":"campaign","title":"Done"}`, &e)
+		if e.AuthorizationOrgID != "o_1" || e.OrgID != "" || e.NotificationID != "n_1" {
+			t.Errorf("decoded = %+v", e)
+		}
+	})
+
 	t.Run("rate limited", func(t *testing.T) {
 		var e RateLimited
 		decodeInto(t, `{"category":"ws_message","retry_after_ms":21400}`, &e)
@@ -638,34 +727,83 @@ func TestDecodeEventPayloads(t *testing.T) {
 	})
 }
 
-// TestIntentsSelectTheirOwnFamilies mirrors the server's substring match and
-// checks that each intent constant admits the events it documents and not the
-// look-alikes.
-func TestIntentsSelectTheirOwnFamilies(t *testing.T) {
-	matches := func(intent, event string) bool { return strings.Contains(event, intent) }
-	cases := []struct {
-		intent string
-		in     []EventName
-		out    []EventName
-	}{
-		{IntentPlacement, []EventName{EventPlacementTestUpdated}, []EventName{EventWarmupPlacement, EventAccountSyncState}},
-		{IntentWarmup, []EventName{EventWarmupPlacement}, []EventName{EventPlacementTestUpdated}},
-		{IntentDirectEmail, []EventName{EventDirectEmailOpened, EventDirectEmailClicked}, []EventName{EventEmailOpened, EventEmailReceived}},
-		{IntentMailboxImport, []EventName{EventMailboxImportProgress}, []EventName{EventContactImportProgress}},
-		{IntentContactImport, []EventName{EventContactImportProgress}, []EventName{EventContactCreated, EventMailboxImportProgress}},
-		{IntentEmail, []EventName{EventDirectEmailOpened}, []EventName{EventMailboxImportProgress}},
-		{IntentAI, []EventName{EventAIDraftReady}, []EventName{EventMailboxImportProgress, EventDirectEmailClicked, EventCampaignPaused}},
+// serverEventTypes is every event type the server pushes on the workspace
+// channel, the set an intent is matched against.
+var serverEventTypes = []EventName{
+	EventEmailSent, EventEmailOpened, EventEmailClicked, EventEmailReplied,
+	EventDirectEmailOpened, EventDirectEmailClicked,
+	EventEmailReceived, EventEmailUpdated, EventEmailDeleted,
+	EventCampaignCreated, EventCampaignUpdated, EventCampaignDeleted,
+	EventCampaignStarted, EventCampaignPaused, EventCampaignCompleted, EventCampaignIdle,
+	EventContactCreated, EventContactUpdated, EventContactDeleted,
+	EventContactsReload, EventContactImportProgress,
+	EventAccountConnected, EventAccountDisconnected, EventAccountError,
+	EventAccountSynced, EventAccountHealthChanged, EventAccountSyncState,
+	EventWarmupPlacement, EventMailboxImportProgress, EventPlacementTestUpdated,
+	EventCRMSynced, EventTaskProgress,
+	EventAutomationCreated, EventAutomationUpdated, EventAutomationDeleted, EventAutomationRun,
+	EventMeetingBooked, EventMeetingRescheduled, EventMeetingCanceled,
+	EventAIResearchProgress, EventAIDraftReady,
+	EventBillingCreditsLow, EventBillingCreditsChanged,
+	EventNotificationCreated, EventAuditCreated, EventPageHit,
+	EventFormSubmissionCreated, EventCustom,
+}
+
+// intentSeparators is the server's separator class, collapsed to "_".
+var intentSeparators = regexp.MustCompile(`[.:\s-]+`)
+
+// serverIntentMatch mirrors the realtime server's intents_allow?: both sides
+// are upper-cased with separators collapsed to "_", then substring-tested.
+func serverIntentMatch(intent, event string) bool {
+	norm := func(s string) string { return intentSeparators.ReplaceAllString(strings.ToUpper(s), "_") }
+	return strings.Contains(norm(event), norm(intent))
+}
+
+// TestIntentsSelectExactlyTheirFamilies runs every intent constant against
+// every event type the server pushes and checks the admitted set is exactly
+// the documented one, so no constant admits a look-alike.
+func TestIntentsSelectExactlyTheirFamilies(t *testing.T) {
+	cases := map[string][]EventName{
+		IntentCampaign: {EventCampaignCreated, EventCampaignUpdated, EventCampaignDeleted,
+			EventCampaignStarted, EventCampaignPaused, EventCampaignCompleted, EventCampaignIdle},
+		IntentEmail: {EventEmailSent, EventEmailOpened, EventEmailClicked, EventEmailReplied,
+			EventDirectEmailOpened, EventDirectEmailClicked,
+			EventEmailReceived, EventEmailUpdated, EventEmailDeleted},
+		IntentContact: {EventContactCreated, EventContactUpdated, EventContactDeleted,
+			EventContactsReload, EventContactImportProgress},
+		IntentAccount: {EventAccountConnected, EventAccountDisconnected, EventAccountError,
+			EventAccountSynced, EventAccountHealthChanged, EventAccountSyncState},
+		IntentWarmup:        {EventWarmupPlacement},
+		IntentBulk:          nil,
+		IntentTask:          {EventTaskProgress},
+		IntentAudit:         {EventAuditCreated},
+		IntentAutomation:    {EventAutomationCreated, EventAutomationUpdated, EventAutomationDeleted, EventAutomationRun},
+		IntentMeeting:       {EventMeetingBooked, EventMeetingRescheduled, EventMeetingCanceled},
+		IntentBilling:       {EventBillingCreditsLow, EventBillingCreditsChanged},
+		IntentNotification:  {EventNotificationCreated},
+		IntentAI:            {EventAIResearchProgress, EventAIDraftReady},
+		IntentPage:          {EventPageHit},
+		IntentForm:          {EventFormSubmissionCreated},
+		IntentDirectEmail:   {EventDirectEmailOpened, EventDirectEmailClicked},
+		IntentPlacement:     {EventPlacementTestUpdated},
+		IntentMailboxImport: {EventMailboxImportProgress},
+		IntentContactImport: {EventContactImportProgress},
+		IntentCRM:           {EventCRMSynced},
+		IntentCustom:        {EventCustom},
+		// A full event type is not always exact.
+		EventEmailOpened: {EventEmailOpened, EventDirectEmailOpened},
+		// Case and separators do not matter.
+		"campaign-idle": {EventCampaignIdle},
 	}
-	for _, tc := range cases {
-		for _, ev := range tc.in {
-			if !matches(tc.intent, ev) {
-				t.Errorf("intent %q should admit %s", tc.intent, ev)
+	for intent, want := range cases {
+		var got []EventName
+		for _, ev := range serverEventTypes {
+			if serverIntentMatch(intent, ev) {
+				got = append(got, ev)
 			}
 		}
-		for _, ev := range tc.out {
-			if matches(tc.intent, ev) {
-				t.Errorf("intent %q should not admit %s", tc.intent, ev)
-			}
+		if !slices.Equal(got, want) {
+			t.Errorf("intent %q admits %v, want exactly %v", intent, got, want)
 		}
 	}
 }
@@ -710,6 +848,10 @@ type phxServer struct {
 	joinCounts map[string]int
 	joinBodies map[string]string
 	live       []net.Conn
+	// lastHeader and lastTarget are the most recent handshake's request
+	// headers and request URI.
+	lastHeader http.Header
+	lastTarget string
 }
 
 func newPhxServer(t *testing.T) *phxServer {
@@ -767,6 +909,7 @@ func (s *phxServer) serve(conn net.Conn) {
 	}
 	s.mu.Lock()
 	s.shakes++
+	s.lastHeader, s.lastTarget = req.Header.Clone(), req.RequestURI
 	status := s.upgradeStatus
 	s.mu.Unlock()
 

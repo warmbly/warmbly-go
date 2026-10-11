@@ -14,8 +14,10 @@ import (
 // against that member's permissions, and anything that sends mail or spends
 // money pauses for an explicit approval. Runs spend AI credits.
 //
-// These routes are session-only — no API key can drive the assistant — and need
-// the use-AI permission.
+// These routes are session-only (no API key can drive the assistant). The
+// conversation routes need the use-AI organization permission
+// ([OrgPermUseAI]); the tool-policy and MCP-connection routes need
+// manage-settings ([OrgPermManageSettings]).
 type AssistantService service
 
 // AgentSession is one assistant conversation.
@@ -59,6 +61,27 @@ type PendingTool struct {
 	// human-readable rendering of it.
 	Args        json.RawMessage `json:"args"`
 	ArgsSummary string          `json:"args_summary,omitempty"`
+	// Arguments is Args as indented JSON with sorted keys, for an approval
+	// card, capped at 16 KiB; ArgumentsTruncated reports that the cap cut it.
+	Arguments          string `json:"arguments,omitempty"`
+	ArgumentsTruncated bool   `json:"arguments_truncated,omitempty"`
+	// Preview is what a send would do, when the paused call sends mail.
+	Preview *AgentSendPreview `json:"preview,omitempty"`
+	// AlwaysAllowOffered reports whether the viewer may answer with
+	// [ApprovalAlwaysAllow] and have it stick as a workspace policy. It is
+	// false for send-class tools, tools that always ask, and members without
+	// manage-settings.
+	AlwaysAllowOffered bool `json:"always_allow_offered,omitempty"`
+}
+
+// AgentSendPreview is the resolved shape of a send awaiting approval: who it is
+// from, who it goes to, and what it says.
+type AgentSendPreview struct {
+	From     string   `json:"from"`
+	To       []string `json:"to"`
+	Subject  string   `json:"subject"`
+	Body     string   `json:"body"`
+	BodyHTML string   `json:"body_html,omitempty"`
 }
 
 // AgentTranscript is a session rehydrated for display.
@@ -112,6 +135,10 @@ const (
 	// AgentEventApprovalRequired pauses the run until
 	// [AssistantService.Approve] answers.
 	AgentEventApprovalRequired = "approval_required"
+	// AgentEventToolSecret carries values a tool produced for the member's
+	// eyes only, in [AgentEvent.Secrets]. They are shown once and never
+	// stored in the transcript.
+	AgentEventToolSecret = "tool_secret"
 	// AgentEventError ends the run with a failure.
 	AgentEventError = "error"
 	// AgentEventDone ends the run normally.
@@ -124,8 +151,10 @@ const (
 	ApprovalApprove = "approve"
 	// ApprovalDeny abandons it and lets the assistant continue without it.
 	ApprovalDeny = "deny"
-	// ApprovalAlwaysAllow runs it and stops asking for that tool in this
-	// session.
+	// ApprovalAlwaysAllow runs it and, when [PendingTool.AlwaysAllowOffered]
+	// is true, stops asking for that tool across the whole workspace. Where it
+	// is not offered it behaves like [ApprovalApprove]. Revoke the policy with
+	// [AssistantService.RevokeToolPolicy].
 	ApprovalAlwaysAllow = "always_allow"
 )
 
@@ -161,6 +190,17 @@ type AgentEvent struct {
 	EntityType string `json:"entity_type,omitempty"`
 	EntityID   string `json:"entity_id,omitempty"`
 	OpenURL    string `json:"open_url,omitempty"`
+
+	// Arguments, ArgumentsTruncated, Preview and AlwaysAllowOffered fill the
+	// approval card on [AgentEventApprovalRequired]; see [PendingTool].
+	Arguments          string            `json:"arguments,omitempty"`
+	ArgumentsTruncated bool              `json:"arguments_truncated,omitempty"`
+	Preview            *AgentSendPreview `json:"preview,omitempty"`
+	AlwaysAllowOffered bool              `json:"always_allow_offered,omitempty"`
+
+	// Secrets are set on [AgentEventToolSecret]: values shown once to the
+	// member and never to the model or the transcript.
+	Secrets map[string]string `json:"secrets,omitempty"`
 }
 
 // MessageParams sends a message to the assistant.
@@ -228,11 +268,17 @@ func (s *AssistantService) SendMessage(ctx context.Context, sessionID string, pa
 }
 
 // Approve answers a paused approval and streams the rest of the run. The
-// decision is [ApprovalApprove], [ApprovalDeny] or [ApprovalAlwaysAllow].
-func (s *AssistantService) Approve(ctx context.Context, sessionID, decision string, fn func(*AgentEvent) bool, opts ...RequestOption) (*Response, error) {
+// decision is [ApprovalApprove], [ApprovalDeny] or [ApprovalAlwaysAllow], and
+// toolCallID names the call it answers ([PendingTool.ToolCallID], or
+// [AgentEvent.ToolCallID] on the approval event); it is required, so a stale
+// decision cannot land on a different call. A call the session is no longer
+// waiting on fails with 409, code "approval_not_pending". It needs
+// [OrgPermUseAI].
+func (s *AssistantService) Approve(ctx context.Context, sessionID, toolCallID, decision string, fn func(*AgentEvent) bool, opts ...RequestOption) (*Response, error) {
 	body := struct {
-		Decision string `json:"decision"`
-	}{Decision: decision}
+		Decision   string `json:"decision"`
+		ToolCallID string `json:"tool_call_id"`
+	}{Decision: decision, ToolCallID: toolCallID}
 	return s.streamRun(ctx, "ai/sessions/"+url.PathEscape(sessionID)+"/approve", body, fn, opts)
 }
 
@@ -248,6 +294,35 @@ func (s *AssistantService) streamRun(ctx context.Context, path string, body any,
 		}
 		return fn(ev)
 	}, opts...)
+}
+
+// --- workspace tool policies ---
+
+// AIToolPolicy is a workspace "always allow" decision: the assistant runs this
+// tool without pausing for approval. Only write-class tools can carry one;
+// send-class tools always ask.
+type AIToolPolicy struct {
+	OrgID    string `json:"org_id"`
+	ToolName string `json:"tool_name"`
+	// Decision is "always_allow".
+	Decision  string  `json:"decision"`
+	CreatedBy *string `json:"created_by,omitempty"`
+	// CreatedByName is the display name of the member who set it.
+	CreatedByName string    `json:"created_by_name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ToolPolicies returns the tools the assistant runs without asking in this
+// workspace. A stored policy for a tool that may no longer be auto-allowed is
+// left out. It needs [OrgPermManageSettings].
+func (s *AssistantService) ToolPolicies(ctx context.Context, opts ...RequestOption) ([]AIToolPolicy, *Response, error) {
+	return fetchData[AIToolPolicy](ctx, s.client, "ai/tool-policies", opts)
+}
+
+// RevokeToolPolicy makes the assistant ask again before running toolName. A
+// tool with no policy answers 404. It needs [OrgPermManageSettings].
+func (s *AssistantService) RevokeToolPolicy(ctx context.Context, toolName string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "ai/tool-policies/"+url.PathEscape(toolName), opts...)
 }
 
 // --- connected MCP servers ---

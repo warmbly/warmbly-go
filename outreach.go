@@ -91,8 +91,8 @@ type ReplyIntentSettings struct {
 	AutoCreateCRMTask   bool     `json:"auto_create_crm_task"`
 	// CRMTaskIntents narrows AutoCreateCRMTask to the reply intents worth a
 	// follow-up task: any of the ReplyIntent* constants. A nil list means the
-	// server default (every human intent, no automated one); an explicit empty
-	// list means none, the same as turning the switch off. An entry that is not
+	// server default (positive, question, neutral and negative); an explicit
+	// empty list means none, the same as turning the switch off. An entry that is not
 	// a reply intent fails with code "invalid_setting".
 	CRMTaskIntents          []string `json:"crm_task_intents"`
 	AutoPauseOnNegative     bool     `json:"auto_pause_on_negative"`
@@ -169,8 +169,12 @@ const (
 
 // InboxTagQuestion is one workspace-defined tagging question. The server mints
 // ID when it is empty; a question needs text (300 characters at most), a label
-// of up to 40 characters, and for a choice question 2 to 8 options.
+// of up to 40 characters, and for a choice question 2 to 8 options. Labels use
+// letters, digits and single spaces or hyphens, and must be unique across
+// every question and option.
 type InboxTagQuestion struct {
+	// ID keys the answer in stored verdicts: lower-case letters and digits,
+	// at most 16.
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Question string `json:"question"`
@@ -183,7 +187,8 @@ type InboxTagQuestion struct {
 	Automated bool `json:"automated,omitempty"`
 }
 
-// InboxTagChoice is one option of a choice question.
+// InboxTagChoice is one option of a choice question. Description, required
+// and at most 200 characters, tells the classifier when to pick it.
 type InboxTagChoice struct {
 	Label       string         `json:"label"`
 	Description string         `json:"description"`
@@ -265,8 +270,9 @@ func (s *OutreachService) Get(ctx context.Context, opts ...RequestOption) (*Outr
 
 // Update replaces the organization's advanced outreach settings wholesale, so
 // start from [OutreachService.Get] rather than a zero value. Out-of-range
-// values are clamped rather than refused. The API answers 204 with no body;
-// read the stored result back with Get.
+// numbers are clamped rather than refused, but an unknown reply intent,
+// tagging language or malformed tagging question is a 400. The API answers
+// 204 with no body; read the stored result back with Get.
 func (s *OutreachService) Update(ctx context.Context, settings *OutreachSettings, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		Settings *OutreachSettings `json:"settings"`

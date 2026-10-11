@@ -5,12 +5,15 @@ grouped by release and version numbers use semantic versioning.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-10-04
+## [0.4.0] - 2026-10-11
 
-Syncs the SDK with the v1 API as of server commit 2032b0492: inbox placement, contact imports, lead copies, new realtime events and error codes. One breaking change, `AuthService.ChangePassword`.
+Syncs the SDK with the v1 API as of server commit 176d3c24: inbox placement, contact imports, lead copies, CRM provider mode, native Salesforce, member resource scoping, OAuth app listings, new realtime events and error codes. Breaking changes: `AuthService.ChangePassword`, `AssistantService.Approve`, `PoolLinkStartParams.RemoteOrganizationID` and the gateway's credential handling.
 
 ### Changed
 
+- **Breaking:** `AssistantService.Approve` takes the `toolCallID` of the paused call; the server requires it and answers 409 `approval_not_pending` otherwise.
+- **Breaking:** `PoolLinkStartParams.RemoteOrganizationID` is now sent and required by the server (`pool_link_workspace_required` without it).
+- **Breaking:** the gateway client sends API keys and OAuth tokens in the `X-Warmbly-Token` handshake header (`gateway.CredentialHeader`), never in the URL; only a connection ticket travels in `?token=`. A proxy that read the token from the URL must forward the header.
 - **Breaking:** `AuthService.ChangePassword` now returns `(*Session, *Response, error)`. The server ends every session, the caller's included, and answers with a fresh token pair, so store it.
 - `Campaign.Kind`, `CampaignCreateParams.Kind`, `CampaignListParams.Kind`, `CampaignsOverview.OneTime` and the `CampaignKind*` constants are Deprecated. One-time campaigns no longer exist on the server; the field is never sent and the filter has no effect.
 - `WarmupDomainPlacement.Domain` is Deprecated in favour of `Label`; `WarmupHealth.SpamScore` is Deprecated (always 0).
@@ -30,8 +33,22 @@ Syncs the SDK with the v1 API as of server commit 2032b0492: inbox placement, co
 - About 110 `ErrCode*` constants (including `ErrCodeTwoFAInvalidCode`, `ErrCodeInvalidSyncFolder`, placement, lead copy, reauth, mailbox import and sending domain codes), new audit entity types, notification categories, `MailHost*`, `MailAuth*` and `WarmupPlacement*` constants.
 - New fields across `Contact`, `Email`, `Unibox*`, `Organization`, `Subscription`, `Form`, outreach `InboxTagging` and reply-intent settings, and analytics types.
 
+- CRM provider mode for HubSpot and Pipedrive on `CRM`: settings, metadata, owners, sync health and retries, backfill, linked contact records, list import, with `External` refs on `Pipeline`, `Deal`, `CRMTask` and `ContactNote`, and the `ErrCodeCRM*` codes.
+- `client.Salesforce`: overview, settings, metadata, users, list views, campaigns, import preview and sources, activity log and retry, `SyncNow`, and the contact panel (`ContactPanel`, `SyncContact`, `UnlinkContact`).
+- `Integrations.CommunityApps`, `CommunityApp`, `StartOAuthWithParams` (Salesforce sandbox and My Domain).
+- Member resource scoping: `Organization.MemberAccess`, `SetMemberAccess`, `SuggestedSenders`, `Member.Access`, `InviteMemberParams.Access`; `PermAppGrantable`, `APIPermissionsForMember`.
+- OAuth apps: `SetLogo`, `DeleteLogo`, `Listing`, `PublishListing`, `UnpublishListing`, `WorkspaceAuthorizations`, `RevokeWorkspaceAuthorization`, `DeveloperAccess`, `OAuthApp.SuspendedAt`, `OAuthAppDisabled` (`OAuthAppInactive` is deprecated; the server never sends it), and `Scope*` constants with `ScopesForPermissions` / `PermissionsForScopes`.
+- `Assistant.ToolPolicies`, `RevokeToolPolicy`, approval-card fields on `PendingTool` and `AgentEvent`, and the `tool_secret` event.
+- Auth: remembered devices (`DeviceToken`, `RememberDevice`), `LoginParams.Acquisition`, `CLIAuthRequestIn`, `CompleteProductTour`, `User.ProductTourCompletedAt`.
+- Pool link and cloud link: `PoolLink.Offer`, `Checkout`, `CloudLink.SetParticipation`, `DisconnectLegacy` and the per-workspace fields; mailbox test participation and shared caps on `Email`.
+- gateway: `EventChannelClosed`, `EventCRMSynced` with `IntentCRM`, `BaseEvent.AuthorizationOrgID`, `ProxyPath`, `GatewayTicket.ProxyPath`, `Landed*` constants; webhook payloads `WarmupHealthPayload` and `WarmupPlacementInSpamPayload`; member-access, API-key and re-authentication error codes; audit entity types for AI tool policies, app listings and OAuth authorizations.
+- `Campaigns.CreateStepWithParams`, `LeadSync.SourcesForSegment`, `PermissionCatalog.Grantable`, `Organization.Category`, `FormsConfig.TriageAvailable`.
+
 ### Fixed
 
+- `CRM.ListPipelines` decodes the bare array the server returns.
+- `OAuthApps.UploadLogo` sent the image in a form field the server never reads; the OAuth examples requested scope strings the server rejects.
+- `SegmentMaxMemberBatch` is 10000, matching the server.
 - Reading then updating outreach settings no longer drops inbox tagging, and notification preferences keep the new placement and inbox categories.
 - Docs for `MachineClicks`, `WarmupSummary.TargetProgress` and `ContactSearchParams.Reverse` matched the server wrongly.
 

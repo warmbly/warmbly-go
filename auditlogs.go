@@ -132,6 +132,9 @@ const (
 	AuditEntityAISkill        = "ai_skill"
 	AuditEntityMCPServer      = "mcp_server"
 	AuditEntityAdvisorFinding = "advisor_finding"
+	// AuditEntityAIToolPolicy is the workspace's "always allow" policy for one
+	// assistant tool, set or revoked.
+	AuditEntityAIToolPolicy = "ai_tool_policy"
 
 	// Billing.
 	AuditEntitySubscription   = "subscription"
@@ -149,6 +152,12 @@ const (
 	// ([AuditEntityPoolLink]) and the instance side ([AuditEntityCloudLink]).
 	AuditEntityPoolLink  = "pool_link"
 	AuditEntityCloudLink = "cloud_link"
+
+	// OAuth apps: the community directory listing of one of the workspace's
+	// apps, and a member's authorization of an app, revoked by a workspace
+	// admin.
+	AuditEntityAppListing         = "app_listing"
+	AuditEntityOAuthAuthorization = "oauth_authorization"
 )
 
 // AuditActor is the member who performed an audited action.

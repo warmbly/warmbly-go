@@ -689,6 +689,8 @@ type ContactNote struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 	// User is the note's author, joined in on read.
 	User *User `json:"user,omitempty"`
+	// External is set when the note lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // Contact activity types returned in [ContactActivity.ActivityType].
@@ -729,8 +731,8 @@ type ContactActivity struct {
 }
 
 // ContactVerificationCounts is how many of the organization's contacts carry
-// each verification status. Pending is the subset of Unknown nobody has
-// checked yet.
+// each verification status. Pending counts contacts never checked plus those
+// with a re-check queued.
 type ContactVerificationCounts struct {
 	Valid   int `json:"valid"`
 	Risky   int `json:"risky"`
@@ -1106,8 +1108,9 @@ type ContactVerificationOverview struct {
 
 // How firm a [ContactNextAction]'s timing is, in [ContactNextAction.State].
 const (
-	// NextActionDue carries ScheduledAt, the slot the scheduler would give the
-	// step on its next pass. Leads ahead in the queue can still push it later.
+	// NextActionDue carries ScheduledAt, when the campaign next wakes up and
+	// works its queue. It is a stored wakeup, so it reads the same on every
+	// refresh; leads ahead in the queue can still push the send later.
 	NextActionDue = "due"
 	// NextActionWaiting carries NotBefore and a Constraint.
 	NextActionWaiting = "waiting"
@@ -1538,6 +1541,8 @@ func (s *ContactService) Create(ctx context.Context, contacts []ContactInput, op
 // (see [ContactSelection]), and never creates contacts, so it never raises
 // contact.created. A bulk write raises contact.updated once for the whole call,
 // with no entity id.
+//
+// Requires the manage-contacts permission ([PermBulkContacts] for an API key).
 func (s *ContactService) BulkUpdate(ctx context.Context, params *ContactBulkUpdateParams, opts ...RequestOption) ([]Contact, *Response, error) {
 	return sendSlice[Contact](ctx, s.client.patch, "contacts", params, opts)
 }
@@ -1545,6 +1550,8 @@ func (s *ContactService) BulkUpdate(ctx context.Context, params *ContactBulkUpda
 // BulkDelete permanently removes the given contacts, at most
 // [MaxContactBatchIDs] per request. To delete everything a search matches, use
 // [ContactService.BulkDeleteSelection].
+//
+// Requires the manage-contacts permission ([PermBulkContacts] for an API key).
 func (s *ContactService) BulkDelete(ctx context.Context, ids []string, opts ...RequestOption) (*Response, error) {
 	return s.client.deleteBody(ctx, "contacts", ids, opts...)
 }
@@ -1553,6 +1560,8 @@ func (s *ContactService) BulkDelete(ctx context.Context, ids []string, opts ...R
 // names, by id or by search. A filter selection that matches more than
 // [MaxContactBulkSelection] contacts fails with code "selection_too_large" and
 // removes nothing.
+//
+// Requires the manage-contacts permission ([PermBulkContacts] for an API key).
 func (s *ContactService) BulkDeleteSelection(ctx context.Context, sel *ContactSelection, opts ...RequestOption) (*Response, error) {
 	return s.client.deleteBody(ctx, "contacts", sel, opts...)
 }

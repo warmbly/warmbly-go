@@ -17,8 +17,28 @@ type OAuthAppService service
 
 // OAuth application states returned in [OAuthApp.Status].
 const (
-	OAuthAppActive   = "active"
+	OAuthAppActive = "active"
+	// OAuthAppDisabled is an application its owner switched off. It cannot
+	// authorize, issue or accept tokens.
+	OAuthAppDisabled = "disabled"
+
+	// Deprecated: the API never reports "inactive"; a switched-off
+	// application is [OAuthAppDisabled].
 	OAuthAppInactive = "inactive"
+)
+
+// Error codes carried in [Error.Code] by OAuth application management.
+const (
+	// ErrCodeDeveloperAccessBlocked is the 403 when the instance's operators
+	// have blocked the workspace or person from registering or publishing
+	// apps. See [OAuthAppService.DeveloperAccess].
+	ErrCodeDeveloperAccessBlocked = "developer_access_blocked"
+	// ErrCodeAppSuspended is the 409 for a change to an application an
+	// operator suspended. The owner cannot lift a suspension.
+	ErrCodeAppSuspended = "app_suspended"
+	// ErrCodeInvalidLogo is the 400 for a logo URL that was not uploaded
+	// through [OAuthAppService.UploadLogo] or [OAuthAppService.SetLogo].
+	ErrCodeInvalidLogo = "invalid_logo"
 )
 
 // OAuthApp is a registered OAuth 2.1 application. The client secret is never
@@ -53,8 +73,14 @@ type OAuthApp struct {
 	// event the grant's scopes allow.
 	WebhookEvents []string `json:"webhook_events,omitempty"`
 
-	// Status is [OAuthAppActive] or [OAuthAppInactive].
+	// Status is [OAuthAppActive] or [OAuthAppDisabled].
 	Status string `json:"status"`
+	// SuspendedAt is set while the instance's operators have suspended the
+	// app, with SuspendedReason saying why. The owner cannot lift it. A
+	// suspended app cannot authorize, issue or accept tokens, and edits and
+	// logo uploads answer 409 app_suspended.
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason string     `json:"suspended_reason,omitempty"`
 	// IsPublic marks a client that authenticates with PKCE and no secret, such
 	// as a native app or an MCP client. PKCE is mandatory for these.
 	IsPublic bool `json:"is_public"`
@@ -78,8 +104,12 @@ type OAuthAppWithSecret struct {
 // the application from what you send rather than merging, so send the complete
 // desired state on update.
 type OAuthAppParams struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// LogoURL must be a URL returned by [OAuthAppService.UploadLogo] (or the
+	// application's current logo); any other image address is refused with
+	// [ErrCodeInvalidLogo]. To change the logo of an existing application,
+	// [OAuthAppService.SetLogo] is simpler.
 	LogoURL      string   `json:"logo_url,omitempty"`
 	WebsiteURL   string   `json:"website_url,omitempty"`
 	RedirectURIs []string `json:"redirect_uris"`
@@ -112,9 +142,21 @@ type ConsentInfo struct {
 	LogoURL     string `json:"logo_url"`
 	WebsiteURL  string `json:"website_url"`
 	RedirectURI string `json:"redirect_uri"`
-	// Scopes are the human-readable scope names being requested.
+	// Scopes are the human-readable names of what approving grants: the
+	// request narrowed to what the approving member's role covers.
 	Scopes []string `json:"scopes"`
-	State  string   `json:"state"`
+	// WithheldScopes were requested but fall outside the member's role, so
+	// approving does not grant them.
+	WithheldScopes []string `json:"withheld_scopes"`
+	State          string   `json:"state"`
+	// OrganizationName is the workspace that receives the grant.
+	OrganizationName string `json:"organization_name"`
+	// Verified marks a registered application the instance's operators
+	// feature in the app directory.
+	Verified bool `json:"verified"`
+	// SelfRegistered marks a client that registered itself (RFC 7591), so
+	// nobody vouches for its name.
+	SelfRegistered bool `json:"self_registered"`
 }
 
 // AuthorizeParams approves a consent request and mints an authorization code.
@@ -168,7 +210,9 @@ func (s *OAuthAppService) Delete(ctx context.Context, id string, opts ...Request
 }
 
 // RotateSecret issues a new client secret and returns it. The previous secret
-// stops working immediately, so deploy the new one before rotating.
+// stops working immediately, so deploy the new one before rotating. A session
+// caller must have confirmed recently with [AuthService.Reauth], or the call
+// fails with [ErrCodeReauthRequired]; an API key is not asked.
 func (s *OAuthAppService) RotateSecret(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		ClientSecret string `json:"client_secret"`
@@ -180,14 +224,18 @@ func (s *OAuthAppService) RotateSecret(ctx context.Context, id string, opts ...R
 	return out.ClientSecret, resp, nil
 }
 
-// UploadLogo stores an app logo (PNG or JPEG, up to 2 MB) and returns its URL,
-// which you then pass in [OAuthAppParams.LogoURL]. It is a separate call so a
-// logo can be uploaded during registration, before the app has an id.
+// UploadLogo stores an app logo (PNG or JPEG, up to 2 MB and at least 32
+// pixels on each side) and returns its URL, which you then pass in
+// [OAuthAppParams.LogoURL]. It is a separate call so a logo can be uploaded
+// during registration, before the app has an id; for an existing application
+// use [OAuthAppService.SetLogo]. The image is re-encoded on the server.
+//
+// Requires the [PermAPIKeys] API permission; an OAuth access token is refused.
 func (s *OAuthAppService) UploadLogo(ctx context.Context, file *FileUpload, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		LogoURL string `json:"logo_url"`
 	}
-	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "logo", file, nil, &out, opts...)
+	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "file", file, nil, &out, opts...)
 	if err != nil {
 		return "", resp, err
 	}
@@ -196,7 +244,8 @@ func (s *OAuthAppService) UploadLogo(ctx context.Context, file *FileUpload, opts
 
 // WebhookSecret returns the signing secret for the app-level webhook
 // subscription. Verify deliveries with it exactly as for an ordinary endpoint;
-// see [VerifyWebhookSignature].
+// see [VerifyWebhookSignature]. Like [OAuthAppService.RotateSecret] it needs a
+// recent [AuthService.Reauth] from a session caller.
 func (s *OAuthAppService) WebhookSecret(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		WebhookSecret string `json:"webhook_secret"`
@@ -209,7 +258,8 @@ func (s *OAuthAppService) WebhookSecret(ctx context.Context, id string, opts ...
 }
 
 // RotateWebhookSecret issues a new app-webhook signing secret and returns it.
-// The previous secret stops verifying immediately.
+// The previous secret stops verifying immediately. A session caller needs a
+// recent [AuthService.Reauth].
 func (s *OAuthAppService) RotateWebhookSecret(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		WebhookSecret string `json:"webhook_secret"`
@@ -252,7 +302,12 @@ func (s *OAuthAppService) AuthorizeDetails(ctx context.Context, query url.Values
 }
 
 // Authorize approves a consent request and returns the URL the browser should
-// be sent to, carrying the authorization code back to the application.
+// be sent to, carrying the authorization code back to the application. The
+// code carries only the scopes the approving member's role covers (see
+// [ConsentInfo.WithheldScopes]); a member whose role covers none of them is
+// refused with an "access_denied" OAuth error. The session must have confirmed
+// recently with [AuthService.Reauth], since approving hands a third party a
+// standing credential.
 func (s *OAuthAppService) Authorize(ctx context.Context, params *AuthorizeParams, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		RedirectURL string `json:"redirect_url"`
@@ -298,7 +353,9 @@ type DynamicClientParams struct {
 	// authenticates with PKCE and holds no secret.
 	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method,omitempty"`
 	// Scope is the space-delimited set being asked for.
-	Scope     string `json:"scope,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// ClientURI and LogoURI are sent but ignored: nobody vouches for a
+	// self-registered client's website or logo, so the server stores neither.
 	ClientURI string `json:"client_uri,omitempty"`
 	LogoURI   string `json:"logo_uri,omitempty"`
 }

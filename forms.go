@@ -230,7 +230,8 @@ type Form struct {
 	// effect when [FormsConfig.CaptchaAvailable] is true for the instance.
 	CaptchaEnabled bool `json:"captcha_enabled"`
 	// TriageEnabled classifies each submission (see [FormSubmission.Triage]);
-	// junk is kept but creates no contact and joins no campaign.
+	// junk is kept but creates no contact and joins no campaign. It only takes
+	// effect when [FormsConfig.TriageAvailable] is true for the instance.
 	TriageEnabled bool `json:"triage_enabled"`
 
 	// LogoURL, CoverURL and BackgroundURL are the public object URLs of the
@@ -435,6 +436,9 @@ type FormsConfig struct {
 	// CaptchaAvailable reports whether the operator configured a captcha
 	// provider, which [Form.CaptchaEnabled] needs to take effect.
 	CaptchaAvailable bool `json:"captcha_available"`
+	// TriageAvailable reports whether the instance can classify submissions,
+	// which [Form.TriageEnabled] needs to take effect.
+	TriageAvailable bool `json:"triage_available"`
 }
 
 // FormSubmission is one public submit, kept verbatim.

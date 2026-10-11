@@ -62,6 +62,21 @@ const (
 	SignatureSourceProvider = "provider"
 )
 
+// Test-traffic participation modes returned in [Email.TestMode].
+const (
+	// TestParticipationLegacy is the original behavior: the mailbox sends and
+	// receives test traffic and the platform acts on what it receives
+	// (marking read, rescuing from spam). A mailbox that never chose reports
+	// it, but it cannot be set again once left.
+	TestParticipationLegacy = "legacy"
+	// TestParticipationDiagnostic takes part only in the directions
+	// [Email.TestSendEnabled] and [Email.TestReceiveEnabled] allow, with no
+	// synthetic engagement.
+	TestParticipationDiagnostic = "diagnostic"
+	// TestParticipationOff takes no part in test traffic.
+	TestParticipationOff = "off"
+)
+
 // Sending-domain authentication states returned in [Email.AuthState].
 const (
 	// AuthStateUnknown means the domain has not been checked yet, the DNS
@@ -146,6 +161,25 @@ type Email struct {
 	// daily limit, the warmup ramp, sending behavior and the workspace's daily
 	// send limit all still apply and the smallest wins.
 	CampaignLimit int `json:"campaign_limit"`
+
+	// TestMode is how the mailbox takes part in diagnostic test traffic:
+	// [TestParticipationLegacy], [TestParticipationDiagnostic] or
+	// [TestParticipationOff]. Nil means legacy, which is every mailbox that
+	// never chose.
+	TestMode *string `json:"test_mode"`
+	// TestSendEnabled and TestReceiveEnabled choose the directions a
+	// diagnostic mailbox takes part in. They only matter in
+	// [TestParticipationDiagnostic].
+	TestSendEnabled    bool `json:"test_send_enabled"`
+	TestReceiveEnabled bool `json:"test_receive_enabled"`
+	// SharedDailyLimit caps every send the mailbox makes in one local day,
+	// campaign, one-off, warmup and placement alike. Nil uses CampaignLimit
+	// plus WarmupMax.
+	SharedDailyLimit *int `json:"shared_daily_limit"`
+	// RollingRecipientLimit caps the recipients the mailbox addresses over the
+	// last 24 hours. Nil uses CampaignLimit plus WarmupMax.
+	RollingRecipientLimit *int `json:"rolling_recipient_limit"`
+
 	// MinWaitTime is the minimum gap, in seconds, between two sends (default
 	// 600). Jitter is added on top. While sending behavior is enabled the
 	// behavior's gap range replaces it.
@@ -346,6 +380,24 @@ type EmailUpdateParams struct {
 	// CampaignLimit is the daily cold-campaign cap, 0 to 5000. 30 to 50 a day
 	// is the safe band; a fresh mailbox should start at 10 to 20 and ramp.
 	CampaignLimit *int `json:"campaign_limit,omitempty"`
+
+	// TestMode is [TestParticipationDiagnostic] or [TestParticipationOff];
+	// [TestParticipationLegacy] cannot be set. Setting TestSendEnabled or
+	// TestReceiveEnabled without TestMode switches the mailbox to diagnostic,
+	// and turning Warmup on or off without TestMode switches it to diagnostic
+	// in both directions or to off.
+	TestMode           *string `json:"test_mode,omitempty"`
+	TestSendEnabled    *bool   `json:"test_send_enabled,omitempty"`
+	TestReceiveEnabled *bool   `json:"test_receive_enabled,omitempty"`
+	// SharedDailyLimit and RollingRecipientLimit set the caps described on
+	// [Email]. Zero clears a cap back to the default; negative is refused.
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
+	// SendRecoveryResolution releases a mailbox the platform held back from
+	// sending after a send it could not account for. See
+	// [SendRecoveryResolution].
+	SendRecoveryResolution *SendRecoveryResolution `json:"send_recovery_resolution,omitempty"`
+
 	// MinWaitTime is the minimum gap between sends, in seconds.
 	MinWaitTime *int    `json:"min_wait_time,omitempty"`
 	ReplyTo     *string `json:"reply_to,omitempty"`
@@ -387,6 +439,57 @@ type EmailUpdateParams struct {
 
 	// Tags replaces the mailbox's tag ids wholesale when non-nil.
 	Tags []string `json:"tags,omitempty"`
+}
+
+// Held-send reasons named in [SendRecoveryResolution.HeldReason].
+const (
+	SendHeldAuthentication = "authentication"
+	SendHeldPermanent      = "permanent"
+	SendHeldConflict       = "conflict"
+	// SendHeldUnknown is a send whose outcome the worker could not report.
+	SendHeldUnknown = "unknown"
+)
+
+// Evidence types accepted in [SendRecoveryResolution.EvidenceType].
+const (
+	// SendEvidenceAuthenticationRepaired releases an authentication hold
+	// because a later send (EvidenceTaskID) went through.
+	SendEvidenceAuthenticationRepaired = "authentication_repaired"
+	// SendEvidenceProviderConfirmation releases an authentication, permanent
+	// or conflict hold on the operator's word that the provider was checked;
+	// it needs EvidenceTaskID and a ConfirmationReference.
+	SendEvidenceProviderConfirmation = "operator_provider_confirmation"
+	// SendEvidenceConfirmedSent settles an unknown send as delivered; it
+	// needs MessageID and a ConfirmationReference.
+	SendEvidenceConfirmedSent = "operator_confirmed_sent"
+	// SendEvidenceConfirmedNotSent settles an unknown send as never sent, so
+	// it is retried; it needs a ConfirmationReference, and MessageID,
+	// ProviderMsgID and ThreadID must be empty.
+	SendEvidenceConfirmedNotSent = "operator_confirmed_not_sent"
+)
+
+// SendRecoveryResolution is the evidence that lifts a send-recovery hold on a
+// mailbox. HeldTaskID and HeldReason must match the hold exactly, so a stale
+// resolution is refused rather than releasing a newer hold. Anything that does
+// not check out is refused with a 400.
+type SendRecoveryResolution struct {
+	// HeldTaskID is the task the mailbox is held on.
+	HeldTaskID string `json:"held_task_id"`
+	// HeldReason is one of the SendHeld* constants.
+	HeldReason string `json:"held_reason"`
+	// EvidenceType is one of the SendEvidence* constants.
+	EvidenceType string `json:"evidence_type"`
+	// EvidenceTaskID is the later task that proves the repair. It must be
+	// unset for an unknown send.
+	EvidenceTaskID *string `json:"evidence_task_id,omitempty"`
+	// ConfirmationReference is the operator's reference for the provider
+	// check, at most 256 characters on one line.
+	ConfirmationReference string `json:"confirmation_reference,omitempty"`
+	// MessageID, ProviderMsgID and ThreadID identify the delivered message
+	// when an unknown send is confirmed sent.
+	MessageID     string `json:"message_id,omitempty"`
+	ProviderMsgID string `json:"provider_msg_id,omitempty"`
+	ThreadID      string `json:"thread_id,omitempty"`
 }
 
 // EmailListParams filters and paginates a list of connected mailboxes. The
@@ -811,8 +914,21 @@ type MailboxSyncFolderCursor struct {
 type MailboxSyncCursor struct {
 	// PageToken is Gmail's messages.list continuation.
 	PageToken string `json:"page_token,omitempty"`
-	// Folders is the per-folder position for IMAP and Microsoft Graph.
+	// Folders is the per-folder position for IMAP and Microsoft Graph, keyed
+	// by folder name.
 	Folders map[string]MailboxSyncFolderCursor `json:"folders,omitempty"`
+	// GoogleRecovery is set while a Gmail history gap is being reconciled.
+	GoogleRecovery *MailboxSyncGoogleRecovery `json:"google_recovery,omitempty"`
+}
+
+// MailboxSyncGoogleRecovery is the baseline a Gmail mailbox holds while it
+// reconciles a history gap. Opaque operational detail, for diagnostics.
+type MailboxSyncGoogleRecovery struct {
+	HistoryID    uint64    `json:"history_id"`
+	Since        time.Time `json:"since"`
+	PageToken    string    `json:"page_token,omitempty"`
+	MessagesDone bool      `json:"messages_done"`
+	StoredAfter  string    `json:"stored_after,omitempty"`
 }
 
 // MailboxSyncState is what the platform knows about a mailbox's sync: backfill
@@ -914,7 +1030,7 @@ type SendingBehavior struct {
 	Enabled bool `json:"enabled"`
 
 	// DailyLimitMin and DailyLimitMax bound the day's cold-send target
-	// (defaults 30 to 45; 1 to 500).
+	// (defaults 28 to 32; 1 to 500).
 	DailyLimitMin int `json:"daily_limit_min"`
 	DailyLimitMax int `json:"daily_limit_max"`
 

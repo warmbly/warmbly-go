@@ -54,8 +54,8 @@ type Plan struct {
 	AccountLimit uint `json:"account_limit"`
 
 	Price float32 `json:"price"`
-	// PriceYearly is what the yearly Stripe price charges. Nil means the plan
-	// is monthly only.
+	// PriceYearly is what the yearly price charges. Nil means the plan is
+	// monthly only and must not be offered yearly.
 	PriceYearly     *float32 `json:"price_yearly,omitempty"`
 	DiscountedPrice float32  `json:"discounted_price"`
 	// Duration is [DurationMonth] or [DurationYear].
@@ -97,13 +97,15 @@ type Timezone struct {
 }
 
 // Identity returns who the current credential is and which workspace it acts
-// on. Any valid credential can call it, whatever its scopes.
+// on. Any valid credential can call it, whatever its scopes: it needs no API
+// permission.
 func (s *MetaService) Identity(ctx context.Context, opts ...RequestOption) (*Identity, *Response, error) {
 	return fetch[Identity](ctx, s.client, "me", opts)
 }
 
 // Plans returns the public plan catalog. On a deployment without a billing
-// provider ([AuthConfig.BillingEnabled] false) the route is absent.
+// provider ([AuthConfig.BillingEnabled] false) the route is absent. It needs
+// no API permission.
 func (s *MetaService) Plans(ctx context.Context, opts ...RequestOption) ([]Plan, *Response, error) {
 	var out struct {
 		Plans []Plan `json:"plans"`
@@ -115,7 +117,8 @@ func (s *MetaService) Plans(ctx context.Context, opts ...RequestOption) ([]Plan,
 	return out.Plans, resp, nil
 }
 
-// Timezones returns the timezones a campaign schedule or mailbox can use.
+// Timezones returns the timezones a campaign schedule or mailbox can use. It
+// needs no API permission.
 func (s *MetaService) Timezones(ctx context.Context, opts ...RequestOption) ([]Timezone, *Response, error) {
 	return fetchSlice[Timezone](ctx, s.client, "timezones", opts)
 }
@@ -143,6 +146,12 @@ type GatewayTicket struct {
 	URL string `json:"url"`
 	// ExpiresIn is the ticket's lifetime in seconds.
 	ExpiresIn float64 `json:"expires_in"`
+	// ProxyPath is the same connection through the API's own origin, relative
+	// to the versioned base URL (for example
+	// "/realtime/socket/websocket?token=..."), for a browser whose content
+	// policy only permits the API host. Empty when the deployment has no
+	// realtime endpoint configured.
+	ProxyPath string `json:"proxy_path,omitempty"`
 }
 
 // GatewayTicket mints a single-use websocket ticket for the current session.

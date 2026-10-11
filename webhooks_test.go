@@ -328,6 +328,32 @@ func TestWebhookEventInto(t *testing.T) {
 	}
 }
 
+func TestWarmupWebhookPayloadsDecode(t *testing.T) {
+	ev := &WebhookEvent{
+		EventType: EventWarmupPlacementInSpam,
+		Data:      json.RawMessage(`{"email_account_id":"a_1","email":"s@acme.com","content_source":"static","recipient_provider":"gmail","recipient_host":"google_workspace"}`),
+	}
+	var spam WarmupPlacementInSpamPayload
+	if err := ev.Into(&spam); err != nil {
+		t.Fatal(err)
+	}
+	if spam.RecipientHost != "google_workspace" || spam.EmailAccountID != "a_1" || spam.RecipientProvider != "gmail" || spam.ContentSource != "static" {
+		t.Errorf("WarmupPlacementInSpamPayload = %+v", spam)
+	}
+
+	ev = &WebhookEvent{
+		EventType: EventWarmupBlocked,
+		Data:      json.RawMessage(`{"email_account_id":"a_1","email":"s@acme.com","previous_state":"quarantined","new_state":"blocked","reason":"Repeated spam reports"}`),
+	}
+	var health WarmupHealthPayload
+	if err := ev.Into(&health); err != nil {
+		t.Fatal(err)
+	}
+	if health.PreviousState != "quarantined" || health.NewState != "blocked" || health.Reason == "" || health.Email != "s@acme.com" {
+		t.Errorf("WarmupHealthPayload = %+v", health)
+	}
+}
+
 // TestWebhookEventCatalogIsDistinct guards against a copy/paste collision in
 // the event-key constants, which would silently route one event's deliveries
 // into another's handler.

@@ -164,8 +164,9 @@ const (
 	// SegmentMaxListValues is the most entries a list condition may hold.
 	SegmentMaxListValues = 200
 	// SegmentMaxMemberBatch is the most contact IDs one SetMembers or
-	// MemberModes call accepts.
-	SegmentMaxMemberBatch = 1000
+	// MemberModes call accepts. A filter selection
+	// ([SegmentService.SetMembersSelection]) may resolve to up to 250,000.
+	SegmentMaxMemberBatch = 10000
 	// SegmentMaxOverrides caps the Overrides listing.
 	SegmentMaxOverrides = 500
 )
@@ -350,8 +351,10 @@ func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs [
 	return s.SetMembersSelection(ctx, id, &ContactSelection{Contacts: contactIDs}, mode, opts...)
 }
 
-// SetMembersSelection is [SegmentService.SetMembers] for a [ContactSelection],
-// so an override can cover everything a contact search matches.
+// SetMembersSelection is [SegmentService.SetMembers] for a [ContactSelection]:
+// listed ids, or with All set every contact matching the filters (at most
+// 250,000) minus the excluded ids. It returns how many rows changed. It needs
+// [PermWriteContacts].
 func (s *SegmentService) SetMembersSelection(ctx context.Context, id string, sel *ContactSelection, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
 	if sel == nil {
 		sel = &ContactSelection{}

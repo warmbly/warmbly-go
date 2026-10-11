@@ -51,7 +51,7 @@ func main() {
 	cc := &warmbly.ClientCredentialsConfig{
 		ClientID:     app.ClientID,
 		ClientSecret: app.ClientSecret,
-		Scopes:       []string{"analytics:read"},
+		Scopes:       []string{warmbly.ScopeReadAnalytics},
 	}
 	client, err := cc.NewClient(ctx)
 	if err != nil {

@@ -223,6 +223,10 @@ func TestErrorCodeCatalogIsWellFormed(t *testing.T) {
 		"password_breached":        "ErrCodePasswordBreached",
 		"reauth_required":          "ErrCodeReauthRequired",
 		"placement_quota_exceeded": "ErrCodePlacementQuotaExceeded",
+		"member_access_restricted": "ErrCodeMemberAccessRestricted",
+		"api_key_holder_left":      "ErrCodeAPIKeyHolderLeft",
+		"reauth_limited":           "ErrCodeReauthLimited",
+		"tracking_domain_taken":    "ErrCodeTrackingDomainTaken",
 	} {
 		if seen[code] != name {
 			t.Errorf("code %q is declared as %q, want %q", code, seen[code], name)
