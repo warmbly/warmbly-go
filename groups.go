@@ -20,6 +20,11 @@ import (
 // There is no list endpoint: the current set rides along on the caller's
 // profile, in [User.Folders], [User.Tags] and [User.Categories]. Read it with
 // [AuthService.Me].
+//
+// The sets belong to the workspace, not to whoever created a label, so every
+// call needs a workspace. Folders need [PermWriteCampaigns], tags
+// [PermWriteEmails] and categories [PermWriteContacts] (for a session:
+// manage-campaigns, manage-emails and manage-contacts).
 type GroupService struct {
 	client *Client
 	// name is the resource path segment: "folders", "tags" or "categories".

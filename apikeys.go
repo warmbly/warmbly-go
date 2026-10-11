@@ -11,6 +11,17 @@ import (
 // API keys authenticate server-to-server requests and are prefixed "wmbly_".
 // The secret is shown exactly once, at creation; afterwards only a prefix and
 // suffix are retrievable.
+//
+// Every route except [APIKeyService.RevokeSelf] needs [PermAPIKeys] for an API
+// key, or the manage-API-keys organization permission ([OrgPermManageAPIKeys])
+// for a session. An OAuth application token can read keys but never create,
+// edit or revoke one.
+//
+// A key can never be wider than the credential that creates or edits it: a
+// session is bounded by the API scopes its role could delegate
+// ([PermissionCatalog.Grantable]), and a key by its own scopes, mailbox
+// allowlist and IP allowlist. Anything wider is refused with 403, code
+// "api_key_permissions_exceed_caller".
 type APIKeyService service
 
 // API permission bits. A key's grant is the bitwise OR of the scopes it holds,
@@ -231,6 +242,13 @@ type Permission struct {
 type PermissionCatalog struct {
 	Permissions []Permission      `json:"permissions"`
 	Presets     PermissionPresets `json:"presets"`
+	// Grantable is the widest mask the caller may put on a key: an API key's
+	// own scopes, or what a session's role can delegate (every scope for the
+	// owner). A key asking for more is refused.
+	Grantable uint64 `json:"grantable"`
+	// AppScopes is every scope a third-party OAuth application may be granted.
+	// Key management ([PermAPIKeys]) stays with people.
+	AppScopes uint64 `json:"app_scopes"`
 }
 
 // PermissionPresets are the server-side preset masks.
@@ -330,31 +348,37 @@ type APIKeyUsageLog struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// List returns a page of API keys.
+// List returns a page of API keys. It needs [PermAPIKeys].
 func (s *APIKeyService) List(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[APIKey], error) {
 	q := make(url.Values)
 	params.apply(q)
 	return listJSON[APIKey](ctx, s.client, "api-keys", q, opts...)
 }
 
-// Get retrieves a single API key by ID.
+// Get retrieves a single API key by ID. It needs [PermAPIKeys].
 func (s *APIKeyService) Get(ctx context.Context, id string, opts ...RequestOption) (*APIKey, *Response, error) {
 	return fetch[APIKey](ctx, s.client, "api-keys/"+url.PathEscape(id), opts)
 }
 
-// Create provisions a new API key. The returned [APIKeyWithSecret] is the only
-// time the plaintext credential is available.
+// Create provisions a new API key and answers 201. The returned
+// [APIKeyWithSecret] is the only time the plaintext credential is available.
+// It needs [PermAPIKeys]. A session caller must have re-confirmed its identity
+// recently (403, code "reauth_required", otherwise), and an OAuth application
+// token is refused.
 func (s *APIKeyService) Create(ctx context.Context, params *APIKeyCreateParams, opts ...RequestOption) (*APIKeyWithSecret, *Response, error) {
 	return send[APIKeyWithSecret](ctx, s.client.post, "api-keys", params, opts)
 }
 
-// Update modifies an existing API key.
+// Update modifies an existing API key. It needs [PermAPIKeys]; an OAuth
+// application token is refused. A key caller is checked against the whole key
+// the edit leaves behind, a session caller only against the permissions it
+// sets.
 func (s *APIKeyService) Update(ctx context.Context, id string, params *APIKeyUpdateParams, opts ...RequestOption) (*APIKey, *Response, error) {
 	return send[APIKey](ctx, s.client.patch, "api-keys/"+url.PathEscape(id), params, opts)
 }
 
 // Revoke permanently revokes an API key. The reason is stored on the key and
-// may be empty.
+// may be empty. It needs [PermAPIKeys]; an OAuth application token is refused.
 func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...RequestOption) (*Response, error) {
 	q := make(url.Values)
 	setNonEmpty(q, "reason", reason)
@@ -365,7 +389,7 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 // key route that needs no scope: a credential must always be able to end
 // itself, which is what a CLI logout promises. The reason is stored on the key
 // and may be empty (the server records that the key revoked itself). A session
-// caller gets a 400 — there is no key in that request to end; use
+// caller gets a 400, since there is no key in that request to end; use
 // [AuthService.Logout]. Every request after this one fails with 401.
 func (s *APIKeyService) RevokeSelf(ctx context.Context, reason string, opts ...RequestOption) (*Response, error) {
 	q := make(url.Values)
@@ -374,29 +398,32 @@ func (s *APIKeyService) RevokeSelf(ctx context.Context, reason string, opts ...R
 }
 
 // Permissions lists every scope bit the API exposes, together with the preset
-// masks.
+// masks and the masks the caller may grant. It needs [PermAPIKeys].
 func (s *APIKeyService) Permissions(ctx context.Context, opts ...RequestOption) (*PermissionCatalog, *Response, error) {
 	return fetch[PermissionCatalog](ctx, s.client, "api-keys/permissions", opts)
 }
 
-// UsageSummary returns a rollup of the organization's key usage.
+// UsageSummary returns a rollup of the organization's key usage. It needs
+// [PermAPIKeys].
 func (s *APIKeyService) UsageSummary(ctx context.Context, opts ...RequestOption) (*APIKeyUsageSummary, *Response, error) {
 	return fetch[APIKeyUsageSummary](ctx, s.client, "api-keys/usage/summary", opts)
 }
 
 // UsageAnalytics returns call volume and latency across every key in the
-// organization.
+// organization. It needs [PermAPIKeys].
 func (s *APIKeyService) UsageAnalytics(ctx context.Context, params *APIKeyAnalyticsParams, opts ...RequestOption) (*APIKeyAnalytics, *Response, error) {
 	return fetch[APIKeyAnalytics](ctx, s.client, withQuery("api-keys/usage/analytics", params.values()), opts)
 }
 
-// Analytics returns call volume and latency for a single key.
+// Analytics returns call volume and latency for a single key. It needs
+// [PermAPIKeys].
 func (s *APIKeyService) Analytics(ctx context.Context, id string, params *APIKeyAnalyticsParams, opts ...RequestOption) (*APIKeyAnalytics, *Response, error) {
 	return fetch[APIKeyAnalytics](ctx, s.client, withQuery("api-keys/"+url.PathEscape(id)+"/analytics", params.values()), opts)
 }
 
 // Logs returns a page of individual requests made with a key, most recent
-// first. The server caps [ListOptions.Limit] at 200 and defaults to 50.
+// first. The server caps [ListOptions.Limit] at 200 and defaults to 50. It
+// needs [PermAPIKeys].
 func (s *APIKeyService) Logs(ctx context.Context, id string, params *ListOptions, opts ...RequestOption) (*Page[APIKeyUsageLog], error) {
 	q := make(url.Values)
 	params.apply(q)
