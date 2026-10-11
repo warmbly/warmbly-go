@@ -3,6 +3,104 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [Unreleased]
+
+## [0.4.0] - 2026-10-11
+
+Reconciles the SDK with the server's v1 API as of 176d3c24 (1513 server
+commits since the last sync): inbox placement, a native Salesforce service,
+CRM provider mode, background contact imports, per-lead campaign controls,
+member resource scoping, and the realtime gateway's new events and credential
+handling.
+
+### Changed (breaking)
+
+- `AssistantService.Approve` takes the `toolCallID` of the paused call; the
+  server requires it and answers 409 `approval_not_pending` otherwise.
+- `AuthService.ChangePassword` returns the replacement `*Session`. The server
+  ends every session on a password change, so the old token is dead.
+- `PoolLinkStartParams` gains `RemoteOrganizationID`, which the server now
+  requires (`pool_link_workspace_required` without it).
+- gateway: API keys and OAuth access tokens are sent in the `X-Warmbly-Token`
+  handshake header, never in the URL. Only connection tickets go in `?token=`,
+  and a plain session access token is no longer accepted by the server. A
+  custom proxy must forward the header.
+- `OAuthAppInactive` is deprecated; the API reports a switched-off app as
+  `OAuthAppDisabled` ("disabled"), so comparisons with the old constant never
+  matched.
+
+### Added
+
+- `Client.Placement` (`PlacementService`): inbox placement tests (overview,
+  list, get, create, cancel), batches (preview, create, list, get, senders,
+  cancel), fleet coverage, and workspace seed inboxes.
+- `CampaignService.PlacementMonitor`, `SetPlacementMonitor`,
+  `DeletePlacementMonitor` and `SendPlan`.
+- `AnalyticsService.WarmupPlacement`, `DirectMail` and `InboxTagging`.
+- `Client.Salesforce` (`SalesforceService`): overview, settings, metadata,
+  users, list views, campaigns, import sources and preview, activity log and
+  retry, sync now, and the contact panel (sync, unlink).
+- CRM provider mode: settings, metadata, owners, sync health and retries,
+  backfill, linked contact records, list import, and `BulkUpdateTasks` /
+  `BulkDeleteTasks`, with the `ErrCodeCRM*` codes.
+- `IntegrationService.CommunityApps`, `CommunityApp`, `SetSigningKey`,
+  `RotateInboundURL`, `PushSelection` and `StartOAuthWithParams`.
+- Background contact imports: `ContactService.CreateImport`, `ListImports`,
+  `GetImport`, `SaveImportDraft`, `AnalyzeImport`, `StartImport`,
+  `CancelImport` and `ImportFailures`; select-all bulk actions
+  (`ContactSelection`, `BulkDeleteSelection`, `SegmentService.SetMembersSelection`);
+  `ContactService.LookupSender`.
+- Per-lead campaign controls: `CampaignService.LeadHold`, `PauseLead`,
+  `ResumeLead`, `LeadCC`, `SetLeadCC`, `LeadCCSuggestions`, `CreateStepWithParams`.
+- `Client.EmailImages` (List, Upload, Delete) and `TemplateService.Analyze`.
+- `UniboxService.MoveToFolder`, `MarkThreadsSeen`, `SnoozeThreads`,
+  `UnsnoozeThreads`; `APIKeyService.Delete` (permanent delete).
+- Mailbox sending identity and sync: `EmailService.SendIdentity`,
+  `RefreshSendIdentity`, `SetDirectTracking`, `UpdateSyncFolders`, and the new
+  `Email` / `EmailUpdateParams` fields.
+- OAuth apps: `SetLogo`, `DeleteLogo`, directory listing methods,
+  `WorkspaceAuthorizations`, `RevokeWorkspaceAuthorization`, `DeveloperAccess`;
+  `Scope*` constants with `ScopesForPermissions` / `PermissionsForScopes`.
+- Auth: `Reauth`, `LinkSSO`, `RegenerateRecoveryCodes`, `CompleteProductTour`,
+  `CLIAuthRequestIn`, saved dashboard views (`ViewPreferences`,
+  `UpdateViewPreferences`, `ResetViewPreferences`), remembered-device fields.
+- Member resource scoping: `OrganizationService.MemberAccess`,
+  `SetMemberAccess`, `SuggestedSenders`, `Member.Access`,
+  `InviteMemberParams.Access`; `PermAppGrantable`, `APIPermissionsForMember`.
+- `AssistantService.ToolPolicies` / `RevokeToolPolicy` and the approval-card
+  and `tool_secret` event fields.
+- Pool link and cloud link: `PoolLinkService.Offer`, `Checkout`,
+  `CloudLinkService.SetParticipation`, `DisconnectLegacy`, and the per-workspace
+  fields.
+- gateway: events `DIRECT_EMAIL_OPENED`, `DIRECT_EMAIL_CLICKED`,
+  `CONTACT_IMPORT_PROGRESS`, `MAILBOX_IMPORT_PROGRESS`, `WARMUP_PLACEMENT`,
+  `PLACEMENT_TEST_UPDATED`, `CRM_SYNCED` and `CHANNEL_CLOSED` with typed
+  payloads, matching intents, `BaseEvent.AuthorizationOrgID`, and the
+  `CredentialHeader` and `ProxyPath` constants.
+- Error codes for re-authentication, API-key and OAuth credential limits,
+  restricted members, selection limits, and the sign-in failures; audit entity
+  types for the new resources; `OAuthApp.SuspendedAt` / `SuspendedReason`;
+  webhook payloads `WarmupHealthPayload` and `WarmupPlacementInSpamPayload`.
+- Managed-plan fields on `Subscription`, `Plan.PriceYearly`,
+  `Organization.Timezone` / `Category`, `LeadSyncSource.SegmentIDs`, and many
+  response fields across contacts, campaigns, unibox, outreach and forms.
+- Godoc on these services names the permission each method needs.
+
+### Changed
+
+- `CampaignListParams.Kind` is no longer sent; the campaign kind is retired
+  server-side (`CampaignKind*` and related fields are deprecated).
+- `PoolLinkWarmupHealth.SpamScore` is deprecated; it is always 0.
+
+### Fixed
+
+- `CRMService.ListPipelines` decodes the bare array the server returns.
+- `OAuthAppService.UploadLogo` sends the `file` form field the server reads.
+- The OAuth examples and docs used scope strings like `campaigns:read`; the API
+  expects `read_campaigns`.
+- A Get-then-Update round trip through `OutreachService` no longer resets the
+  inbox tagging and reply-intent settings.
+
 ## [0.3.1] - 2026-09-07
 
 Picks up the API changes that landed while 0.3.0 was being prepared. Additive,
@@ -255,6 +353,9 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/warmbly/warmbly-go/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/warmbly/warmbly-go/releases/tag/v0.3.1
+[0.3.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.3.0
 [0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0
