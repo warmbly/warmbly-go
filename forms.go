@@ -447,7 +447,7 @@ type FormSubmission struct {
 	FormID         string `json:"form_id"`
 	OrganizationID string `json:"organization_id"`
 	// ContactID is the contact the submission created or updated, or nil
-	// when the form has no email field.
+	// when the form has no email field or the submission is junk.
 	ContactID *string `json:"contact_id,omitempty"`
 	// CampaignID is the campaign whose email carried the personalized link
 	// the visitor arrived through, when there was one.

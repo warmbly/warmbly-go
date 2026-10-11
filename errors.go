@@ -105,11 +105,15 @@ func (e *Error) HasCode(code string) bool {
 // deployment simply lacks a feature ([ErrCodeAINotConfigured],
 // [ErrCodeSlackNotConfigured], [ErrCodeMailboxProviderNotConfigured]) is not
 // transient and reports false. [ErrCodeMailboxWorkerUnreachable] is transient:
-// nothing was removed, and the same call can succeed a moment later.
+// nothing was removed, and the same call can succeed a moment later. So is
+// [ErrCodeSalesforceUnreachable], although the server sends it as a 400.
 func (e *Error) Temporary() bool {
 	if e.HasCode(ErrCodeAINotConfigured) || e.HasCode(ErrCodeSlackNotConfigured) ||
 		e.HasCode(ErrCodeMailboxProviderNotConfigured) {
 		return false
+	}
+	if e.HasCode(ErrCodeSalesforceUnreachable) {
+		return true
 	}
 	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500
 }

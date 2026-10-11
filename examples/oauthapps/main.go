@@ -1,6 +1,6 @@
 // Command oauthapps demonstrates registering and managing an OAuth 2.1
-// application, then using its credentials for machine-to-machine access through
-// the client-credentials grant.
+// application, then starting the authorization-code flow a user completes to
+// grant it access. See examples/oauth for the full callback and code exchange.
 //
 //	WARMBLY_API_KEY=wmbly_... go run ./examples/oauthapps
 package main
@@ -47,22 +47,19 @@ func main() {
 		fmt.Printf("app webhook secret is %d characters\n", len(hookSecret))
 	}
 
-	// Act as the application itself, with no user in the loop.
-	cc := &warmbly.ClientCredentialsConfig{
+	// The app acts for a user who authorizes it. Warmbly supports the
+	// authorization-code grant (with PKCE) and refresh tokens; for
+	// machine-to-machine access with no user, use an API key instead.
+	cfg := &warmbly.OAuth2Config{
 		ClientID:     app.ClientID,
 		ClientSecret: app.ClientSecret,
+		RedirectURL:  "https://app.example.com/callback",
 		Scopes:       []string{warmbly.ScopeReadAnalytics},
 	}
-	client, err := cc.NewClient(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	dash, _, err := client.Analytics.Dashboard(ctx, warmbly.Period7Days)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("dashboard: %d emails sent, %.1f%% reply rate\n",
-		dash.OverallStats.TotalEmailsSent, dash.OverallStats.ReplyRate*100)
+	verifier := warmbly.GenerateVerifier()
+	fmt.Println("send the user to", cfg.AuthCodeURL("state-123", warmbly.S256ChallengeOption(verifier)))
+	// On the callback: tok, err := cfg.Exchange(ctx, code, warmbly.VerifierOption(verifier))
+	// then client, err := cfg.NewClient(ctx, tok).
 
 	// Rotate the secret if it may have leaked. The old one stops working at
 	// once, so deploy the new one first.

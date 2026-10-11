@@ -246,6 +246,12 @@ func TestTemporaryTreatsMissingFeaturesAsPermanent(t *testing.T) {
 	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeServiceUnavailable}).Temporary() {
 		t.Error("a plain 503 should stay temporary")
 	}
+	if !(&Error{StatusCode: http.StatusBadRequest, Code: ErrCodeSalesforceUnreachable}).Temporary() {
+		t.Error("an unreachable Salesforce should be temporary despite its 400")
+	}
+	if (&Error{StatusCode: http.StatusBadRequest, Code: ErrCodeSalesforceError}).Temporary() {
+		t.Error("a Salesforce refusal should stay permanent")
+	}
 	if !(&Error{StatusCode: http.StatusServiceUnavailable, Code: ErrCodeMailboxWorkerUnreachable}).Temporary() {
 		t.Error("an unreachable mailbox worker should stay temporary")
 	}

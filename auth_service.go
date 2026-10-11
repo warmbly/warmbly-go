@@ -1313,12 +1313,17 @@ type ViewPreferences struct {
 
 // UniboxRailLayout is how one member arranges the unified-inbox scope rail,
 // the document saved in [ViewPreferences.Layout] for [ViewNameUniboxRail].
-// Every key is a rail scope key such as "folder:inbox" or "mailbox:<id>".
+// Scope keys name rail entries, such as "folder:inbox" or "mailbox:<id>";
+// section keys name rail sections, such as "favorites" or "mailboxes".
 type UniboxRailLayout struct {
-	Favorites    []UniboxRailFavorite `json:"favorites"`
-	Hidden       []string             `json:"hidden"`
-	Order        map[string][]string  `json:"order"`
-	SectionOrder []string             `json:"section_order"`
+	// Favorites are the scopes pinned to the Favorites section.
+	Favorites []UniboxRailFavorite `json:"favorites"`
+	// Hidden lists the scope keys the member hid.
+	Hidden []string `json:"hidden"`
+	// Order maps a section key to the scope keys in that section, in order.
+	Order map[string][]string `json:"order"`
+	// SectionOrder lists section keys in display order.
+	SectionOrder []string `json:"section_order"`
 }
 
 // UniboxRailFavorite is a scope pinned to the rail's Favorites section, with an

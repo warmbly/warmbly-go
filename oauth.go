@@ -11,8 +11,8 @@ import (
 // a Warmbly user, plus the app-level webhook subscription that comes with them.
 //
 // This service administers applications. To act as an OAuth client — build an
-// authorization URL, exchange a code, refresh a token — use [OAuth2Config] and
-// [ClientCredentialsConfig] instead.
+// authorization URL, exchange a code, refresh a token — use [OAuth2Config]
+// instead.
 type OAuthAppService service
 
 // OAuth application states returned in [OAuthApp.Status].
