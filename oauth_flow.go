@@ -44,7 +44,7 @@ var DefaultEndpoint = OAuth2Endpoint{
 //		ClientID:     "...",
 //		ClientSecret: "...",
 //		RedirectURL:  "https://app.example.com/callback",
-//		Scopes:       []string{"campaigns:read", "contacts:read"},
+//		Scopes:       []string{warmbly.ScopeReadCampaigns, warmbly.ScopeReadContacts},
 //	}
 //	verifier := warmbly.GenerateVerifier()
 //	url := cfg.AuthCodeURL(state, warmbly.S256ChallengeOption(verifier))
@@ -59,7 +59,7 @@ type OAuth2Config struct {
 	ClientSecret string
 	// RedirectURL must exactly match one of the application's registered URIs.
 	RedirectURL string
-	// Scopes are the permission keys to request.
+	// Scopes are the permission keys to request, the Scope* constants.
 	Scopes []string
 	// Endpoint overrides the authorization server URLs. Zero uses
 	// [DefaultEndpoint].

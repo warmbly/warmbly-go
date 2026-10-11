@@ -124,13 +124,128 @@ func TestExtractSeq(t *testing.T) {
 	}
 }
 
-func TestSocketURLCarriesCredentialAndVersion(t *testing.T) {
-	c := New("wmbly_key", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
+func TestSocketURLCarriesTicketAndVersion(t *testing.T) {
+	c := New("eyJ.ticket", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
 	got := c.socketURL()
-	for _, want := range []string{"token=wmbly_key", "vsn=" + protocolVersion} {
+	for _, want := range []string{"token=eyJ.ticket", "vsn=" + protocolVersion} {
 		if !strings.Contains(got, want) {
 			t.Errorf("socketURL() = %q, want it to contain %q", got, want)
 		}
+	}
+	if h := c.handshakeHeader(); h != nil {
+		t.Errorf("handshakeHeader() = %v, want none for a ticket", h)
+	}
+}
+
+func TestLongLivedCredentialRidesTheHeader(t *testing.T) {
+	for _, token := range []string{"wmbly_key", "wmat_token"} {
+		c := New(token, "org_1", WithURL("wss://realtime.example.com/socket/websocket?token=stale"))
+		got := c.socketURL()
+		if strings.Contains(got, "token=") {
+			t.Errorf("socketURL() = %q, want no token in the URL", got)
+		}
+		if !strings.Contains(got, "vsn="+protocolVersion) {
+			t.Errorf("socketURL() = %q, want the wire version", got)
+		}
+		if h := c.handshakeHeader(); h.Get(CredentialHeader) != token {
+			t.Errorf("handshakeHeader()[%s] = %q, want %q", CredentialHeader, h.Get(CredentialHeader), token)
+		}
+	}
+}
+
+func TestDialSendsCredentialHeader(t *testing.T) {
+	srv := newPhxServer(t)
+	srv.onJoin = func(int, string) (string, string) { return "ok", helloResponse }
+	c := srv.client(t)
+	if err := c.Open(testContext(t)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	srv.mu.Lock()
+	header, target := srv.lastHeader, srv.lastTarget
+	srv.mu.Unlock()
+	if got := header.Get(CredentialHeader); got != "wmbly_test" {
+		t.Errorf("handshake %s = %q, want the API key", CredentialHeader, got)
+	}
+	if strings.Contains(target, "token=") {
+		t.Errorf("handshake target = %q, want no token in the URL", target)
+	}
+}
+
+func TestNewEventPayloadsDecode(t *testing.T) {
+	var pt PlacementTestEvent
+	ev := &Event{Type: EventPlacementTestUpdated, Raw: json.RawMessage(`{"event_type":"PLACEMENT_TEST_UPDATED","org_id":"o1","test_id":"t1","campaign_id":"c1","status":"completed","timestamp":"2026-10-01T10:00:00Z","seq":7}`)}
+	if err := ev.Into(&pt); err != nil || pt.TestID != "t1" || pt.CampaignID != "c1" || pt.Status != PlacementTestCompleted || pt.Seq != 7 {
+		t.Errorf("PlacementTestEvent = %+v, %v", pt, err)
+	}
+
+	var imp ImportProgressEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"CONTACT_IMPORT_PROGRESS","org_id":"o1","import_id":"i1","status":"queued","timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&imp); err != nil || imp.ImportID != "i1" || imp.Status != ImportStatusQueued {
+		t.Errorf("ImportProgressEvent = %+v, %v", imp, err)
+	}
+
+	var crm CRMSyncedEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"CRM_SYNCED","org_id":"o1","objects":["deal","task"],"contact_id":"ct1","timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&crm); err != nil || len(crm.Objects) != 2 || crm.Objects[0] != CRMObjectDeal || crm.ContactID != "ct1" {
+		t.Errorf("CRMSyncedEvent = %+v, %v", crm, err)
+	}
+
+	var eng EngagementEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"DIRECT_EMAIL_OPENED","user_id":"u1","org_id":"o1","email_account_id":"a1","machine":true,"client_type":"webmail","device_hidden":true,"os":"iOS","browser":"Safari","occurred_at":"2026-10-01T09:59:00Z","timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&eng); err != nil || eng.EmailAccountID != "a1" || !eng.Machine || !eng.DeviceHidden || eng.ClientType != "webmail" || eng.OS != "iOS" || eng.Browser != "Safari" {
+		t.Errorf("EngagementEvent = %+v, %v", eng, err)
+	}
+
+	var acct AccountEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"WARMUP_PLACEMENT","user_id":"u1","org_id":"o1","email_account_id":"a1","email":"a@example.com","status":"tabs","timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&acct); err != nil || acct.Status != PlacementTabs || acct.EmailAccountID != "a1" {
+		t.Errorf("AccountEvent = %+v, %v", acct, err)
+	}
+
+	var tp TaskProgressEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"TASK_PROGRESS","campaign_id":"c1","task_id":"t1","status":"active","total_contacts":10,"total_emails":30,"processed_count":12,"progress":40,"timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&tp); err != nil || tp.TotalEmails != 30 || tp.ProcessedCount != 12 {
+		t.Errorf("TaskProgressEvent = %+v, %v", tp, err)
+	}
+
+	var n NotificationEvent
+	ev = &Event{Raw: json.RawMessage(`{"event_type":"NOTIFICATION_CREATED","user_id":"u1","authorization_org_id":"o1","notification_id":"n1","category":"campaign","title":"Done","timestamp":"2026-10-01T10:00:00Z"}`)}
+	if err := ev.Into(&n); err != nil || n.AuthorizationOrgID != "o1" || n.OrgID != "" {
+		t.Errorf("NotificationEvent = %+v, %v", n, err)
+	}
+}
+
+func TestExtraTopicCloseEmitsLifecycle(t *testing.T) {
+	srv := newPhxServer(t)
+	srv.onJoin = func(int, string) (string, string) { return "ok", helloResponse }
+	c := srv.client(t, WithTopics(CampaignTopic("c_1")))
+	got := make(chan ChannelClosed, 1)
+	On(c, EventChannelClosed, func(_ context.Context, e *ChannelClosed) {
+		select {
+		case got <- *e:
+		default:
+		}
+	})
+	if err := c.Open(testContext(t)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.joins("campaign:c_1") == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	srv.push("campaign:c_1", "phx_close", `{}`)
+	select {
+	case e := <-got:
+		if e.Topic != "campaign:c_1" || e.Event != "phx_close" {
+			t.Errorf("ChannelClosed = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no EventChannelClosed")
+	}
+	select {
+	case <-c.Done():
+		t.Fatalf("the session ended over an extra topic: %v", c.Err())
+	default:
 	}
 }
 
@@ -628,6 +743,10 @@ type phxServer struct {
 	joinCounts map[string]int
 	joinBodies map[string]string
 	live       []net.Conn
+	// lastHeader and lastTarget are the most recent handshake's request
+	// headers and request URI.
+	lastHeader http.Header
+	lastTarget string
 }
 
 func newPhxServer(t *testing.T) *phxServer {
@@ -685,6 +804,7 @@ func (s *phxServer) serve(conn net.Conn) {
 	}
 	s.mu.Lock()
 	s.shakes++
+	s.lastHeader, s.lastTarget = req.Header.Clone(), req.RequestURI
 	status := s.upgradeStatus
 	s.mu.Unlock()
 

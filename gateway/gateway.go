@@ -20,6 +20,26 @@ import (
 // DefaultURL is the production gateway endpoint.
 const DefaultURL = "wss://realtime.warmbly.com/socket/websocket"
 
+// ProxyPath is the API-origin websocket proxy, relative to the versioned API
+// base (for example https://api.warmbly.com/v1). It exists for browser
+// sessions and accepts only the short-lived ticket from the getaway endpoint,
+// never an API key or OAuth access token. Programmatic clients connect to the
+// gateway directly.
+const ProxyPath = "/realtime/socket/websocket"
+
+// CredentialHeader is the handshake header that carries an API key or OAuth
+// access token. The client sets it automatically. Putting either credential
+// in the URL still works but is deprecated server-side, because URLs end up in
+// proxy and access logs; only the short-lived connection ticket goes in the
+// "token" query parameter.
+const CredentialHeader = "X-Warmbly-Token"
+
+// Credential prefixes the gateway treats as long-lived.
+const (
+	apiKeyPrefix     = "wmbly_"
+	oauthTokenPrefix = "wmat_"
+)
+
 // protocolVersion is the channel wire format this client speaks. Frames are
 // JSON arrays: [join_ref, ref, topic, event, payload].
 const protocolVersion = "2.0.0"
@@ -65,7 +85,10 @@ const (
 	// JoinCodeUnauthenticated means no credential was presented at all.
 	JoinCodeUnauthenticated = 4003
 	// JoinCodeAuthFailed means the credential was presented and rejected:
-	// expired token, unknown or revoked key, bad signature. Re-mint it.
+	// expired token, unknown or revoked key, bad signature, a key whose
+	// creator left the workspace or was banned from signing in, an OAuth app
+	// that was suspended, or a session token that is not a connection ticket.
+	// Re-mint it.
 	JoinCodeAuthFailed = 4004
 	// JoinCodeInvalidTopic means the topic itself is malformed, typically an
 	// id that is not a UUID. Retrying cannot help; fix the topic.
@@ -93,10 +116,15 @@ const (
 	// JoinReasonRateLimited accompanies [JoinCodeRateLimited].
 	JoinReasonRateLimited = "rate_limited"
 	// JoinReasonNotAMember means the credential's owner is not a member of the
-	// workspace in the topic.
+	// workspace in the topic, on the campaign and mailbox channels. The
+	// workspace channel refuses a non-member with the same
+	// [JoinCodePermissionDenied] but a human-readable reason, so branch on the
+	// code there. This is also how a member removed mid-session finds out: the
+	// server disconnects every socket they hold and the rejoin is refused.
 	JoinReasonNotAMember = "not_a_member"
 	// JoinReasonForbidden means the member exists but lacks the permission the
-	// topic requires.
+	// topic requires, or is restricted to selected resources and the
+	// campaign or mailbox in the topic is not one of them.
 	JoinReasonForbidden = "forbidden"
 	// JoinReasonUnauthorized is returned by the user channel when a socket
 	// tries to join a user topic that is not its own.
@@ -396,9 +424,14 @@ func WithResumeFrom(seq int) Option {
 	}
 }
 
-// New creates a gateway client for one workspace, authenticated with token: an
-// API key holding the realtime-subscribe scope, or a session access token. It
-// does not connect; call [Client.Open].
+// New creates a gateway client for one workspace, authenticated with token:
+// an API key (wmbly_) holding the realtime-subscribe permission, an OAuth
+// access token (wmat_) whose grant includes the realtime_subscribe scope, or a
+// short-lived connection ticket minted for a signed-in session by the getaway
+// endpoint. API keys and OAuth tokens are sent in [CredentialHeader]; a ticket
+// is sent in the URL. A plain session access token is refused: the gateway
+// accepts only a ticket minted for it. It does not connect; call
+// [Client.Open].
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,
@@ -630,7 +663,7 @@ func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), c.handshakeHeader())
 	if derr != nil {
 		// The socket refuses the upgrade at the HTTP layer when the credential
 		// is bad, so a dial failure can be terminal rather than transient.
@@ -815,17 +848,42 @@ func handshakeError(resp *http.Response) error {
 	return nil
 }
 
-// socketURL builds the dial URL, carrying the credential and wire version.
+// longLived reports whether token is a credential that outlives a session (an
+// API key or an OAuth access token). Those travel in [CredentialHeader]; only a
+// short-lived connection ticket belongs in the URL.
+func longLived(token string) bool {
+	return strings.HasPrefix(token, apiKeyPrefix) || strings.HasPrefix(token, oauthTokenPrefix)
+}
+
+// socketURL builds the dial URL, carrying the wire version and, for a
+// connection ticket, the credential.
 func (c *Client) socketURL() string {
 	u, err := url.Parse(c.url)
 	if err != nil {
 		return c.url
 	}
 	q := u.Query()
-	q.Set("token", c.token)
+	if longLived(c.token) {
+		// A ticket URL from GatewayTicket may still carry a token; never let
+		// a long-lived credential share the query string with it.
+		q.Del("token")
+	} else {
+		q.Set("token", c.token)
+	}
 	q.Set("vsn", protocolVersion)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// handshakeHeader carries an API key or OAuth access token in the handshake,
+// where proxies and access logs do not record it.
+func (c *Client) handshakeHeader() http.Header {
+	if !longLived(c.token) {
+		return nil
+	}
+	h := http.Header{}
+	h.Set(CredentialHeader, c.token)
+	return h
 }
 
 // sendJoin joins one topic and records the attempt so the reply can be matched
@@ -920,6 +978,7 @@ func (c *Client) handleFrame(msg *frame, primary bool) error {
 		// An extra topic's channel died. The workspace stream is unaffected, so
 		// log it and pick the topic up again on the next reconnect.
 		c.logf("gateway: channel %s: %s; not rejoining until the next reconnect", msg.Topic, msg.Event)
+		c.emitLifecycle(EventChannelClosed, ChannelClosed{Topic: msg.Topic, Event: msg.Event})
 		return nil
 	}
 
