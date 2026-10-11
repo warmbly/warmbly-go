@@ -38,6 +38,21 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier connected by API key,
+	// used the same way as [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
+)
+
+// Integration error codes, returned in [Error.Code].
+const (
+	// ErrCodeActionProviderMismatch is the 400 for an event subscription or
+	// automation step whose action belongs to another provider than the
+	// connection it runs on.
+	ErrCodeActionProviderMismatch = "action_provider_mismatch"
+	// ErrCodeTooManyContacts is the 400 for a push whose selection resolves
+	// to more than 500 contacts. A push calls the provider once per contact,
+	// so a larger set is refused rather than run for minutes.
+	ErrCodeTooManyContacts = "too_many_contacts"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -90,6 +105,9 @@ type IntegrationCatalogEntry struct {
 	Configured bool `json:"configured"`
 	// Capability is the provider's raw capability descriptor, when it has one.
 	Capability json.RawMessage `json:"capability,omitempty"`
+	// Rank is the provider's popularity on this deployment, 1 being the most
+	// used: workspaces with a live connection, ties broken by catalog order.
+	Rank int `json:"rank"`
 }
 
 // IntegrationConnection is one connected third-party account.
@@ -264,7 +282,108 @@ type OAuthStartResult struct {
 	State string `json:"state"`
 }
 
+// Salesforce login environments for [OAuthStartParams.Environment].
+const (
+	SalesforceProduction = "production"
+	SalesforceSandbox    = "sandbox"
+)
+
+// OAuthStartParams begins the consent flow for an OAuth provider. Provider is
+// required.
+type OAuthStartParams struct {
+	// Provider is one of the Provider* constants.
+	Provider string `json:"provider"`
+	// Label names the resulting connection.
+	Label string `json:"label,omitempty"`
+	// Environment ([SalesforceProduction] or [SalesforceSandbox]) and Domain
+	// (a My Domain host) choose the Salesforce login server. Other providers
+	// ignore them. An unusable domain is refused with code
+	// "invalid_salesforce_domain".
+	Environment string `json:"environment,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+}
+
+// IntegrationPushParams selects the contacts to push: an explicit id list in
+// Contacts, or, with All set, every contact matching Filters minus the ids in
+// Exclude. A selection over 500 contacts is refused with
+// [ErrCodeTooManyContacts].
+type IntegrationPushParams struct {
+	Contacts []string `json:"contacts,omitempty"`
+	// All switches the selection from Contacts to Filters.
+	All bool `json:"all,omitempty"`
+	// Filters is the filter [ContactService.Search] takes. Its pagination
+	// fields are not sent.
+	Filters *ContactSearchParams `json:"filters,omitempty"`
+	// Exclude drops ids from the resolved set. It is ignored unless All is
+	// set.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Community app listing states returned in [CommunityApp.Status].
+const (
+	// CommunityAppPublished is reachable by its link, and listed in
+	// discovery once enough workspaces use it.
+	CommunityAppPublished = "published"
+	// CommunityAppFeatured was picked by the operator and is always listed.
+	CommunityAppFeatured = "featured"
+)
+
+// CommunityApp is a third-party OAuth app in the community directory, as a
+// browsing workspace sees it: its public face, its publisher, its reach and
+// whether this workspace already uses it. It never carries a credential,
+// redirect or webhook field.
+type CommunityApp struct {
+	ApplicationID string `json:"application_id"`
+	// Slug is the listing's link name, for [IntegrationService.CommunityApp].
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Tagline     string `json:"tagline"`
+	Description string `json:"description"`
+	// Category is one of the catalog categories ("crm", "automation",
+	// "notifications", "meetings", "data", "verification"), "ai" or "other".
+	Category   string `json:"category"`
+	LogoURL    string `json:"logo_url"`
+	WebsiteURL string `json:"website_url"`
+	// InstallURL is where a workspace starts using the app.
+	InstallURL string `json:"install_url"`
+	SupportURL string `json:"support_url"`
+	PrivacyURL string `json:"privacy_url"`
+	// Developer names the publishing organization.
+	Developer string `json:"developer"`
+	// Scopes is the API permission bitmask the app requests, and Permissions
+	// spells it out.
+	Scopes      uint64       `json:"scopes"`
+	Permissions []Permission `json:"permissions"`
+	// Status is [CommunityAppPublished] or [CommunityAppFeatured].
+	Status string `json:"status"`
+	// Listed reports whether the app shows in discovery, because it is
+	// featured or widely used.
+	Listed bool `json:"listed"`
+	// Installs counts the workspaces using the app.
+	Installs int `json:"installs"`
+	// Installed reports whether this workspace uses it.
+	Installed   bool      `json:"installed"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
+// CommunityAppListParams paginates the community directory. Limit is between
+// 1 and 200 and defaults to 100.
+type CommunityAppListParams struct {
+	ListOptions
+}
+
+func (p *CommunityAppListParams) values() url.Values {
+	q := make(url.Values)
+	if p == nil {
+		return q
+	}
+	p.apply(q)
+	return q
+}
+
 // Catalog returns every connectable provider.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Catalog(ctx context.Context, opts ...RequestOption) ([]IntegrationCatalogEntry, *Response, error) {
 	var out struct {
 		Catalog []IntegrationCatalogEntry `json:"catalog"`
@@ -277,6 +396,8 @@ func (s *IntegrationService) Catalog(ctx context.Context, opts ...RequestOption)
 }
 
 // Connections returns the workspace's connected accounts.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Connections(ctx context.Context, opts ...RequestOption) ([]IntegrationConnection, *Response, error) {
 	var out struct {
 		Connections []IntegrationConnection `json:"connections"`
@@ -288,18 +409,25 @@ func (s *IntegrationService) Connections(ctx context.Context, opts ...RequestOpt
 	return out.Connections, resp, nil
 }
 
-// Connect creates a connection for an API-key or webhook provider.
+// Connect creates a connection for an API-key or webhook provider. Connecting
+// is a paid-plan feature; on a free plan it answers 403.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Connect(ctx context.Context, params *ConnectParams, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
 	return send[IntegrationConnection](ctx, s.client.post, "integrations/connections", params, opts)
 }
 
 // Connection returns one connection with its event subscriptions and recent
 // sync runs.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Connection(ctx context.Context, id string, opts ...RequestOption) (*ConnectionDetail, *Response, error) {
 	return fetch[ConnectionDetail](ctx, s.client, "integrations/connections/"+url.PathEscape(id), opts)
 }
 
 // UpdateConfig changes a connection's non-secret configuration.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) UpdateConfig(ctx context.Context, id string, params *ConnectionConfigParams, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
 	var out struct {
 		Connection *IntegrationConnection `json:"connection"`
@@ -312,11 +440,15 @@ func (s *IntegrationService) UpdateConfig(ctx context.Context, id string, params
 }
 
 // Disconnect removes a connection and its stored credentials.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Disconnect(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "integrations/connections/"+url.PathEscape(id), opts...)
 }
 
 // Events returns a connection's event subscriptions.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Events(ctx context.Context, id string, opts ...RequestOption) ([]EventSubscription, *Response, error) {
 	var out struct {
 		Events []EventSubscription `json:"events"`
@@ -328,17 +460,24 @@ func (s *IntegrationService) Events(ctx context.Context, id string, opts ...Requ
 	return out.Events, resp, nil
 }
 
-// CreateEvent subscribes a connection to a Warmbly event.
+// CreateEvent subscribes a connection to a Warmbly event. An action of
+// another provider is refused with [ErrCodeActionProviderMismatch].
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) CreateEvent(ctx context.Context, id string, params *EventSubscriptionParams, opts ...RequestOption) (*EventSubscription, *Response, error) {
 	return send[EventSubscription](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/events", params, opts)
 }
 
 // DeleteEvent removes an event subscription.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) DeleteEvent(ctx context.Context, id, eventID string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "integrations/connections/"+url.PathEscape(id)+"/events/"+url.PathEscape(eventID), opts...)
 }
 
 // FieldMappings returns a connection's field mappings.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) FieldMappings(ctx context.Context, id string, opts ...RequestOption) ([]FieldMapping, *Response, error) {
 	var out struct {
 		Mappings []FieldMapping `json:"mappings"`
@@ -352,6 +491,8 @@ func (s *IntegrationService) FieldMappings(ctx context.Context, id string, opts 
 
 // ReplaceFieldMappings replaces the mappings for one provider object
 // wholesale.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) ReplaceFieldMappings(ctx context.Context, id, object string, mappings []FieldMappingInput, opts ...RequestOption) ([]FieldMapping, *Response, error) {
 	body := struct {
 		Object   string              `json:"object,omitempty"`
@@ -368,6 +509,8 @@ func (s *IntegrationService) ReplaceFieldMappings(ctx context.Context, id, objec
 }
 
 // Runs returns a connection's recent sync runs.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Runs(ctx context.Context, id string, opts ...RequestOption) ([]SyncRun, *Response, error) {
 	var out struct {
 		Runs []SyncRun `json:"runs"`
@@ -380,13 +523,20 @@ func (s *IntegrationService) Runs(ctx context.Context, id string, opts ...Reques
 }
 
 // WebhookSecret returns the signing material an inbound provider needs. Treat
-// the secret as a credential.
+// the secret as a credential. It is the only place the secret is returned:
+// [IntegrationConnection.ConfigCapabilities] never carries it. A session
+// caller must have re-authenticated recently; API keys and OAuth tokens are
+// exempt.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) WebhookSecret(ctx context.Context, id string, opts ...RequestOption) (*ConnectionWebhookSecret, *Response, error) {
 	return fetch[ConnectionWebhookSecret](ctx, s.client, "integrations/connections/"+url.PathEscape(id)+"/webhook-secret", opts)
 }
 
 // Test sends a test message through the connection to confirm it works. For a
 // notification provider this posts a real message to the configured channel.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Test(ctx context.Context, id string, opts ...RequestOption) (bool, *Response, error) {
 	var out struct {
 		Sent bool `json:"sent"`
@@ -399,7 +549,10 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 }
 
 // Push sends the given contacts to the provider now, rather than waiting for
-// an event to fire.
+// an event to fire. At most 500 contacts per call; use
+// [IntegrationService.PushSelection] to push everything a search matches.
+//
+// Requires the INTEGRATIONS API permission.
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`
@@ -407,20 +560,95 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
 }
 
+// PushSelection is [IntegrationService.Push] for a selection: an id list, or
+// every contact a search matches. The push is synchronous against the
+// provider, so a selection over 500 contacts is refused with
+// [ErrCodeTooManyContacts].
+//
+// Requires the INTEGRATIONS API permission.
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, params *IntegrationPushParams, opts ...RequestOption) (*PushResult, *Response, error) {
+	if params == nil {
+		params = &IntegrationPushParams{}
+	}
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", params, opts)
+}
+
+// SetSigningKey sets the key a Calendly or Cal.com connection's deliveries
+// must be signed with, so the inbound URL alone no longer suffices. The key is
+// 8 to 512 characters; an empty key goes back to the URL secret alone. Other
+// providers answer 400. Connecting is a paid-plan feature; on a free plan it
+// answers 403.
+//
+// Requires the INTEGRATIONS API permission.
+func (s *IntegrationService) SetSigningKey(ctx context.Context, id, signingKey string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
+	body := struct {
+		SigningKey string `json:"signing_key"`
+	}{SigningKey: signingKey}
+	var out struct {
+		Connection *IntegrationConnection `json:"connection"`
+	}
+	resp, err := s.client.put(ctx, "integrations/connections/"+url.PathEscape(id)+"/signing-key", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Connection, resp, nil
+}
+
+// RotateInboundURL mints a new inbound webhook URL for a Calendly or Cal.com
+// connection and returns it. The previous URL stops working immediately, so
+// update the provider right away. Other providers answer 400; on a free plan
+// it answers 403.
+//
+// Requires the INTEGRATIONS API permission.
+func (s *IntegrationService) RotateInboundURL(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		InboundWebhookURL string `json:"inbound_webhook_url"`
+	}
+	resp, err := s.client.post(ctx, "integrations/connections/"+url.PathEscape(id)+"/rotate-inbound-url", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.InboundWebhookURL, resp, nil
+}
+
+// --- community directory ---
+
+// CommunityApps returns a page of the third-party apps listed in the
+// community directory: featured ones and those enough workspaces use.
+// [Pagination.Total] is exact.
+//
+// Requires the INTEGRATIONS API permission.
+func (s *IntegrationService) CommunityApps(ctx context.Context, params *CommunityAppListParams, opts ...RequestOption) (*Page[CommunityApp], error) {
+	return listJSON[CommunityApp](ctx, s.client, "integrations/community", params.values(), opts...)
+}
+
+// CommunityApp opens one published app by its slug, whether it is listed in
+// discovery or not.
+//
+// Requires the INTEGRATIONS API permission.
+func (s *IntegrationService) CommunityApp(ctx context.Context, slug string, opts ...RequestOption) (*CommunityApp, *Response, error) {
+	return fetch[CommunityApp](ctx, s.client, "integrations/community/"+url.PathEscape(slug), opts)
+}
+
 // --- OAuth connect flow (session-only) ---
 
 // StartOAuth begins the consent flow for an OAuth provider and returns the URL
 // to send the user to. The label, if given, names the resulting connection.
+// Use [IntegrationService.StartOAuthWithParams] to pick a Salesforce sandbox
+// or My Domain login server.
 func (s *IntegrationService) StartOAuth(ctx context.Context, provider, label string, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
-	body := struct {
-		Provider string `json:"provider"`
-		Label    string `json:"label,omitempty"`
-	}{Provider: provider, Label: label}
-	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", body, opts)
+	return s.StartOAuthWithParams(ctx, &OAuthStartParams{Provider: provider, Label: label}, opts...)
+}
+
+// StartOAuthWithParams is [IntegrationService.StartOAuth] with the
+// provider-specific options, such as the Salesforce login environment.
+func (s *IntegrationService) StartOAuthWithParams(ctx context.Context, params *OAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", params, opts)
 }
 
 // FinishOAuth exchanges the authorization code the provider redirected back
-// with for a stored connection.
+// with for a stored connection. The caller must be able to manage settings in
+// the workspace the flow was started for.
 func (s *IntegrationService) FinishOAuth(ctx context.Context, code, state string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
 	body := struct {
 		Code  string `json:"code"`
@@ -544,16 +772,22 @@ type MeetingCreateParams struct {
 }
 
 // List returns a page of booked meetings.
+//
+// Requires the READ_CONTACTS API permission.
 func (s *MeetingService) List(ctx context.Context, params *MeetingListParams, opts ...RequestOption) (*Page[Meeting], error) {
 	return listJSON[Meeting](ctx, s.client, "meetings", params.values(), opts...)
 }
 
 // Summary returns the meeting counters.
+//
+// Requires the READ_CONTACTS API permission.
 func (s *MeetingService) Summary(ctx context.Context, opts ...RequestOption) (*MeetingsSummary, *Response, error) {
 	return fetch[MeetingsSummary](ctx, s.client, "meetings/summary", opts)
 }
 
 // Create logs a meeting booked outside a connected provider.
+//
+// Requires the WRITE_CONTACTS API permission.
 func (s *MeetingService) Create(ctx context.Context, params *MeetingCreateParams, opts ...RequestOption) (*Meeting, *Response, error) {
 	var out struct {
 		Meeting *Meeting `json:"meeting"`
@@ -566,12 +800,17 @@ func (s *MeetingService) Create(ctx context.Context, params *MeetingCreateParams
 }
 
 // Delete removes a meeting record.
+//
+// Requires the WRITE_CONTACTS API permission.
 func (s *MeetingService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "meetings/"+url.PathEscape(id), opts...)
 }
 
 // Bookings returns meetings from connected scheduling providers. It is the
 // integration-scoped view of the same data [MeetingService.List] returns.
+// Bookings carry invitee details, so they are read like contacts.
+//
+// Requires the READ_CONTACTS API permission.
 func (s *IntegrationService) Bookings(ctx context.Context, opts ...RequestOption) ([]Meeting, *Response, error) {
 	var out struct {
 		Bookings []Meeting `json:"bookings"`
