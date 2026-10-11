@@ -107,18 +107,3 @@ func (s *AuthService) UpdateViewPreferences(ctx context.Context, view string, pa
 func (s *AuthService) ResetViewPreferences(ctx context.Context, view string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "me/views/"+url.PathEscape(view), opts...)
 }
-
-// CompleteProductTour records that the caller finished or skipped the
-// dashboard product tour and returns when, which is also what
-// [User.ProductTourCompletedAt] reports from then on. Calling it again is
-// harmless. It needs no organization permission.
-func (s *AuthService) CompleteProductTour(ctx context.Context, opts ...RequestOption) (time.Time, *Response, error) {
-	var out struct {
-		CompletedAt time.Time `json:"product_tour_completed_at"`
-	}
-	resp, err := s.client.put(ctx, "auth/me/product-tour", nil, &out, opts...)
-	if err != nil {
-		return time.Time{}, resp, err
-	}
-	return out.CompletedAt, resp, nil
-}

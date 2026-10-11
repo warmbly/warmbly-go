@@ -104,7 +104,7 @@ func TestAccountSyncRouting(t *testing.T) {
 			return e
 		}, "POST", "/v1/auth/me/avatar"},
 		{"auth.DeleteAvatar", func() error { _, e := c.Auth.DeleteAvatar(ctx); return e }, "DELETE", "/v1/auth/me/avatar"},
-		{"auth.ChangePassword", func() error { _, e := c.Auth.ChangePassword(ctx, "old", "new"); return e }, "POST", "/v1/auth/me/password"},
+		{"auth.ChangePassword", func() error { _, _, e := c.Auth.ChangePassword(ctx, "old", "new"); return e }, "POST", "/v1/auth/me/password"},
 		{"auth.SetUndoSendSeconds", func() error { _, e := c.Auth.SetUndoSendSeconds(ctx, 30); return e }, "PUT", "/v1/auth/me/send-preferences"},
 
 		// --- two-factor ---

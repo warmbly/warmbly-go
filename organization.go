@@ -154,9 +154,13 @@ type User struct {
 
 	ReferralSource        *string    `json:"referral_source,omitempty"`
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
-	// ProductTourCompletedAt is when the dashboard product tour was finished
-	// or skipped; nil means it should still be shown.
+	// ProductTourCompletedAt is when the dashboard's product tour was
+	// finished or skipped ([AuthService.CompleteProductTour]); nil shows it.
 	ProductTourCompletedAt *time.Time `json:"product_tour_completed_at,omitempty"`
+	// SessionMFAVerified reports whether the session making the request
+	// presented a second factor (TOTP, a recovery code or a passkey). Only on
+	// the caller's own profile.
+	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	MaxOrganizations int  `json:"max_organizations,omitempty"`
 	FreeTrialUsed    bool `json:"free_trial_used,omitempty"`
@@ -169,9 +173,6 @@ type User struct {
 	// bitmask behind it. Both are only populated on the caller's own profile.
 	AdminPermissions uint64 `json:"admin_permissions,omitempty"`
 	IsAdmin          bool   `json:"is_admin,omitempty"`
-	// SessionMFAVerified reports whether the session making the request
-	// presented a second factor. Only populated on the caller's own profile.
-	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	// DeletionScheduledFor is set while the account is pending a hard delete.
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
