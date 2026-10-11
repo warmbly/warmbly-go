@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -13,6 +14,12 @@ import (
 // pages for straightforward browsing; the Search methods take a faceted filter
 // body and are aggregated server-side, so a total or a per-stage sum is a true
 // count over the whole matching set rather than a reduce over one page.
+//
+// A workspace can also run its CRM on HubSpot or Pipedrive instead of
+// Warmbly's own. In that provider mode the same pipelines, deals and tasks are
+// mirrored from the provider and written through to it, and each record
+// carries a [CRMExternalRef] saying where it lives. [CRMService.GetSettings]
+// and the other provider-mode methods configure and inspect that link.
 type CRMService service
 
 // Pipeline is a named deal pipeline: an ordered set of stages deals move
@@ -26,6 +33,10 @@ type Pipeline struct {
 	Stages    []PipelineStage `json:"stages,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	// External is set when the pipeline is managed in a connected CRM. Such a
+	// pipeline is edited in the provider; a write here is refused with
+	// [ErrCodeCRMManagedExternally].
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // PipelineStage is one column of a pipeline.
@@ -39,6 +50,11 @@ type PipelineStage struct {
 	DealCount int       `json:"deal_count,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Closed, Won and Probability come from a connected CRM's stage
+	// metadata. They are unset on a stage of Warmbly's own CRM.
+	Closed      bool     `json:"closed,omitempty"`
+	Won         bool     `json:"won,omitempty"`
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // PipelineCreateParams creates a pipeline, optionally with its initial stages.
@@ -103,6 +119,9 @@ type Deal struct {
 	Contact      *Contact       `json:"contact,omitempty"`
 	Stage        *PipelineStage `json:"stage,omitempty"`
 	CampaignName *string        `json:"campaign_name,omitempty"`
+
+	// External is set when the deal lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // DealCreateParams creates a deal. PipelineID, StageID and Name are required.
@@ -278,6 +297,9 @@ type CRMTask struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// External is set when the task lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // CRMTaskCreateParams creates a task. Title is required.
@@ -376,44 +398,106 @@ type TasksSummary struct {
 	HighPriority   int64 `json:"high_priority_count"`
 }
 
+// CRMTaskSelection names the tasks a bulk action applies to: either an
+// explicit id list in Tasks, or, with All set, every task matching Filters
+// minus the ids in Exclude. A selection that sets All prefers the filter.
+//
+// An id list is capped at 1,000 tasks and Exclude at 50,000; past either the
+// request is refused with [ErrCodeTooManyTasks]. A malformed id in Filters is
+// refused with [ErrCodeInvalidFilter].
+type CRMTaskSelection struct {
+	Tasks []string `json:"tasks,omitempty"`
+	// All switches the selection from Tasks to Filters.
+	All bool `json:"all,omitempty"`
+	// Filters is the filter [CRMService.SearchTasks] takes, so the set
+	// resolved is exactly the set a search shows. Its pagination fields are
+	// not sent.
+	Filters *TaskSearchParams `json:"filters,omitempty"`
+	// Exclude drops ids from the resolved set, for rows unticked after a
+	// select-all. It is ignored unless All is set.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// CRMTaskBulkUpdateParams writes one status, one priority, or both onto every
+// task in a selection. At least one of Status and Priority is required.
+type CRMTaskBulkUpdateParams struct {
+	CRMTaskSelection
+	// Status is one of the TaskStatus* constants.
+	Status *string `json:"status,omitempty"`
+	// Priority is one of the TaskPriority* constants.
+	Priority *string `json:"priority,omitempty"`
+}
+
+// CRMTaskBulkResult reports how many tasks a bulk action touched. It carries
+// the count rather than the rows, because a select-all can cover tens of
+// thousands of tasks.
+type CRMTaskBulkResult struct {
+	Affected int64 `json:"affected"`
+}
+
+// CRM error codes, returned in [Error.Code].
+const (
+	// ErrCodeTooManyTasks is the 400 for a bulk task selection past its cap.
+	ErrCodeTooManyTasks = "too_many_tasks"
+	// ErrCodeInvalidFilter is the 400 for a bulk selection whose filter names
+	// a malformed id.
+	ErrCodeInvalidFilter = "invalid_filter"
+)
+
 // --- pipelines ---
 
 // ListPipelines returns the organization's pipelines with their stages.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) ListPipelines(ctx context.Context, opts ...RequestOption) ([]Pipeline, *Response, error) {
-	return fetchData[Pipeline](ctx, s.client, "crm/pipelines", opts)
+	return fetchSlice[Pipeline](ctx, s.client, "crm/pipelines", opts)
 }
 
 // CreatePipeline creates a pipeline, optionally seeding its stages.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) CreatePipeline(ctx context.Context, params *PipelineCreateParams, opts ...RequestOption) (*Pipeline, *Response, error) {
 	return send[Pipeline](ctx, s.client.post, "crm/pipelines", params, opts)
 }
 
 // GetPipeline retrieves a pipeline and its stages.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) GetPipeline(ctx context.Context, id string, opts ...RequestOption) (*Pipeline, *Response, error) {
 	return fetch[Pipeline](ctx, s.client, "crm/pipelines/"+url.PathEscape(id), opts)
 }
 
 // UpdatePipeline renames a pipeline.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) UpdatePipeline(ctx context.Context, id string, params *PipelineUpdateParams, opts ...RequestOption) (*Pipeline, *Response, error) {
 	return send[Pipeline](ctx, s.client.patch, "crm/pipelines/"+url.PathEscape(id), params, opts)
 }
 
 // DeletePipeline removes a pipeline.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) DeletePipeline(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/pipelines/"+url.PathEscape(id), opts...)
 }
 
 // CreateStage appends a stage to a pipeline.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) CreateStage(ctx context.Context, pipelineID string, params *StageCreateParams, opts ...RequestOption) (*PipelineStage, *Response, error) {
 	return send[PipelineStage](ctx, s.client.post, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages", params, opts)
 }
 
 // UpdateStage modifies a pipeline stage.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) UpdateStage(ctx context.Context, pipelineID, stageID string, params *StageUpdateParams, opts ...RequestOption) (*PipelineStage, *Response, error) {
 	return send[PipelineStage](ctx, s.client.patch, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages/"+url.PathEscape(stageID), params, opts)
 }
 
 // DeleteStage removes a pipeline stage.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) DeleteStage(ctx context.Context, pipelineID, stageID string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/pipelines/"+url.PathEscape(pipelineID)+"/stages/"+url.PathEscape(stageID), opts...)
 }
@@ -422,6 +506,8 @@ func (s *CRMService) DeleteStage(ctx context.Context, pipelineID, stageID string
 
 // ListDeals returns a page of deals, optionally narrowed to one pipeline,
 // stage or status. Rows carry their joined contact and stage.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) ListDeals(ctx context.Context, params *DealListParams, opts ...RequestOption) (*Page[Deal], error) {
 	return listJSON[Deal](ctx, s.client, "crm/deals", params.values(), opts...)
 }
@@ -429,6 +515,8 @@ func (s *CRMService) ListDeals(ctx context.Context, params *DealListParams, opts
 // SearchDeals returns a page of deals matching a faceted filter. Its page
 // limit is capped at 200, twice what [CRMService.ListDeals] allows, and
 // [Pagination.Total] is an exact count over the whole matching set.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) SearchDeals(ctx context.Context, params *DealSearchParams, opts ...RequestOption) (*Page[Deal], error) {
 	if params == nil {
 		params = &DealSearchParams{}
@@ -439,26 +527,36 @@ func (s *CRMService) SearchDeals(ctx context.Context, params *DealSearchParams, 
 }
 
 // DealsSummary aggregates every deal matching the same filter a search takes.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) DealsSummary(ctx context.Context, params *DealSearchParams, opts ...RequestOption) (*DealsSummary, *Response, error) {
 	return send[DealsSummary](ctx, s.client.post, "crm/deals/summary", params, opts)
 }
 
 // CreateDeal opens a new deal.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) CreateDeal(ctx context.Context, params *DealCreateParams, opts ...RequestOption) (*Deal, *Response, error) {
 	return send[Deal](ctx, s.client.post, "crm/deals", params, opts)
 }
 
 // GetDeal retrieves a single deal.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) GetDeal(ctx context.Context, id string, opts ...RequestOption) (*Deal, *Response, error) {
 	return fetch[Deal](ctx, s.client, "crm/deals/"+url.PathEscape(id), opts)
 }
 
 // UpdateDeal modifies a deal, including moving it between stages or closing it.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) UpdateDeal(ctx context.Context, id string, params *DealUpdateParams, opts ...RequestOption) (*Deal, *Response, error) {
 	return send[Deal](ctx, s.client.patch, "crm/deals/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteDeal removes a deal.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) DeleteDeal(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/deals/"+url.PathEscape(id), opts...)
 }
@@ -466,22 +564,31 @@ func (s *CRMService) DeleteDeal(ctx context.Context, id string, opts ...RequestO
 // --- task types ---
 
 // ListTaskTypes returns the organization's task types. The first read seeds a
-// usable default set.
+// usable default set. In provider mode the types come from the connected CRM.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) ListTaskTypes(ctx context.Context, opts ...RequestOption) ([]CRMTaskType, *Response, error) {
 	return fetchData[CRMTaskType](ctx, s.client, "crm/task-types", opts)
 }
 
-// CreateTaskType adds a task type.
+// CreateTaskType adds a task type. In provider mode it is refused with
+// [ErrCodeCRMManagedExternally].
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) CreateTaskType(ctx context.Context, params *TaskTypeCreateParams, opts ...RequestOption) (*CRMTaskType, *Response, error) {
 	return send[CRMTaskType](ctx, s.client.post, "crm/task-types", params, opts)
 }
 
 // UpdateTaskType modifies a task type.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) UpdateTaskType(ctx context.Context, id string, params *TaskTypeUpdateParams, opts ...RequestOption) (*CRMTaskType, *Response, error) {
 	return send[CRMTaskType](ctx, s.client.patch, "crm/task-types/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteTaskType removes a task type. Tasks that used it keep its name.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) DeleteTaskType(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/task-types/"+url.PathEscape(id), opts...)
 }
@@ -490,6 +597,8 @@ func (s *CRMService) DeleteTaskType(ctx context.Context, id string, opts ...Requ
 
 // ListTasks returns a page of CRM tasks, optionally narrowed to one contact,
 // deal, assignee or status.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) ListTasks(ctx context.Context, params *CRMTaskListParams, opts ...RequestOption) (*Page[CRMTask], error) {
 	return listJSON[CRMTask](ctx, s.client, "crm/tasks", params.values(), opts...)
 }
@@ -497,6 +606,8 @@ func (s *CRMService) ListTasks(ctx context.Context, params *CRMTaskListParams, o
 // SearchTasks returns a page of tasks matching a faceted filter. Its page
 // limit is capped at 200, twice what [CRMService.ListTasks] allows, and
 // [Pagination.Total] is an exact count over the whole matching set.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) SearchTasks(ctx context.Context, params *TaskSearchParams, opts ...RequestOption) (*Page[CRMTask], error) {
 	if params == nil {
 		params = &TaskSearchParams{}
@@ -507,26 +618,60 @@ func (s *CRMService) SearchTasks(ctx context.Context, params *TaskSearchParams, 
 }
 
 // TasksSummary aggregates every task matching the same filter a search takes.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) TasksSummary(ctx context.Context, params *TaskSearchParams, opts ...RequestOption) (*TasksSummary, *Response, error) {
 	return send[TasksSummary](ctx, s.client.post, "crm/tasks/summary", params, opts)
 }
 
 // CreateTask opens a new CRM task.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) CreateTask(ctx context.Context, params *CRMTaskCreateParams, opts ...RequestOption) (*CRMTask, *Response, error) {
 	return send[CRMTask](ctx, s.client.post, "crm/tasks", params, opts)
 }
 
 // GetTask retrieves a single CRM task.
+//
+// Requires the READ_CRM API permission.
 func (s *CRMService) GetTask(ctx context.Context, id string, opts ...RequestOption) (*CRMTask, *Response, error) {
 	return fetch[CRMTask](ctx, s.client, "crm/tasks/"+url.PathEscape(id), opts)
 }
 
 // UpdateTask modifies a CRM task.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) UpdateTask(ctx context.Context, id string, params *CRMTaskUpdateParams, opts ...RequestOption) (*CRMTask, *Response, error) {
 	return send[CRMTask](ctx, s.client.patch, "crm/tasks/"+url.PathEscape(id), params, opts)
 }
 
 // DeleteTask removes a CRM task.
+//
+// Requires the WRITE_CRM API permission.
 func (s *CRMService) DeleteTask(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/tasks/"+url.PathEscape(id), opts...)
+}
+
+// BulkUpdateTasks writes one status or priority onto every task in a
+// selection: the ids given, or everything a filter matches. Completing tasks
+// this way records the same completion activity a single update does.
+//
+// Requires the WRITE_CRM API permission.
+func (s *CRMService) BulkUpdateTasks(ctx context.Context, params *CRMTaskBulkUpdateParams, opts ...RequestOption) (*CRMTaskBulkResult, *Response, error) {
+	return send[CRMTaskBulkResult](ctx, s.client.patch, "crm/tasks", params, opts)
+}
+
+// BulkDeleteTasks deletes every task in a selection.
+//
+// Requires the WRITE_CRM API permission.
+func (s *CRMService) BulkDeleteTasks(ctx context.Context, sel *CRMTaskSelection, opts ...RequestOption) (*CRMTaskBulkResult, *Response, error) {
+	if sel == nil {
+		sel = &CRMTaskSelection{}
+	}
+	out := new(CRMTaskBulkResult)
+	resp, err := s.client.call(ctx, http.MethodDelete, "crm/tasks", sel, out, opts)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
 }

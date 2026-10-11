@@ -82,6 +82,8 @@ type Client struct {
 
 	// Integrations manages third-party connections.
 	Integrations *IntegrationService
+	// Salesforce runs the native Salesforce sync on a connected org.
+	Salesforce *SalesforceService
 	// Automations manages event-triggered flows across those connections.
 	Automations *AutomationService
 	// LeadSync manages Google Sheets to contacts sync.
@@ -196,6 +198,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Meetings = (*MeetingService)(&c.common)
 
 	c.Integrations = (*IntegrationService)(&c.common)
+	c.Salesforce = (*SalesforceService)(&c.common)
 	c.Automations = (*AutomationService)(&c.common)
 	c.LeadSync = (*LeadSyncService)(&c.common)
 
