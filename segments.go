@@ -164,8 +164,9 @@ const (
 	// SegmentMaxListValues is the most entries a list condition may hold.
 	SegmentMaxListValues = 200
 	// SegmentMaxMemberBatch is the most contact IDs one SetMembers or
-	// MemberModes call accepts.
-	SegmentMaxMemberBatch = 1000
+	// MemberModes call accepts. A filter selection
+	// ([SegmentService.SetMembersSelection]) may resolve to up to 250,000.
+	SegmentMaxMemberBatch = 10000
 	// SegmentMaxOverrides caps the Overrides listing.
 	SegmentMaxOverrides = 500
 )
@@ -224,6 +225,10 @@ type SegmentFieldSpec struct {
 	Kind  SegmentFieldKind `json:"kind"`
 	// Options lists the accepted Values of an enum field; nil otherwise.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels names enum values for display where the value alone is not
+	// readable, for example "google_workspace". A value missing from it shows
+	// as itself.
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 }
 
 // SegmentCreateParams creates a segment. Name is required; everything else
@@ -347,6 +352,29 @@ func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs [
 		Contacts []string          `json:"contacts"`
 		Mode     SegmentMemberMode `json:"mode"`
 	}{Contacts: contactIDs, Mode: mode}
+	var out struct {
+		Updated int `json:"updated"`
+	}
+	resp, err := s.client.post(ctx, "segments/"+url.PathEscape(id)+"/members", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return out.Updated, resp, nil
+}
+
+// SetMembersSelection is [SegmentService.SetMembers] for a [ContactSelection]:
+// listed ids, or with All set every contact matching the filters (at most
+// 250,000) minus the excluded ids. It returns how many rows changed.
+//
+// Requires [PermWriteContacts].
+func (s *SegmentService) SetMembersSelection(ctx context.Context, id string, sel *ContactSelection, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	body := struct {
+		ContactSelection
+		Mode SegmentMemberMode `json:"mode"`
+	}{Mode: mode}
+	if sel != nil {
+		body.ContactSelection = *sel
+	}
 	var out struct {
 		Updated int `json:"updated"`
 	}
