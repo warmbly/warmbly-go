@@ -112,6 +112,8 @@ type Client struct {
 	WarmupRouting *WarmupRoutingService
 	// Tasks inspects and replays the send-task dead-letter queue.
 	Tasks *TaskService
+	// Placement runs inbox placement tests and batches against seed panels.
+	Placement *PlacementService
 	// AuditLogs reads the organization audit trail.
 	AuditLogs *AuditLogService
 
@@ -212,6 +214,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Deliverability = (*DeliverabilityService)(&c.common)
 	c.WarmupRouting = (*WarmupRoutingService)(&c.common)
 	c.Tasks = (*TaskService)(&c.common)
+	c.Placement = (*PlacementService)(&c.common)
 	c.AuditLogs = (*AuditLogService)(&c.common)
 
 	c.Folders = &GroupService{client: c, name: "folders"}
