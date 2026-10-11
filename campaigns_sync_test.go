@@ -52,9 +52,10 @@ func TestCampaignSyncRouting(t *testing.T) {
 		wantNoBody bool
 	}{
 		{"campaigns.List filters", func() error {
-			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused, Kind: CampaignKindOneTime})
+			// The retired kind filter is no longer sent.
+			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused, Kind: CampaignKindOneTime}) //nolint:staticcheck // asserts the deprecated field is dropped
 			return e
-		}, "GET", "/v1/campaigns", "kind=one_time&status=paused", "", false},
+		}, "GET", "/v1/campaigns", "status=paused", "", false},
 		{"campaigns.Estimate", func() error {
 			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
 				SegmentIDs: []string{"seg_1"}, DailyLimit: Int(40), StartDate: &start,

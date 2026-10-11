@@ -3,6 +3,7 @@ package warmbly
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -105,6 +106,11 @@ type UniboxMessage struct {
 	// presenting the partial text as the whole message.
 	BodyTruncated bool `json:"body_truncated,omitempty"`
 
+	// AnswersMailboxID is the workspace mailbox that sent the email this
+	// message replies to, when that is not the mailbox holding it: a reply
+	// that landed in a shared reply inbox. Set on thread rows only.
+	AnswersMailboxID *string `json:"answers_mailbox_id,omitempty"`
+
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 }
@@ -148,6 +154,12 @@ type UniboxOverview struct {
 	Week          int `json:"week"`
 	Snoozed       int `json:"snoozed"`
 	AwaitingReply int `json:"awaiting_reply"`
+	// Automated counts conversations no person wrote in (notifications,
+	// auto-replies). They are left out of Unread, Today, Week, the inbox
+	// folder and the mailbox and label counts; list them with
+	// [UniboxListParams.Automated].
+	Automated       int `json:"automated"`
+	AutomatedUnread int `json:"automated_unread"`
 	// AwaitingAgentDraft counts threads with a pending inbox-agent draft
 	// waiting for review; see [UniboxService.AgentDrafts].
 	AwaitingAgentDraft int `json:"awaiting_agent_draft"`
@@ -235,8 +247,15 @@ type UniboxListParams struct {
 	// Direction is [DirectionSent] or [DirectionReceived]. Empty returns both.
 	Direction string
 	// Folder narrows to one canonical folder (a Folder* constant). Empty
-	// searches every folder except spam and trash; an unknown value is a 400.
+	// searches the working folders, leaving out spam, trash and archived
+	// conversations; an unknown value is a 400.
 	Folder string
+	// IncludeArchived puts archived conversations back into a search with no
+	// Folder, for an "all mail" view. It is ignored when Folder is set.
+	IncludeArchived bool
+	// Automated set to true lists only conversations no person wrote in;
+	// false leaves them out. Nil returns both.
+	Automated *bool
 	// Unseen restricts to threads with unread messages.
 	Unseen *bool
 	// AwaitingReply restricts to threads whose latest message you sent.
@@ -273,6 +292,10 @@ func (p *UniboxListParams) values() url.Values {
 	setNonEmpty(q, "address", p.Address)
 	setNonEmpty(q, "direction", p.Direction)
 	setNonEmpty(q, "folder", p.Folder)
+	if p.IncludeArchived {
+		q.Set("include_archived", "true")
+	}
+	setBool(q, "automated", p.Automated)
 	setBool(q, "unseen", p.Unseen)
 	setBool(q, "awaiting_reply", p.AwaitingReply)
 	setBool(q, "agent_drafts", p.AgentDrafts)
@@ -309,6 +332,12 @@ type UniboxReplyParams struct {
 	// [SendModeScheduled].
 	SendMode    string     `json:"send_mode,omitempty"`
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	// ForwardMessageID makes the send a forward of that stored message, which
+	// goes out under the body and signature and is filed in the forwarded
+	// message's conversation. InReplyTo is not filled from the thread for a
+	// forward. It needs [PermReadUnibox] and access to the forwarded message's
+	// mailbox.
+	ForwardMessageID string `json:"forward_message_id,omitempty"`
 }
 
 // UniboxComposeParams sends a brand-new outbound email. Unlike a reply it is
@@ -568,6 +597,53 @@ func (s *UniboxService) MarkFolderSeen(ctx context.Context, folder string, seen 
 	return s.client.patch(ctx, "unibox/seen", body, nil, opts...)
 }
 
+// MarkThreadsSeen marks up to 500 whole conversations read or unread, so a
+// caller holding list rows does not have to fetch each thread for its message
+// ids. Each entry is a thread id, or a message id for mail that never got
+// one. The change is relayed to each mailbox's provider.
+//
+// Requires [PermWriteUnibox].
+func (s *UniboxService) MarkThreadsSeen(ctx context.Context, threadIDs []string, seen bool, opts ...RequestOption) (*Response, error) {
+	body := struct {
+		EmailIDs  []string `json:"email_ids"`
+		ThreadIDs []string `json:"thread_ids"`
+		Seen      bool     `json:"seen"`
+	}{EmailIDs: []string{}, ThreadIDs: threadIDs, Seen: seen}
+	return s.client.patch(ctx, "unibox/seen", body, nil, opts...)
+}
+
+// UniboxFolderMove files messages or whole conversations into one folder.
+type UniboxFolderMove struct {
+	// EmailIDs are message ids, at most 500.
+	EmailIDs []string `json:"email_ids"`
+	// ThreadIDs files whole conversations, at most 500. Each entry is a thread
+	// id, or a message id for mail that never got one. Filing by thread is
+	// what keeps a conversation from staying half in the view it was filed
+	// out of.
+	ThreadIDs []string `json:"thread_ids,omitempty"`
+	// Folder is [FolderInbox], [FolderArchive] or [FolderTrash]. Sent,
+	// drafts and spam are the provider's verdicts and are refused with a 400.
+	Folder string `json:"folder"`
+}
+
+// MoveToFolder re-files messages and conversations: archive, delete (trash) or
+// move back to the inbox. The workspace's copy changes first; the move is then
+// relayed to each mailbox that relays folder moves to its provider. The answer
+// echoes the request. Refiling into the folder a message is already in is
+// harmless, so a retry is safe.
+//
+// Requires [PermWriteUnibox].
+func (s *UniboxService) MoveToFolder(ctx context.Context, params *UniboxFolderMove, opts ...RequestOption) (*UniboxFolderMove, *Response, error) {
+	body := UniboxFolderMove{}
+	if params != nil {
+		body = *params
+	}
+	if body.EmailIDs == nil {
+		body.EmailIDs = []string{}
+	}
+	return send[UniboxFolderMove](ctx, s.client.patch, "unibox/folder", body, opts)
+}
+
 // Reply sends a reply into an existing thread.
 func (s *UniboxService) Reply(ctx context.Context, params *UniboxReplyParams, opts ...RequestOption) (*SendResult, *Response, error) {
 	return send[SendResult](ctx, s.client.post, "unibox/reply", params, opts)
@@ -670,10 +746,51 @@ func (s *UniboxService) Snooze(ctx context.Context, threadID string, until time.
 	return send[UniboxSnooze](ctx, s.client.post, "unibox/snooze", body, opts)
 }
 
+// SnoozeThreads hides up to 500 threads until the given time (at most 90
+// days ahead) in one call and returns a snooze per thread. Snoozing an
+// already snoozed thread moves its wake-up time.
+//
+// Requires [PermWriteUnibox].
+func (s *UniboxService) SnoozeThreads(ctx context.Context, threadIDs []string, until time.Time, opts ...RequestOption) ([]UniboxSnooze, *Response, error) {
+	body := struct {
+		ThreadIDs    []string  `json:"thread_ids"`
+		SnoozedUntil time.Time `json:"snoozed_until"`
+	}{ThreadIDs: threadIDs, SnoozedUntil: until}
+	// A single thread is answered with the bare snooze rather than a list.
+	var raw json.RawMessage
+	resp, err := s.client.post(ctx, "unibox/snooze", body, &raw, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	var env struct {
+		Data *[]UniboxSnooze `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, resp, fmt.Errorf("warmbly: decode response body: %w", err)
+	}
+	if env.Data != nil {
+		return *env.Data, resp, nil
+	}
+	var one UniboxSnooze
+	if err := json.Unmarshal(raw, &one); err != nil {
+		return nil, resp, fmt.Errorf("warmbly: decode response body: %w", err)
+	}
+	return []UniboxSnooze{one}, resp, nil
+}
+
 // Unsnooze returns a snoozed thread to the inbox immediately. It is
 // idempotent: unsnoozing a thread that is not snoozed still succeeds.
 func (s *UniboxService) Unsnooze(ctx context.Context, threadID string, opts ...RequestOption) (*Response, error) {
 	q := url.Values{"thread_id": {threadID}}
+	return s.client.delete(ctx, withQuery("unibox/snooze", q), opts...)
+}
+
+// UnsnoozeThreads returns up to 500 snoozed threads to the inbox in one call.
+// Threads that are not snoozed are skipped without error. The API answers 204.
+//
+// Requires [PermWriteUnibox].
+func (s *UniboxService) UnsnoozeThreads(ctx context.Context, threadIDs []string, opts ...RequestOption) (*Response, error) {
+	q := url.Values{"thread_id": {strings.Join(threadIDs, ",")}}
 	return s.client.delete(ctx, withQuery("unibox/snooze", q), opts...)
 }
 
