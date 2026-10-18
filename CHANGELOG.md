@@ -7,7 +7,7 @@ grouped by release and version numbers use semantic versioning.
 
 ## [0.4.0] - 2026-10-11
 
-Syncs the SDK with the v1 API as of server commit 176d3c24: inbox placement, contact imports, lead copies, CRM provider mode, native Salesforce, member resource scoping, OAuth app listings, new realtime events and error codes. Breaking changes: `AuthService.ChangePassword`, `AssistantService.Approve`, `PoolLinkStartParams.RemoteOrganizationID` and the gateway's credential handling.
+Syncs the SDK with the v1 API as of server commit 169376ef9: inbox placement, contact imports, lead copies, CRM provider mode, native Salesforce, Apollo and Clay, member resource scoping, OAuth app listings, new realtime events and error codes. Breaking changes: `AuthService.ChangePassword`, `AssistantService.Approve`, `PoolLinkStartParams.RemoteOrganizationID` and the gateway's credential handling.
 
 ### Changed
 
