@@ -600,3 +600,32 @@ func TestImportCommitDecodesQuality(t *testing.T) {
 		t.Errorf("import result: %+v quality=%+v", res, res.Quality)
 	}
 }
+
+func TestSearchDecodesOutreach(t *testing.T) {
+	c := fixtureClient(t, map[string]string{"/v1/contacts/search": `{"data": [
+	  {"id": "ct_1", "email": "a@example.com",
+	   "outreach": {"sent": 5, "opened": 3, "clicked": 1, "replied": 1, "bounced": 0,
+	     "last_sent_at": "2026-09-01T10:00:00Z", "last_replied_at": "2026-09-02T09:30:00Z"}},
+	  {"id": "ct_2", "email": "b@example.com"}
+	]}`})
+	page, err := c.Contacts.Search(context.Background(), &ContactSearchParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Data) != 2 {
+		t.Fatalf("rows = %d", len(page.Data))
+	}
+	o := page.Data[0].Outreach
+	if o == nil || o.Sent != 5 || o.Opened != 3 || o.Clicked != 1 || o.Replied != 1 || o.Bounced != 0 {
+		t.Fatalf("Outreach = %+v", o)
+	}
+	if o.LastSentAt == nil || o.LastRepliedAt == nil || o.LastOpenedAt != nil {
+		t.Errorf("Outreach timestamps = %+v", o)
+	}
+	if ContactSourceApollo != "apollo" || ContactSourceClay != "clay" {
+		t.Errorf("source constants = %q %q", ContactSourceApollo, ContactSourceClay)
+	}
+	if page.Data[1].Outreach != nil {
+		t.Errorf("absent outreach decoded as %+v", page.Data[1].Outreach)
+	}
+}

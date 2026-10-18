@@ -460,7 +460,22 @@ type AccountError struct {
 	// is something to do.
 	ActionRequired *string   `json:"action_required,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+	// Operation is the mail operation the error was reported against: one of
+	// the [AccountErrorOperationSync], [AccountErrorOperationSend] or
+	// [AccountErrorOperationUnknown] constants. It is empty when the server
+	// did not record one. Identical errors for the same operation are reported
+	// once, newest first, so the list holds no duplicates.
+	Operation string `json:"operation,omitempty"`
 }
+
+// Values of [AccountError.Operation]. Connection errors (server unreachable,
+// connection lost) are the ones that name the failing operation in their
+// title.
+const (
+	AccountErrorOperationUnknown = "unknown"
+	AccountErrorOperationSync    = "sync"
+	AccountErrorOperationSend    = "send"
+)
 
 // AccountDailyUsage is a mailbox's sending against today's caps. The warmup
 // pair is omitted (zero) for a mailbox that is not warming.

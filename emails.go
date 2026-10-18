@@ -1075,7 +1075,8 @@ func (s *EmailService) Verify(ctx context.Context, email string, opts ...Request
 // Send sends a one-off message from the given mailbox, dispatched through the
 // mailbox's assigned worker. It requires the send-campaigns scope and an
 // organization. Pass [WithIdempotencyKey] when you may retry, so a retried
-// call cannot send twice.
+// call cannot send twice. A suppressed recipient fails the call with a 400
+// whose code is "recipient_suppressed".
 func (s *EmailService) Send(ctx context.Context, id string, params *SendEmailParams, opts ...RequestOption) (*SendResult, *Response, error) {
 	return send[SendResult](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/send", params, opts)
 }
