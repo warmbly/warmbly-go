@@ -21,9 +21,15 @@ Syncs the SDK with the v1 API as of server commit 176d3c24: inbox placement, con
 - `Error.Temporary` reports false for `ai_not_configured`, `slack_not_configured` and `mailbox_provider_not_configured`, which a retry cannot fix. It reports true for `salesforce_unreachable`, which the server sends as a 400, so the client retries it like a 5xx.
 - Step analytics `Position` is 1-based. `ContactBulkUpdateParams.Contacts` and `ContactVerificationParams.Contacts` are omitted when nil.
 - Realtime: the gateway accepts an API key, an OAuth token or the ticket from `Meta.GatewayTicket`, not a bare session token. Session callers creating API keys, transferring a workspace or scheduling its deletion need `Auth.Reauth` first (`reauth_required`).
+- `UniboxService.Reply`, `Compose` and `EmailService.Send` refuse a suppressed recipient with a 400 (`recipient_suppressed`); manual-send fair-use limits are enforced at dispatch, not on the call. Gateway docs now state that realtime limits are per user (highest value across workspaces, cached up to five minutes).
 
 ### Added
 
+- `ApolloService` (`client.Apollo`) for the Apollo integration: `Overview`, `ReplaceKey`, `Lists`, `PreviewImport`, import source CRUD and `RunImportSource`, and `ListEnrichments`, `StartEnrichment`, `GetEnrichment`. `ClayService` (`client.Clay`) with `Get` and `Update`. The Clay inbound webhook is authenticated by the secret in its URL and is not wrapped.
+- `ProviderApollo`, `ProviderClay`, `ActionClaySendRow`, and `ContactSourceApollo`, `ContactSourceClay`, `ContactSourceCRMSync`.
+- `AuthService.ReauthMethods`, `BeginReauthPasskey`, `FinishReauthPasskey`, `BeginReauthSSO` and `FinishReauthSSO` for confirming a session by passkey or linked identity. The native-app ID-token confirmation is not wrapped.
+- `ErrCodeReauthIdentityMismatch`, `ErrCodeReauthExpired`, `ErrCodeAppAttestFailed`, `ErrCodeAppAttestKeyUnknown`, `ErrCodeAppAttestUnavailable`, `ErrCodeRecipientSuppressed`, `ErrCodePoolLinkMailboxConflict`.
+- `Contact.Outreach` (`ContactOutreach`), filled by `ContactService.Search`; `AccountError.Operation` with the `AccountErrorOperation*` constants.
 - `client.Placement`: inbox placement tests and batches (create, preview, list, get, cancel, senders), seed inboxes, `Overview` and `Coverage`. Campaign placement monitors (`PlacementMonitor`, `SetPlacementMonitor`, `DeletePlacementMonitor`).
 - Campaign lead copies and holds: `LeadCC`, `SetLeadCC`, `LeadCCSuggestions`, `LeadHold`, `PauseLead`, `ResumeLead`, and `SendPlan`. `Campaign.EffectiveTimezone`, `EntryDelayMinutes`, `Step.ThreadReply` and the full day-by-day `Estimate` projection.
 - Background contact imports on `Contacts`: `CreateImport`, `ListImports`, `GetImport`, `SaveImportDraft`, `AnalyzeImport`, `StartImport`, `CancelImport`, `DownloadImportFailures`; `LookupSender`; select-all `ContactSelection` for bulk update, verification, delete, research, segment members and integration pushes.
