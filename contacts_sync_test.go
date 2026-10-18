@@ -708,6 +708,8 @@ func TestContactDecodesHostHoldAndCC(t *testing.T) {
 	}
 	if counts.Paused != 2 || counts.Providers.Google != 4 || counts.Providers.Undetected != 1 {
 		t.Errorf("counts = %+v", counts)
+	}
+}
 
 func TestSearchDecodesOutreach(t *testing.T) {
 	c := fixtureClient(t, map[string]string{"/v1/contacts/search": `{"data": [
