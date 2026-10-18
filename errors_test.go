@@ -259,3 +259,33 @@ func TestTemporaryTreatsMissingFeaturesAsPermanent(t *testing.T) {
 		t.Error("a vendor rate limit should stay temporary")
 	}
 }
+
+// TestNewErrorCodesMatchWire pins the literal wire values and checks that none
+// of the conditions is classed as transient.
+func TestNewErrorCodesMatchWire(t *testing.T) {
+	cases := []struct {
+		code   string
+		wire   string
+		status int
+	}{
+		{ErrCodeReauthIdentityMismatch, "reauth_identity_mismatch", 400},
+		{ErrCodeReauthExpired, "reauth_expired", 400},
+		{ErrCodeAppAttestFailed, "app_attest_failed", 400},
+		{ErrCodeAppAttestKeyUnknown, "app_attest_key_unknown", 400},
+		{ErrCodeAppAttestUnavailable, "app_attest_unavailable", 404},
+		{ErrCodeRecipientSuppressed, "recipient_suppressed", 400},
+		{ErrCodePoolLinkMailboxConflict, "pool_link_mailbox_conflict", 409},
+	}
+	for _, tc := range cases {
+		if tc.code != tc.wire {
+			t.Errorf("constant = %q, want %q", tc.code, tc.wire)
+		}
+		e := &Error{StatusCode: tc.status, Code: tc.wire}
+		if !e.HasCode(tc.code) {
+			t.Errorf("HasCode(%q) = false", tc.code)
+		}
+		if e.Temporary() {
+			t.Errorf("%s: Temporary() = true, want false", tc.wire)
+		}
+	}
+}

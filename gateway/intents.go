@@ -4,10 +4,11 @@ package gateway
 // Declare them with [WithIntents]; declaring none delivers everything the
 // credential is permitted to see.
 //
-// Matching is a plain substring test. The server upper-cases each token and the
-// event type and collapses ".", ":", "-" and whitespace to "_" before
-// comparing, so case and separators do not matter, but nothing else is
-// normalized. [IntentCampaign] therefore covers CAMPAIGN_STARTED,
+// Matching is a plain substring test. The server normalizes each token and the
+// event type the same way (a name already in UPPER_SNAKE_CASE is used as is;
+// anything else is upper-cased and has its runs of ".", ":", "-" and
+// whitespace collapsed to "_") before comparing, so case and separators do not
+// matter, but nothing else is normalized. [IntentCampaign] therefore covers CAMPAIGN_STARTED,
 // CAMPAIGN_PROGRESS and every other CAMPAIGN_* event, and an intent can be as
 // narrow as you like: "CAMPAIGN_STARTED" is a valid intent, and so is any other
 // fragment of an event type.

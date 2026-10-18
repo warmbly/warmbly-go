@@ -253,6 +253,20 @@ const (
 	ErrCodeReauthLimited = "reauth_limited"
 	// ErrCodeReauthNoFactor is a 400: the account has neither a password nor two-factor authentication, so there is nothing to confirm with.
 	ErrCodeReauthNoFactor = "reauth_no_factor"
+	// ErrCodeReauthIdentityMismatch is a 400: the Google, Apple or SSO account verified during a confirmation is not the one linked to this account.
+	ErrCodeReauthIdentityMismatch = "reauth_identity_mismatch"
+	// ErrCodeReauthExpired is a 400: a confirmation's code or nonce expired or was already used. Start the confirmation again.
+	ErrCodeReauthExpired = "reauth_expired"
+	// ErrCodeAppAttestFailed is a 400: the native app's App Attest proof (used in place of the captcha) did not verify. Fetch a fresh challenge and prove again.
+	ErrCodeAppAttestFailed = "app_attest_failed"
+	// ErrCodeAppAttestKeyUnknown is a 400: the App Attest key id was never registered on this server. Register the key again, then retry.
+	ErrCodeAppAttestKeyUnknown = "app_attest_key_unknown"
+	// ErrCodeAppAttestUnavailable is a 404: the App Attest routes on an instance that has App Attest turned off.
+	ErrCodeAppAttestUnavailable = "app_attest_unavailable"
+	// ErrCodeRecipientSuppressed is a 400: an email send or unibox reply/compose named a to, cc or bcc address on the workspace suppression list, directly or through its domain. Nothing was queued. A unibox forward is never refused for this.
+	ErrCodeRecipientSuppressed = "recipient_suppressed"
+	// ErrCodePoolLinkMailboxConflict is a 409: enrollment into Warmbly Cloud found the address already connected there without an association for this local mailbox. Do not delete or re-enroll; contact support.
+	ErrCodePoolLinkMailboxConflict = "pool_link_mailbox_conflict"
 	// ErrCodeAdminMFARequired is a 403: an admin route was reached by a session that did not present a second factor.
 	ErrCodeAdminMFARequired = "admin_mfa_required"
 	// ErrCodePasswordChangedSignInAgain is a 409: the new password was stored but the calling device could not be given a new session. Every earlier token is invalid; sign in again.

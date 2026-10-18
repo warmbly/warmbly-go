@@ -463,6 +463,12 @@ type ResumeFailed struct {
 
 // Rate-limiter categories carried in [RateLimited.Category]. Each is a
 // separate per-minute budget, allowing a burst of 1.5x its figure.
+//
+// The budgets and the concurrent-connection cap belong to the user, not to a
+// workspace. A user in several workspaces gets the highest figure across their
+// subscriptions rather than the sum, an enterprise custom limit overrides the
+// plan's, and the server caches the resolved limits for up to five minutes, so
+// a plan change can take that long to show.
 const (
 	// RateLimitCategoryMessage is server-to-client delivery (120/minute by
 	// default). Events over budget are dropped, not queued.

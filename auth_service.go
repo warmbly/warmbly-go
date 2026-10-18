@@ -1125,6 +1125,103 @@ func (s *AuthService) Reauth(ctx context.Context, password, code string, opts ..
 	return time.Duration(out.ValidForSeconds) * time.Second, resp, nil
 }
 
+// ReauthProvider is a linked identity that can confirm in a browser window.
+type ReauthProvider struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// ReauthMethods lists every way the account can confirm it is the holder.
+type ReauthMethods struct {
+	Password bool `json:"password"`
+	TOTP     bool `json:"totp"`
+	Passkey  bool `json:"passkey"`
+	// Providers run in a browser window ([AuthService.BeginReauthSSO]).
+	Providers []ReauthProvider `json:"providers"`
+	// NativeProviders take an ID token from a native app; the SDK has no call
+	// for them.
+	NativeProviders []string `json:"native_providers"`
+	// ValidForSeconds is how long a confirmation lasts.
+	ValidForSeconds int `json:"valid_for_seconds"`
+}
+
+// ReauthMethods reports which confirmations the account can use, so a client
+// offers only those. Session only.
+func (s *AuthService) ReauthMethods(ctx context.Context, opts ...RequestOption) (*ReauthMethods, *Response, error) {
+	return fetch[ReauthMethods](ctx, s.client, "auth/reauth/methods", opts)
+}
+
+// reauthDuration turns a confirmation answer into its window.
+func reauthDuration(out struct {
+	ValidForSeconds int `json:"valid_for_seconds"`
+}) time.Duration {
+	return time.Duration(out.ValidForSeconds) * time.Second
+}
+
+// BeginReauthPasskey asks for one of the account's own passkeys and returns
+// the raw WebAuthn credential-request options for the authenticator. Hand the
+// authenticator's assertion to [AuthService.FinishReauthPasskey]. It fails
+// when the account has no usable passkey. Session only.
+func (s *AuthService) BeginReauthPasskey(ctx context.Context, opts ...RequestOption) (json.RawMessage, *Response, error) {
+	var out struct {
+		Options json.RawMessage `json:"options"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth/passkey/begin", nil, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Options, resp, nil
+}
+
+// FinishReauthPasskey verifies the assertion from [AuthService.BeginReauthPasskey],
+// stamps the session and returns how long the confirmation lasts. Session only.
+func (s *AuthService) FinishReauthPasskey(ctx context.Context, assertion json.RawMessage, opts ...RequestOption) (time.Duration, *Response, error) {
+	body := struct {
+		Credential json.RawMessage `json:"credential"`
+	}{Credential: assertion}
+	var out struct {
+		ValidForSeconds int `json:"valid_for_seconds"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth/passkey/finish", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return reauthDuration(out), resp, nil
+}
+
+// BeginReauthSSO starts a provider authorization for an identity linked to the
+// account (an id from [ReauthMethods.Providers]). Open the returned URL in a
+// browser and keep the [SSORedirect.Binding]; the provider's callback lands on
+// the dashboard, which yields the single-use code for [AuthService.FinishReauthSSO].
+// A different account at the provider fails with [ErrCodeReauthIdentityMismatch].
+// Session only.
+func (s *AuthService) BeginReauthSSO(ctx context.Context, provider string, opts ...RequestOption) (*SSORedirect, *Response, error) {
+	body := struct {
+		Provider string `json:"provider"`
+	}{Provider: provider}
+	return send[SSORedirect](ctx, s.client.post, "auth/reauth/sso/begin", body, opts)
+}
+
+// FinishReauthSSO redeems the callback's code with the binding from
+// [AuthService.BeginReauthSSO], stamps the session and returns how long the
+// confirmation lasts. An expired or already used code answers
+// [ErrCodeReauthExpired]; a wrong binding answers [ErrCodeSSOWrongBrowser] and
+// leaves the code for its rightful owner. Session only.
+func (s *AuthService) FinishReauthSSO(ctx context.Context, code, binding string, opts ...RequestOption) (time.Duration, *Response, error) {
+	body := struct {
+		Code    string `json:"code"`
+		Binding string `json:"binding"`
+	}{Code: code, Binding: binding}
+	var out struct {
+		ValidForSeconds int `json:"valid_for_seconds"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth/sso/finish", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return reauthDuration(out), resp, nil
+}
+
 // SSOLink finishes a federated sign-in that stopped with
 // [Session.LinkRequired]: it takes the pending token and the existing
 // account's password, attaches the provider identity and signs in. An account
