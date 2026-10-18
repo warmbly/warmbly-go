@@ -18,6 +18,12 @@ var bareArrayPaths = map[string]bool{
 	"/v1/auth/passkey/credentials": true,
 }
 
+// bareArrayGets are paths whose GET answers with a bare array while their
+// other methods answer with an object.
+var bareArrayGets = map[string]bool{
+	"/v1/crm/pipelines": true,
+}
+
 // routingClient records the method, path and query of the last request and
 // answers with a body every envelope shape in the SDK can decode: a page, a
 // data list, and the handful of single-key wrappers.
@@ -34,6 +40,7 @@ func routingClient(t *testing.T, got *recordedRequest) *Client {
 
 		// A few endpoints return a bare array; everything else is an envelope.
 		if bareArrayPaths[r.URL.Path] ||
+			(r.Method == http.MethodGet && bareArrayGets[r.URL.Path]) ||
 			strings.HasSuffix(r.URL.Path, "/steps") ||
 			strings.HasSuffix(r.URL.Path, "/move") {
 			_, _ = w.Write([]byte(`[]`))

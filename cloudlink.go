@@ -12,8 +12,12 @@ import (
 // add Google or Microsoft mailboxes through Warmbly's own OAuth apps.
 //
 // Only warmup moves to the cloud. Campaigns, contacts and the inbox stay on
-// the instance. The link itself is a property of the instance, not of a
-// workspace, so an instance holds at most one.
+// the instance. A link belongs to one workspace on each side: every call acts
+// on the session's workspace, which holds at most one link, and one cloud
+// workspace serves one instance workspace. An instance linked before
+// per-workspace links keeps a legacy link shared by all its workspaces,
+// reported by [CloudLinkStatus.LegacyConnected] and ended with
+// [CloudLinkService.DisconnectLegacy].
 //
 // Connecting is a device-code handshake driven from here:
 // [CloudLinkService.Connect] asks the cloud for a code and returns what to
@@ -21,11 +25,12 @@ import (
 // [CloudLinkService.WaitForConnect] polls until the instance has its token.
 //
 // Every route is session-only (a token from [AuthService.Login], never an API
-// key) and needs an active workspace on the session. Reads are open to any
-// member, since no secret travels; connecting, polling and disconnecting are
-// a settings change and need the manage-settings permission; enrolling,
-// pausing, resuming, adopting and the OAuth sign-in are mailbox changes and
-// need the manage-emails permission.
+// key) and needs an active workspace on the session. Reading the link and its
+// mailboxes, enrolling, pausing, resuming, participation and the OAuth sign-in
+// need the manage-emails permission. Connecting, polling, disconnecting and
+// listing or adopting cloud workspace mailboxes are operator actions: they
+// need an instance administrator with the admin manage-settings permission
+// (adopting also needs manage-emails).
 //
 // On a deployment without the cloud link (the hosted product itself, or an
 // instance built without it) every route answers 501 Not Implemented.
@@ -34,6 +39,9 @@ type CloudLinkService service
 // CloudLinkConnection is the instance's link to a Warmbly Cloud workspace.
 // The instance token is never serialized.
 type CloudLinkConnection struct {
+	// OrganizationID is the instance workspace the link belongs to; nil for
+	// a legacy link shared by the whole instance.
+	OrganizationID *string `json:"organization_id,omitempty"`
 	// CloudURL is the Warmbly Cloud API the instance is linked to.
 	CloudURL string `json:"cloud_url"`
 	// InstanceID is the instance's ID on the cloud, as
@@ -48,12 +56,18 @@ type CloudLinkConnection struct {
 	// LastError the failure from the most recent attempt, if it failed.
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
+	// DisconnectPending is set while a disconnect the cloud has not yet
+	// confirmed is being retried.
+	DisconnectPending bool `json:"disconnect_pending,omitempty"`
 }
 
 // CloudLinkStatus is the dashboard's view of the link.
 type CloudLinkStatus struct {
-	// Connected reports whether the instance holds a link at all. Link is
-	// filled from the local row whenever it does.
+	// LegacyConnected reports that the instance still holds a legacy link
+	// shared by all its workspaces.
+	LegacyConnected bool `json:"legacy_connected"`
+	// Connected reports whether the session's workspace is linked. Link is
+	// filled from the local row whenever it is.
 	Connected bool                 `json:"connected"`
 	Link      *CloudLinkConnection `json:"link,omitempty"`
 	// Info is the cloud's own status document for this instance, including
@@ -120,7 +134,29 @@ type CloudLinkMailbox struct {
 	// count, 7-day totals). Nil when not enrolled or when the cloud could not
 	// be reached for the listing.
 	Cloud *PoolLinkMailboxState `json:"cloud,omitempty"`
+	// Legacy marks a mailbox enrolled through the instance-wide legacy link.
+	Legacy bool `json:"legacy"`
+	// EnrollmentState is one of the CloudEnrollment* constants while the
+	// mailbox is enrolled.
+	EnrollmentState string `json:"enrollment_state,omitempty"`
+	// StandingObservedAt is when the cloud last reported the mailbox's
+	// warmup standing. The instance's own send gates follow that standing
+	// only while it is fresh.
+	StandingObservedAt *time.Time `json:"standing_observed_at,omitempty"`
 }
+
+// Enrollment states returned in [CloudLinkMailbox.EnrollmentState].
+const (
+	// CloudEnrollmentActive is a mailbox the cloud confirmed it warms.
+	CloudEnrollmentActive = "active"
+	// CloudEnrollmentPendingEnroll is an enrollment the cloud has not yet
+	// confirmed.
+	CloudEnrollmentPendingEnroll = "pending_enroll"
+	// CloudEnrollmentPendingRemove is a removal the cloud has not yet
+	// confirmed. Pausing, resuming and participation changes answer not found
+	// meanwhile.
+	CloudEnrollmentPendingRemove = "pending_remove"
+)
 
 // CloudLinkOAuthStart is the handle on a Google or Microsoft consent brokered
 // by the cloud: open URL for the operator, then redeem Session with
@@ -131,8 +167,9 @@ type CloudLinkOAuthStart struct {
 	Session string `json:"session"`
 }
 
-// Status reports whether the instance is linked, the cloud's view of it when
-// reachable, and the default cloud URL. Open to any member.
+// Status reports whether the session's workspace is linked, the cloud's view
+// of it when reachable, whether a legacy instance-wide link remains, and the
+// default cloud URL. Needs the manage-emails permission.
 func (s *CloudLinkService) Status(ctx context.Context, opts ...RequestOption) (*CloudLinkStatus, *Response, error) {
 	return fetch[CloudLinkStatus](ctx, s.client, "cloud-link", opts)
 }
@@ -142,8 +179,10 @@ func (s *CloudLinkService) Status(ctx context.Context, opts ...RequestOption) (*
 // show the operator. Follow up with [CloudLinkService.WaitForConnect].
 //
 // cloudURL must be https (loopback http is allowed for local development).
-// An instance that is already linked fails with "cloud_link_connected":
-// disconnect first. Needs the manage-settings permission.
+// A workspace that is already linked fails with "cloud_link_connected":
+// disconnect first. A cloud that predates per-workspace links fails with
+// "cloud_link_upgrade_required". Needs an instance administrator with the
+// admin manage-settings permission.
 func (s *CloudLinkService) Connect(ctx context.Context, cloudURL string, opts ...RequestOption) (*CloudLinkPendingConnect, *Response, error) {
 	body := struct {
 		CloudURL string `json:"cloud_url,omitempty"`
@@ -153,7 +192,8 @@ func (s *CloudLinkService) Connect(ctx context.Context, cloudURL string, opts ..
 
 // PollConnect asks the cloud once whether the pending code has been
 // approved, and on approval stores the instance token and returns the new
-// link. Needs the manage-settings permission.
+// link. Needs an instance administrator with the admin manage-settings
+// permission.
 //
 // With no handshake in progress it fails with "cloud_link_no_pending" (or,
 // if another session finished the handshake meanwhile, answers approved with
@@ -192,8 +232,10 @@ func (s *CloudLinkService) WaitForConnect(ctx context.Context, pending *CloudLin
 // credentials are deleted on the cloud and local warmup takes over; mailboxes
 // signed in through Warmbly Cloud are removed from the instance altogether,
 // since they cannot send without the link (they stay in the cloud
-// workspace). Needs the manage-settings permission; recorded in the audit
-// log.
+// workspace). It ends the session's workspace link; when only a legacy
+// instance-wide link exists it fails with "cloud_link_workspace_required"
+// (use [CloudLinkService.DisconnectLegacy]). Needs an instance administrator
+// with the admin manage-settings permission; recorded in the audit log.
 //
 // The cloud must confirm (or already have dropped) the link before local
 // state goes, so a cloud outage fails the call rather than leaving managed
@@ -202,12 +244,20 @@ func (s *CloudLinkService) Disconnect(ctx context.Context, opts ...RequestOption
 	return s.client.delete(ctx, "cloud-link", opts...)
 }
 
+// DisconnectLegacy ends the legacy link shared by every workspace on the
+// instance, the one [CloudLinkStatus.LegacyConnected] reports, with the same
+// effects as [CloudLinkService.Disconnect] for every workspace's mailboxes.
+// Needs an instance administrator with the admin manage-settings permission.
+func (s *CloudLinkService) DisconnectLegacy(ctx context.Context, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, withQuery("cloud-link", url.Values{"legacy": {"true"}}), opts...)
+}
+
 // --- enrollment of the instance's own mailboxes ---
 
 // ListMailboxes lists every active mailbox in the session's workspace with
-// its pool enrollment and, for enrolled ones, the cloud's view. Open to any
-// member. The listing makes one round trip to the cloud; when that fails the
-// rows still come back, with [CloudLinkMailbox.Cloud] nil.
+// its pool enrollment and, for enrolled ones, the cloud's view. Needs the
+// manage-emails permission. The listing makes one round trip to the cloud;
+// when that fails the rows still come back, with [CloudLinkMailbox.Cloud] nil.
 func (s *CloudLinkService) ListMailboxes(ctx context.Context, opts ...RequestOption) ([]CloudLinkMailbox, *Response, error) {
 	return fetchData[CloudLinkMailbox](ctx, s.client, "cloud-link/mailboxes", opts)
 }
@@ -248,6 +298,16 @@ func (s *CloudLinkService) ResumeMailbox(ctx context.Context, id string, opts ..
 	return s.lifecycle(ctx, id, "resume", opts)
 }
 
+// SetParticipation sets how enrolled mailbox id takes part in diagnostic test
+// traffic on the cloud and returns the updated row. The body is the whole
+// desired setting: Mode is [TestParticipationDiagnostic] or
+// [TestParticipationOff] (off with Send and Receive false), and negative caps
+// are refused with a 400. A mailbox that is not enrolled fails with not found.
+// Needs the manage-emails permission; recorded in the audit log.
+func (s *CloudLinkService) SetParticipation(ctx context.Context, id string, params *DiagnosticParticipation, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
+	return send[CloudLinkMailbox](ctx, s.client.patch, "cloud-link/mailboxes/"+url.PathEscape(id)+"/participation", params, opts)
+}
+
 func (s *CloudLinkService) lifecycle(ctx context.Context, id, action string, opts []RequestOption) (*CloudLinkMailbox, *Response, error) {
 	return send[CloudLinkMailbox](ctx, s.client.post, "cloud-link/mailboxes/"+url.PathEscape(id)+"/"+action, nil, opts)
 }
@@ -259,7 +319,8 @@ func (s *CloudLinkService) lifecycle(ctx context.Context, id, action string, opt
 // [ProviderGmail] or [ProviderOutlook]. Open the returned URL for the
 // operator; the consent window returns to the instance's dashboard, which
 // then calls [CloudLinkService.FinishOAuth] with the session. Needs the
-// manage-emails permission and a live link.
+// manage-emails permission and a live link; a cloud that cannot record the
+// consent durably fails with "cloud_link_managed_protocol".
 func (s *CloudLinkService) StartOAuth(ctx context.Context, provider string, opts ...RequestOption) (*CloudLinkOAuthStart, *Response, error) {
 	body := struct {
 		Provider string `json:"provider"`
@@ -284,8 +345,9 @@ func (s *CloudLinkService) FinishOAuth(ctx context.Context, session string, opts
 }
 
 // ListWorkspaceMailboxes lists the Google and Microsoft mailboxes connected
-// directly on the linked cloud workspace that this instance may adopt. Open
-// to any member; fails with "cloud_link_not_connected" without a link.
+// directly on the linked cloud workspace that this instance may adopt. Needs
+// an instance administrator with the admin manage-settings permission; fails
+// with "cloud_link_not_connected" without a link.
 func (s *CloudLinkService) ListWorkspaceMailboxes(ctx context.Context, opts ...RequestOption) ([]PoolLinkWorkspaceMailbox, *Response, error) {
 	return fetchData[PoolLinkWorkspaceMailbox](ctx, s.client, "cloud-link/workspace-mailboxes", opts)
 }
@@ -295,8 +357,10 @@ func (s *CloudLinkService) ListWorkspaceMailboxes(ctx context.Context, opts ...R
 // [CloudLinkService.FinishOAuth]: the cloud keeps the sign-in, the instance
 // gets a credential-free mirror, returned here. A workspace mailbox can be
 // linked to one instance at a time; a second adoption fails with
-// "pool_link_already_adopted". Needs the manage-emails permission; recorded
-// in the audit log.
+// "pool_link_already_adopted", and a cloud that cannot record the consent
+// durably fails with "cloud_link_managed_protocol". Needs an instance
+// administrator with the admin manage-settings permission plus the
+// manage-emails permission; recorded in the audit log.
 func (s *CloudLinkService) AdoptWorkspaceMailbox(ctx context.Context, id string, opts ...RequestOption) (*Email, *Response, error) {
 	return send[Email](ctx, s.client.post, "cloud-link/workspace-mailboxes/"+url.PathEscape(id)+"/adopt", nil, opts)
 }

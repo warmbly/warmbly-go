@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -54,8 +55,8 @@ const (
 	OrgPermTransferOwnership
 	// OrgPermManageAPIKeys allows managing API keys and OAuth applications.
 	OrgPermManageAPIKeys
-	// OrgPermUseIntegrations allows operating connected integrations — pushing
-	// records, running automations — without granting full settings access.
+	// OrgPermUseIntegrations allows operating connected integrations (pushing
+	// records, running automations) without granting full settings access.
 	OrgPermUseIntegrations
 	// OrgPermUseAI allows using the AI features, which spend the shared credit
 	// balance.
@@ -64,6 +65,63 @@ const (
 
 // OrgPermAll is every organization permission, which is what the owner holds.
 const OrgPermAll uint16 = 0xFFFF
+
+// OrgPermRestrictedMask is the most a restricted member's roles can grant
+// ([AccessScopeRestricted]): viewing campaigns and analytics and using the
+// unified inbox, over the resources granted to them.
+const OrgPermRestrictedMask = OrgPermViewCampaigns | OrgPermViewAnalytics | OrgPermAccessUnibox
+
+// Resource scopes returned in [Member.AccessScope] and [MemberAccess.Scope].
+const (
+	// AccessScopeWorkspace applies the member's roles to every resource in
+	// the workspace. It is the default, and the owner always has it.
+	AccessScopeWorkspace = "workspace"
+	// AccessScopeRestricted applies the member's roles only to the campaigns,
+	// campaign folders and mailboxes granted in [MemberAccess], and caps the
+	// roles at [OrgPermRestrictedMask].
+	AccessScopeRestricted = "restricted"
+)
+
+// MaxAccessGrants is the most entries each grant list in [MemberAccess] may
+// hold.
+const MaxAccessGrants = 500
+
+// MemberAccess is which resources a member's roles apply to, set on a member
+// with [OrganizationService.SetMemberAccess] or on an invitation with
+// [InviteMemberParams.Access].
+type MemberAccess struct {
+	// Scope is [AccessScopeWorkspace] or [AccessScopeRestricted]. With the
+	// workspace scope the grant lists are empty.
+	Scope string `json:"scope"`
+	// CampaignFolderIDs grants every campaign a folder holds at the time the
+	// access is set; later additions to the folder are not granted.
+	CampaignFolderIDs []string `json:"campaign_folder_ids"`
+	CampaignIDs       []string `json:"campaign_ids"`
+	// EmailAccountIDs grants mailboxes. Campaign access never grants the
+	// mailboxes a campaign sends from; see
+	// [OrganizationService.SuggestedSenders].
+	EmailAccountIDs []string `json:"email_account_ids"`
+}
+
+// Restricted reports whether the access is a restricted scope.
+func (a *MemberAccess) Restricted() bool { return a != nil && a.Scope == AccessScopeRestricted }
+
+// SuggestedSender is a mailbox the campaigns about to be granted send from,
+// offered for review because campaign access does not grant it.
+type SuggestedSender struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	// CampaignIDs are the requested campaigns this mailbox sends for.
+	CampaignIDs []string `json:"campaign_ids"`
+}
+
+// Workspace categories returned in [Organization.Category].
+const (
+	OrganizationCategoryStandard = "standard"
+	// OrganizationCategoryTest marks a workspace set up for testing.
+	OrganizationCategoryTest = "test"
+)
 
 // Built-in role names returned in [Member.Role].
 const (
@@ -96,6 +154,13 @@ type User struct {
 
 	ReferralSource        *string    `json:"referral_source,omitempty"`
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// ProductTourCompletedAt is when the dashboard's product tour was
+	// finished or skipped ([AuthService.CompleteProductTour]); nil shows it.
+	ProductTourCompletedAt *time.Time `json:"product_tour_completed_at,omitempty"`
+	// SessionMFAVerified reports whether the session making the request
+	// presented a second factor (TOTP, a recovery code or a passkey). Only on
+	// the caller's own profile.
+	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	MaxOrganizations int  `json:"max_organizations,omitempty"`
 	FreeTrialUsed    bool `json:"free_trial_used,omitempty"`
@@ -113,8 +178,8 @@ type User struct {
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
 	DeletionScheduledFor *time.Time `json:"deletion_scheduled_for,omitempty"`
 
-	// Folders, Tags and Categories are the user's label groups, returned on
-	// their own profile.
+	// Folders, Tags and Categories are the label sets of the workspace the
+	// session has selected, returned on the caller's own profile.
 	Folders    []Group `json:"folders,omitempty"`
 	Tags       []Group `json:"tags,omitempty"`
 	Categories []Group `json:"categories,omitempty"`
@@ -136,6 +201,13 @@ type Organization struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
+	// Category is one of the OrganizationCategory* constants.
+	Category string `json:"category"`
+	// Timezone is the workspace's IANA zone: the default for a new campaign
+	// schedule, and the clock a mailbox without its own timezone keeps its
+	// warmup and working hours in. Empty means not set.
+	Timezone string `json:"timezone"`
+
 	// DeletionScheduledFor is set while the workspace is pending a hard delete.
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
 	DeletionScheduledFor *time.Time `json:"deletion_scheduled_for,omitempty"`
@@ -148,7 +220,8 @@ type Organization struct {
 	PresenceShowActivity bool `json:"presence_show_activity"`
 
 	// ProductDescription, ICPNotes and VoiceProfile are the AI voice profile:
-	// organization grounding folded into every AI writing surface.
+	// organization grounding folded into every AI writing surface. They are
+	// left out (and read as empty) for a restricted member.
 	ProductDescription string `json:"product_description"`
 	ICPNotes           string `json:"icp_notes"`
 	VoiceProfile       string `json:"voice_profile"`
@@ -190,6 +263,8 @@ type OrganizationCounts struct {
 	TotalCampaigns  int `json:"total_campaigns"`
 	ActiveCampaigns int `json:"active_campaigns"`
 	TotalContacts   int `json:"total_contacts"`
+	// TotalMembers is left out (and reads zero) for a restricted member, whose
+	// other counts cover only the resources granted to them.
 	TotalMembers    int `json:"total_members"`
 	EmailAccounts   int `json:"email_accounts"`
 	EmailsSentToday int `json:"emails_sent_today"`
@@ -274,6 +349,12 @@ type Member struct {
 	InvitedAt  time.Time  `json:"invited_at"`
 	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
 
+	// AccessScope is [AccessScopeWorkspace] or [AccessScopeRestricted].
+	AccessScope string `json:"access_scope"`
+	// Access is the full grant, filled where the grants are listed (as on
+	// [OrganizationService.SetMemberAccess]).
+	Access *MemberAccess `json:"access,omitempty"`
+
 	User         *User         `json:"user,omitempty"`
 	Organization *Organization `json:"organization,omitempty"`
 
@@ -293,6 +374,12 @@ func (m *Member) Can(perms uint16) bool {
 
 // IsOwner reports whether the member owns the organization.
 func (m *Member) IsOwner() bool { return m.Role == RoleOwner }
+
+// IsRestricted reports whether the member reaches only the resources granted
+// to them.
+func (m *Member) IsRestricted() bool {
+	return !m.IsOwner() && m.AccessScope == AccessScopeRestricted
+}
 
 // Role is an organization-scoped custom role: a named permission set members
 // are assigned to. Editing a role writes through to every member holding it.
@@ -340,6 +427,8 @@ type Invitation struct {
 	InvitedBy      string       `json:"invited_by"`
 	ExpiresAt      time.Time    `json:"expires_at"`
 	CreatedAt      time.Time    `json:"created_at"`
+	// Access is the resource scope the invitee lands with, when one was set.
+	Access *MemberAccess `json:"access,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
@@ -370,6 +459,8 @@ type InvitationPreview struct {
 // OrganizationCreateParams creates a workspace.
 type OrganizationCreateParams struct {
 	Name string `json:"name"`
+	// Timezone is the workspace's IANA zone, for example "Europe/Berlin".
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // OrganizationUpdateParams updates the current workspace. Nil fields are left
@@ -387,6 +478,9 @@ type OrganizationUpdateParams struct {
 
 	InboxAgentEnabled      *bool `json:"inbox_agent_enabled,omitempty"`
 	AssistantSharedHistory *bool `json:"assistant_shared_history,omitempty"`
+
+	// Timezone is an IANA zone name; an empty string clears it.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // InviteMemberParams invites someone by email into one or more roles.
@@ -396,6 +490,9 @@ type InviteMemberParams struct {
 	RoleIDs []string `json:"role_ids,omitempty"`
 	// RoleID is a single-role shorthand for RoleIDs.
 	RoleID *string `json:"role_id,omitempty"`
+	// Access restricts the invitee from the moment they join. Nil means the
+	// entire workspace.
+	Access *MemberAccess `json:"access,omitempty"`
 }
 
 // UpdateMemberParams replaces a member's assigned roles.
@@ -711,18 +808,21 @@ func (s *OrganizationService) Switch(ctx context.Context, id string, opts ...Req
 }
 
 // Current retrieves the workspace the session acts on, with its limits and
-// current usage.
+// current usage. Any member may read it. For a restricted member
+// ([Member.IsRestricted]) the counts cover only the granted resources, and the
+// member count and AI voice profile are left out.
 func (s *OrganizationService) Current(ctx context.Context, opts ...RequestOption) (*OrganizationWithLimits, *Response, error) {
 	return fetch[OrganizationWithLimits](ctx, s.client, "organization/current", opts)
 }
 
-// Update modifies the current workspace.
+// Update modifies the current workspace. It needs [OrgPermManageSettings].
 func (s *OrganizationService) Update(ctx context.Context, params *OrganizationUpdateParams, opts ...RequestOption) (*Organization, *Response, error) {
 	return send[Organization](ctx, s.client.patch, "organization/current", params, opts)
 }
 
 // Limits returns the ceilings the server enforces for the workspace alongside
-// current usage, the mailbox allowance and attachment storage.
+// current usage, the mailbox allowance and attachment storage. Any member may
+// read it.
 func (s *OrganizationService) Limits(ctx context.Context, opts ...RequestOption) (*LimitsAndCounts, *Response, error) {
 	return fetch[LimitsAndCounts](ctx, s.client, "organization/current/limits", opts)
 }
@@ -748,13 +848,15 @@ func (s *OrganizationService) DeleteAvatar(ctx context.Context, opts ...RequestO
 
 // --- members ---
 
-// Members returns the workspace's members.
+// Members returns the workspace's members. Any member may read it.
 func (s *OrganizationService) Members(ctx context.Context, opts ...RequestOption) ([]Member, *Response, error) {
 	return fetchData[Member](ctx, s.client, "organization/members", opts)
 }
 
 // Invite invites someone to the workspace by email and returns the pending
-// invitation.
+// invitation. It needs [OrgPermManageTeam], and the session must have
+// re-confirmed its identity recently (403, code "reauth_required",
+// otherwise).
 func (s *OrganizationService) Invite(ctx context.Context, params *InviteMemberParams, opts ...RequestOption) (*Invitation, *Response, error) {
 	var out struct {
 		Invitation *Invitation `json:"invitation"`
@@ -766,18 +868,21 @@ func (s *OrganizationService) Invite(ctx context.Context, params *InviteMemberPa
 	return out.Invitation, resp, nil
 }
 
-// UpdateMember replaces a member's assigned roles.
+// UpdateMember replaces a member's assigned roles. It needs
+// [OrgPermManageTeam] and a recently re-confirmed session.
 func (s *OrganizationService) UpdateMember(ctx context.Context, id string, params *UpdateMemberParams, opts ...RequestOption) (*Member, *Response, error) {
 	return send[Member](ctx, s.client.patch, "organization/members/"+url.PathEscape(id), params, opts)
 }
 
-// RemoveMember removes a member from the workspace.
+// RemoveMember removes a member from the workspace. It needs
+// [OrgPermManageTeam].
 func (s *OrganizationService) RemoveMember(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "organization/members/"+url.PathEscape(id), opts...)
 }
 
 // TransferOwnership hands the workspace to another member. Only the current
-// owner may call it.
+// owner may call it ([OrgPermTransferOwnership]), from a recently re-confirmed
+// session.
 func (s *OrganizationService) TransferOwnership(ctx context.Context, newOwnerUserID string, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		NewOwnerUserID string `json:"new_owner_user_id"`
@@ -785,42 +890,81 @@ func (s *OrganizationService) TransferOwnership(ctx context.Context, newOwnerUse
 	return s.client.post(ctx, "organization/transfer-ownership", body, nil, opts...)
 }
 
+// --- member resource scope ---
+
+// MemberAccess returns which resources a member's roles apply to. id is the
+// member's user id. It needs [OrgPermManageTeam].
+func (s *OrganizationService) MemberAccess(ctx context.Context, id string, opts ...RequestOption) (*MemberAccess, *Response, error) {
+	return fetch[MemberAccess](ctx, s.client, "organization/members/"+url.PathEscape(id)+"/access", opts)
+}
+
+// SetMemberAccess replaces a member's resource scope and returns the member
+// with [Member.Access] filled. The whole scope is replaced, so a retry lands on
+// the same state. Restricting a member caps their roles at
+// [OrgPermRestrictedMask]; the owner cannot be restricted (403, code
+// "owner_access_unrestricted"), nor can callers change their own access. The
+// caller must hold every permission the member's roles grant. It needs
+// [OrgPermManageTeam] and a recently re-confirmed session (403, code
+// "reauth_required", otherwise).
+func (s *OrganizationService) SetMemberAccess(ctx context.Context, id string, access *MemberAccess, opts ...RequestOption) (*Member, *Response, error) {
+	return send[Member](ctx, s.client.put, "organization/members/"+url.PathEscape(id)+"/access", access, opts)
+}
+
+// SuggestedSenders returns the mailboxes the given campaigns and campaign
+// folders send from, for review before granting them: campaign access never
+// grants a mailbox. Together the two lists may name at most twice
+// [MaxAccessGrants] ids. It needs [OrgPermManageTeam].
+func (s *OrganizationService) SuggestedSenders(ctx context.Context, campaignIDs, campaignFolderIDs []string, opts ...RequestOption) ([]SuggestedSender, *Response, error) {
+	q := make(url.Values)
+	if len(campaignIDs) > 0 {
+		q.Set("campaign_ids", strings.Join(campaignIDs, ","))
+	}
+	if len(campaignFolderIDs) > 0 {
+		q.Set("campaign_folder_ids", strings.Join(campaignFolderIDs, ","))
+	}
+	return fetchData[SuggestedSender](ctx, s.client, withQuery("organization/access/suggested-senders", q), opts)
+}
+
 // --- roles ---
 
-// Roles returns the workspace's custom roles.
+// Roles returns the workspace's custom roles. Any member may read them.
 func (s *OrganizationService) Roles(ctx context.Context, opts ...RequestOption) ([]Role, *Response, error) {
 	return fetchData[Role](ctx, s.client, "organization/roles", opts)
 }
 
-// CreateRole adds a custom role.
+// CreateRole adds a custom role. It needs [OrgPermManageTeam].
 func (s *OrganizationService) CreateRole(ctx context.Context, params *RoleCreateParams, opts ...RequestOption) (*Role, *Response, error) {
 	return send[Role](ctx, s.client.post, "organization/roles", params, opts)
 }
 
 // UpdateRole edits a custom role. Changes propagate to every member holding it.
+// It needs [OrgPermManageTeam].
 func (s *OrganizationService) UpdateRole(ctx context.Context, id string, params *RoleUpdateParams, opts ...RequestOption) (*Role, *Response, error) {
 	return send[Role](ctx, s.client.patch, "organization/roles/"+url.PathEscape(id), params, opts)
 }
 
-// DeleteRole removes a custom role.
+// DeleteRole removes a custom role. It needs [OrgPermManageTeam].
 func (s *OrganizationService) DeleteRole(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "organization/roles/"+url.PathEscape(id), opts...)
 }
 
 // --- invitations ---
 
-// Invitations returns the workspace's pending invitations.
+// Invitations returns the workspace's pending invitations. It needs
+// [OrgPermManageTeam].
 func (s *OrganizationService) Invitations(ctx context.Context, opts ...RequestOption) ([]Invitation, *Response, error) {
 	return fetchData[Invitation](ctx, s.client, "organization/invitations", opts)
 }
 
-// CancelInvitation withdraws a pending invitation.
+// CancelInvitation withdraws a pending invitation of the current workspace. It
+// needs [OrgPermManageTeam].
 func (s *OrganizationService) CancelInvitation(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "organization/invitations/"+url.PathEscape(id), opts...)
 }
 
 // InvitationLink returns the invite token for a pending invitation, so it can
 // be shared out of band. Treat it as a credential: anyone holding it can join.
+// It needs [OrgPermManageTeam].
 func (s *OrganizationService) InvitationLink(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		Token string `json:"token"`
@@ -840,8 +984,8 @@ func (s *OrganizationService) MyInvitations(ctx context.Context, opts ...Request
 
 // PreviewInvitation resolves an invite token to the workspace it points at,
 // before the caller commits to joining. It needs no credentials: the token is
-// the capability. The answer is the safe public view — see [InvitationPreview]
-// — not the workspace-side [Invitation] row.
+// the capability. The answer is the safe public view (see [InvitationPreview]),
+// not the workspace-side [Invitation] row.
 func (s *OrganizationService) PreviewInvitation(ctx context.Context, token string, opts ...RequestOption) (*InvitationPreview, *Response, error) {
 	q := url.Values{"token": {token}}
 	return fetch[InvitationPreview](ctx, s.client, withQuery("invitations/lookup", q), opts)
@@ -955,7 +1099,8 @@ func (s *OrganizationService) TransferGroups(ctx context.Context, opts ...Reques
 // CreateExport starts an archive build in the background and returns the job
 // (202). Poll it with [OrganizationService.Export] until
 // [OrgExportJob.Terminal], then fetch the file with
-// [OrganizationService.DownloadExport]. Owner-only.
+// [OrganizationService.DownloadExport]. Owner-only, from a recently
+// re-confirmed session.
 func (s *OrganizationService) CreateExport(ctx context.Context, params *OrgExportParams, opts ...RequestOption) (*OrgExportJob, *Response, error) {
 	if params == nil {
 		params = &OrgExportParams{}
@@ -992,8 +1137,8 @@ func (s *OrganizationService) DeleteExport(ctx context.Context, id string, opts 
 	return s.client.delete(ctx, "organization/current/export/"+url.PathEscape(id), opts...)
 }
 
-// PreflightImport uploads an archive and reports what applying it would do —
-// what it holds, which rows conflict, which members are unknown — without
+// PreflightImport uploads an archive and reports what applying it would do
+// (what it holds, which rows conflict, which members are unknown) without
 // writing anything. Pass the passphrase the archive was exported with to
 // learn whether its secrets unseal; an empty one is fine. The upload is
 // multipart and buffered in memory. Owner-only.
@@ -1015,7 +1160,7 @@ func (s *OrganizationService) PreflightImport(ctx context.Context, file *FileUpl
 // [OrganizationService.Import]. Run [OrganizationService.PreflightImport]
 // first: an import is irreversible. The upload is multipart (the archive as
 // the file, the options as a JSON form field) and buffered in memory.
-// Owner-only.
+// Owner-only, from a recently re-confirmed session.
 func (s *OrganizationService) CreateImport(ctx context.Context, file *FileUpload, params *OrgImportParams, opts ...RequestOption) (*OrgImportJob, *Response, error) {
 	fields := map[string]string{}
 	if params != nil {
@@ -1058,7 +1203,9 @@ func (s *OrganizationService) DangerZone(ctx context.Context, opts ...RequestOpt
 
 // ScheduleDeletion schedules the workspace for a delayed hard delete. It is
 // owner-only, and Confirmation must match
-// [DangerZoneStatus.ConfirmationHint] — the workspace name.
+// [DangerZoneStatus.ConfirmationHint], the workspace name. The session must
+// have re-confirmed its identity recently (403, code "reauth_required",
+// otherwise).
 func (s *OrganizationService) ScheduleDeletion(ctx context.Context, params *ScheduleDeletionParams, opts ...RequestOption) (*ScheduledDeletion, *Response, error) {
 	return send[ScheduledDeletion](ctx, s.client.post, "organization/current/danger-zone/delete", params, opts)
 }

@@ -12,10 +12,16 @@ import (
 // same registry that POST /v1/mcp exposes, gated the same way, so a tool
 // behaves identically whichever door it came through.
 //
-// There is no route-level scope on these endpoints. Each tool enforces its own
-// permission — the API-key scope for key and OAuth callers, the organization
-// permission for session callers — and [AgentToolService.List] only ever shows
-// what the caller may use, so the whole list can be handed to a model as-is.
+// There is no route-level API scope on these endpoints. Each tool enforces its
+// own permission (the API-key scope for key and OAuth callers, held to the
+// permissions of the member behind the credential as well, and the
+// organization permission for session callers), and [AgentToolService.List]
+// only ever shows what the caller may use, so the whole list can be handed to a
+// model as-is. A session caller additionally needs the use-AI organization
+// permission ([OrgPermUseAI]). An API key limited to some mailboxes
+// ([APIKey.AllowedEmailAccounts]) is refused outright with 403, code
+// "api_key_mailbox_limited", because tools act across the whole workspace; use
+// the REST endpoints, which apply the key's mailbox limits.
 // Send-class tools (anything that puts real mail on the wire) are never listed
 // and never callable here: an agent wired through this surface can read,
 // search, label and draft, but a human presses send.
@@ -123,8 +129,8 @@ func (s *AgentToolService) ListFunctions(ctx context.Context, opts ...RequestOpt
 }
 
 // Call runs one tool by name. args is the tool's argument object exactly as the
-// model produced it — a map, a struct, or the raw [json.RawMessage] from the
-// model's tool call — and must encode to a JSON object matching the tool's
+// model produced it (a map, a struct, or the raw [json.RawMessage] from the
+// model's tool call) and must encode to a JSON object matching the tool's
 // [AgentTool.InputSchema]. A nil args sends no body, which the server treats as
 // no arguments.
 //
@@ -135,13 +141,18 @@ func (s *AgentToolService) ListFunctions(ctx context.Context, opts ...RequestOpt
 //     example the dashboard assistant's send_reply) is indistinguishable from
 //     a typo here.
 //   - [ErrForbidden] (403, code "forbidden"): the credential lacks the tool's
-//     permission. It would not have appeared in [AgentToolService.List].
+//     permission. It would not have appeared in [AgentToolService.List]. The
+//     same status with code "reauth_required" means the tool changes something
+//     sensitive and the session must re-authenticate first, and with code
+//     "api_key_mailbox_limited" that the key is held to some mailboxes.
 //   - [ErrBadRequest] (400, code "bad_request"): the body was not valid JSON.
-//   - [ErrUnprocessable] (422, code "unprocessable"): the tool itself failed —
+//   - [ErrUnprocessable] (422, code "unprocessable"): the tool itself failed:
 //     arguments that decoded but did not validate, a missing record, an
 //     entitlement the workspace lacks. The [Error.Message] is written for the
 //     model to read and react to; feed it back as the tool result rather than
 //     treating it as a transport error.
+//   - A 500 is a failure the server did not word for the model; treat it as a
+//     transport error.
 //
 // Calls run under the write rate limit and honor [WithIdempotencyKey] like
 // every other mutating request, so a retried call with the same key replays
