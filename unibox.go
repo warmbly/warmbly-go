@@ -344,10 +344,10 @@ type UniboxReplyParams struct {
 	ForwardMessageID string `json:"forward_message_id,omitempty"`
 }
 
-// UniboxComposeParams sends a brand-new outbound email. Unlike a reply it is
-// checked against the workspace suppression list before being queued: a
-// suppressed recipient anywhere in To, CC or BCC fails the whole call with a
-// 400.
+// UniboxComposeParams sends a brand-new outbound email. It is checked against
+// the workspace suppression list before being queued: a suppressed recipient
+// (listed directly or through its domain) anywhere in To, CC or BCC fails the
+// whole call with a 400 whose code is "recipient_suppressed".
 type UniboxComposeParams struct {
 	// EmailAccountID picks the sending mailbox. Leave it empty (or set it to
 	// "auto") to let the server choose the best mailbox for the first
@@ -637,11 +637,21 @@ func (s *UniboxService) MarkFolderSeen(ctx context.Context, folder string, seen 
 }
 
 // Reply sends a reply into an existing thread.
+//
+// A suppressed recipient fails the call with a 400 whose code is
+// "recipient_suppressed". The mailbox's manual-send fair-use limits (daily,
+// hourly, per message and, for new conversations, a smaller daily one) are
+// enforced when the queued send is dispatched, not on this call: a refused
+// send is reported as a failed task and a notification, never as an error
+// here. Replies spend only the daily and hourly allowance.
 func (s *UniboxService) Reply(ctx context.Context, params *UniboxReplyParams, opts ...RequestOption) (*SendResult, *Response, error) {
 	return send[SendResult](ctx, s.client.post, "unibox/reply", params, opts)
 }
 
 // Compose sends a brand-new outbound email and reports which mailbox sent it.
+// Manual sends are held to per-mailbox fair-use limits when dispatched (see
+// [UniboxService.Reply]); a new conversation also spends a smaller daily
+// allowance, so use a campaign for outreach.
 func (s *UniboxService) Compose(ctx context.Context, params *UniboxComposeParams, opts ...RequestOption) (*ComposeResult, *Response, error) {
 	return send[ComposeResult](ctx, s.client.post, "unibox/compose", params, opts)
 }

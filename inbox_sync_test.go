@@ -383,7 +383,8 @@ func TestAccountStatusColdRampDecode(t *testing.T) {
 			"id": "err_1", "error_code": "auth_expired", "severity": "high",
 			"title": "Reconnect needed", "message": "The token expired",
 			"action_required": "Reconnect the mailbox",
-			"created_at": "2026-09-01T10:00:00Z"
+			"created_at": "2026-09-01T10:00:00Z",
+			"operation": "send"
 		}],
 		"daily_usage": {"date": "2026-09-07", "campaign_sent": 12, "campaign_limit": 20},
 		"in_campaign": true,
@@ -423,6 +424,9 @@ func TestAccountStatusColdRampDecode(t *testing.T) {
 	}
 	if acc.WarmupHealth == nil || acc.WarmupHealth.State != BandThrottled {
 		t.Errorf("WarmupHealth = %+v", acc.WarmupHealth)
+	}
+	if len(acc.Errors) == 1 && acc.Errors[0].Operation != AccountErrorOperationSend {
+		t.Errorf("Errors[0].Operation = %q, want %q", acc.Errors[0].Operation, AccountErrorOperationSend)
 	}
 	if len(acc.Errors) != 1 || acc.Errors[0].ActionRequired == nil || *acc.Errors[0].ActionRequired != "Reconnect the mailbox" {
 		t.Errorf("Errors = %+v", acc.Errors)

@@ -138,6 +138,10 @@ type Contact struct {
 	// populated only when a search filters by exactly one campaign.
 	CampaignLead *ContactCampaignProgress `json:"campaign_lead,omitempty"`
 
+	// Outreach is the contact's engagement across every campaign. Search fills
+	// it on every row; it is nil on other reads.
+	Outreach *ContactOutreach `json:"outreach,omitempty"`
+
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -168,6 +172,23 @@ const (
 	MailHostProton          = "proton"
 	MailHostOther           = "other"
 )
+
+// ContactOutreach is where a contact stands with your outreach: the emails
+// that reached them, what they did with them, and when each last happened.
+// Opens count people only; a mail client's automatic fetch is not engagement.
+type ContactOutreach struct {
+	Sent    int `json:"sent"`
+	Opened  int `json:"opened"`
+	Clicked int `json:"clicked"`
+	Replied int `json:"replied"`
+	Bounced int `json:"bounced"`
+
+	LastSentAt    *time.Time `json:"last_sent_at,omitempty"`
+	LastOpenedAt  *time.Time `json:"last_opened_at,omitempty"`
+	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
+	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
+	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
+}
 
 // Derived lead states returned in [ContactCampaignProgress.Status],
 // [ContactCampaignState.LeadStatus] and accepted by
@@ -419,6 +440,15 @@ const (
 	// ContactSourceAutomation is an automation's "create or update contact"
 	// action; the detail is the automation's name.
 	ContactSourceAutomation = "automation"
+	// ContactSourceCRMSync is a contact imported from a CRM list view or
+	// campaign; the detail names the CRM and the list.
+	ContactSourceCRMSync = "crm_sync"
+	// ContactSourceApollo is a contact imported from an Apollo list; the
+	// detail names the list.
+	ContactSourceApollo = "apollo"
+	// ContactSourceClay is a contact a Clay table sent in; the detail names
+	// the connection.
+	ContactSourceClay = "clay"
 )
 
 // ContactDetail is the hydrated contact 360 view returned by
