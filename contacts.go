@@ -853,7 +853,10 @@ type ContactFieldFilter struct {
 // Category travel in the query string; every other field is sent in the body.
 type ContactSearchParams struct {
 	ListOptions
-	// Category is a convenience filter for a single category id.
+	// Category is sent as the "category" query parameter of
+	// [ContactService.Search] only, never inside a Filters body. Current
+	// servers check that it is a valid id but do not narrow results by it, so
+	// filter by category with CategoryIDs, which every filter-based call honors.
 	Category string `json:"-"`
 
 	// Query is a free-text search across the core contact fields.

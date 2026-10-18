@@ -52,6 +52,7 @@ Syncs the SDK with the v1 API as of server commit 176d3c24: inbox placement, con
 
 ### Fixed
 
+- `ContactSearchParams.Category` documents that current servers validate but do not apply it; filter with `CategoryIDs`.
 - `CRM.ListPipelines` decodes the bare array the server returns.
 - `OAuthApps.UploadLogo` sent the image in a form field the server never reads; the OAuth examples requested scope strings the server rejects.
 - `SegmentMaxMemberBatch` is 10000, matching the server.
