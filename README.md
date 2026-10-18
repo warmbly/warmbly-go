@@ -176,6 +176,8 @@ fmt.Println(created.ID)
 | `client.Teams` | Named groups of members for CRM assignment |
 | `client.Meetings` | Calls booked through a connected scheduler |
 | `client.Integrations` | Third-party connections, event subscriptions, field mappings, contact pushes |
+| `client.Apollo` | Apollo lists, list imports and contact enrichment |
+| `client.Clay` | Clay inbound defaults and the table events are sent back to |
 | `client.Automations` | Event-triggered flows across those connections |
 | `client.LeadSync` | Google Sheets to contacts sync |
 | `client.Generation` | AI writing and rewriting |

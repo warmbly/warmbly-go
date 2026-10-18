@@ -88,6 +88,10 @@ type Client struct {
 	Integrations *IntegrationService
 	// Salesforce runs the native Salesforce sync on a connected org.
 	Salesforce *SalesforceService
+	// Apollo imports Apollo lists and enriches contacts through a connection.
+	Apollo *ApolloService
+	// Clay edits how a Clay connection receives and sends rows.
+	Clay *ClayService
 	// Automations manages event-triggered flows across those connections.
 	Automations *AutomationService
 	// LeadSync manages Google Sheets to contacts sync.
@@ -205,6 +209,8 @@ func New(opts ...Option) (*Client, error) {
 
 	c.Integrations = (*IntegrationService)(&c.common)
 	c.Salesforce = (*SalesforceService)(&c.common)
+	c.Apollo = (*ApolloService)(&c.common)
+	c.Clay = (*ClayService)(&c.common)
 	c.Automations = (*AutomationService)(&c.common)
 	c.LeadSync = (*LeadSyncService)(&c.common)
 

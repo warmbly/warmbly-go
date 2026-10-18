@@ -31,6 +31,11 @@ const (
 	ProviderCalendly     = "calendly"
 	ProviderCalCom       = "cal_com"
 	ProviderGoogleSheets = "google_sheets"
+	// ProviderApollo is connected by API key. See [ApolloService].
+	ProviderApollo = "apollo"
+	// ProviderClay is connected by webhook: Warmbly mints the inbound URL a
+	// Clay HTTP API column posts to. See [ClayService].
+	ProviderClay = "clay"
 	// ProviderMillionVerifier is a pay-as-you-go address verifier connected
 	// by API key. While it has credits it replaces the built-in check for
 	// every contact you import; when they run out the built-in check takes

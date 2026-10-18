@@ -60,6 +60,9 @@ const (
 	ActionSalesforceUpsert = "salesforce.upsert_contact"
 	ActionCloseUpsert      = "close.upsert_lead"
 	ActionWebhookPing      = "webhook.ping"
+	// ActionClaySendRow posts a flat row for the event to the Clay table
+	// named on a [ProviderClay] connection.
+	ActionClaySendRow = "clay.send_row"
 
 	ActionAddTag        = "warmbly.add_tag"
 	ActionRemoveTag     = "warmbly.remove_tag"
