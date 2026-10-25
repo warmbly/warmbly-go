@@ -17,7 +17,15 @@ type OAuthAppService service
 
 // OAuth application states returned in [OAuthApp.Status].
 const (
-	OAuthAppActive   = "active"
+	OAuthAppActive = "active"
+	// OAuthAppDisabled is the state the server reports for an app its owner
+	// switched off. The app's [OAuthApp.SuspendedAt] is a separate, operator-set
+	// state: check [OAuthApp.Usable] rather than Status alone.
+	OAuthAppDisabled = "disabled"
+	// OAuthAppInactive is the value this SDK used for a switched-off app before
+	// it was synced with the server. The server reports [OAuthAppDisabled].
+	//
+	// Deprecated: use [OAuthAppDisabled].
 	OAuthAppInactive = "inactive"
 )
 
@@ -53,7 +61,7 @@ type OAuthApp struct {
 	// event the grant's scopes allow.
 	WebhookEvents []string `json:"webhook_events,omitempty"`
 
-	// Status is [OAuthAppActive] or [OAuthAppInactive].
+	// Status is [OAuthAppActive] or [OAuthAppDisabled].
 	Status string `json:"status"`
 	// IsPublic marks a client that authenticates with PKCE and no secret, such
 	// as a native app or an MCP client. PKCE is mandatory for these.
@@ -62,8 +70,31 @@ type OAuthApp struct {
 	// the RFC 7591 endpoint.
 	DynamicallyRegistered bool `json:"dynamically_registered"`
 
+	// SuspendedAt is set when an operator suspended the app; the owner cannot
+	// lift it. A suspended app cannot authorize, issue or accept tokens, and
+	// the server refuses edits to it with the "app_suspended" code. It is nil
+	// otherwise.
+	SuspendedAt *time.Time `json:"suspended_at,omitempty"`
+	// SuspendedReason is the operator's stated reason, set with SuspendedAt.
+	SuspendedReason string `json:"suspended_reason,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Usable reports whether the app may authorize, issue or accept tokens: it is
+// active and not suspended by an operator.
+func (a *OAuthApp) Usable() bool {
+	return a != nil && a.Status == OAuthAppActive && a.SuspendedAt == nil
+}
+
+// DeveloperAccess is what the workspace may currently do with OAuth apps. An
+// operator can block a workspace or a person from registering and publishing
+// apps; registering is then refused with the "developer_access_blocked" code.
+type DeveloperAccess struct {
+	Blocked bool `json:"blocked"`
+	// Reason is the operator's stated reason, set while Blocked.
+	Reason string `json:"reason,omitempty"`
 }
 
 // OAuthAppWithSecret is an [OAuthApp] together with its plaintext client
@@ -112,9 +143,20 @@ type ConsentInfo struct {
 	LogoURL     string `json:"logo_url"`
 	WebsiteURL  string `json:"website_url"`
 	RedirectURI string `json:"redirect_uri"`
-	// Scopes are the human-readable scope names being requested.
+	// Scopes are the human-readable scope names approving grants: the request
+	// narrowed to the approving member's role.
 	Scopes []string `json:"scopes"`
-	State  string   `json:"state"`
+	// WithheldScopes were requested but fall outside the member's role, so
+	// approving does not grant them.
+	WithheldScopes []string `json:"withheld_scopes,omitempty"`
+	State          string   `json:"state"`
+	// OrganizationName is the workspace that receives the grant.
+	OrganizationName string `json:"organization_name,omitempty"`
+	// Verified marks an app the instance's operators feature in the directory.
+	Verified bool `json:"verified,omitempty"`
+	// SelfRegistered marks a client that registered itself (RFC 7591), so
+	// nobody vouches for its name.
+	SelfRegistered bool `json:"self_registered,omitempty"`
 }
 
 // AuthorizeParams approves a consent request and mints an authorization code.
@@ -143,6 +185,20 @@ func (s *OAuthAppService) List(ctx context.Context, opts ...RequestOption) ([]OA
 		return nil, resp, err
 	}
 	return out.Applications, resp, nil
+}
+
+// ListWithAccess is [OAuthAppService.List] plus the workspace's
+// [DeveloperAccess], which says whether registering apps is currently blocked.
+func (s *OAuthAppService) ListWithAccess(ctx context.Context, opts ...RequestOption) ([]OAuthApp, DeveloperAccess, *Response, error) {
+	var out struct {
+		Applications    []OAuthApp      `json:"applications"`
+		DeveloperAccess DeveloperAccess `json:"developer_access"`
+	}
+	resp, err := s.client.get(ctx, "oauth/applications", &out, opts...)
+	if err != nil {
+		return nil, DeveloperAccess{}, resp, err
+	}
+	return out.Applications, out.DeveloperAccess, resp, nil
 }
 
 // Get retrieves a single OAuth application.
@@ -283,6 +339,120 @@ func (s *OAuthAppService) RevokeAuthorizedApp(ctx context.Context, applicationID
 	return s.client.delete(ctx, "oauth/authorized-apps/"+url.PathEscape(applicationID), opts...)
 }
 
+// WorkspaceAuthorization is one member's live authorization of an app, as a
+// workspace admin sees it.
+type WorkspaceAuthorization struct {
+	ApplicationID string `json:"application_id"`
+	Name          string `json:"name"`
+	LogoURL       string `json:"logo_url,omitempty"`
+	WebsiteURL    string `json:"website_url,omitempty"`
+	UserID        string `json:"user_id"`
+	UserEmail     string `json:"user_email"`
+	UserName      string `json:"user_name"`
+	// Scopes is what the member actually granted.
+	Scopes       uint64     `json:"scopes"`
+	AuthorizedAt time.Time  `json:"authorized_at"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+}
+
+// WorkspaceAuthorizations lists every member's live app authorizations in the
+// workspace, for the people who manage its credentials.
+func (s *OAuthAppService) WorkspaceAuthorizations(ctx context.Context, opts ...RequestOption) ([]WorkspaceAuthorization, *Response, error) {
+	var out struct {
+		Authorizations []WorkspaceAuthorization `json:"authorizations"`
+	}
+	resp, err := s.client.get(ctx, "oauth/workspace-authorizations", &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Authorizations, resp, nil
+}
+
+// RevokeWorkspaceAuthorization ends one member's authorization of an app in
+// the workspace and revokes the tokens issued under it.
+func (s *OAuthAppService) RevokeWorkspaceAuthorization(ctx context.Context, applicationID, userID string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "oauth/workspace-authorizations/"+url.PathEscape(applicationID)+"/members/"+url.PathEscape(userID), opts...)
+}
+
+// App directory listing statuses in [AppListing.Status].
+const (
+	// AppListingPublished is reachable by its link, and listed in discovery
+	// once enough workspaces use it.
+	AppListingPublished = "published"
+	// AppListingFeatured was picked by an operator and is always listed.
+	AppListingFeatured = "featured"
+	// AppListingHidden was taken down by an operator and is reachable nowhere.
+	AppListingHidden = "hidden"
+)
+
+// AppListing is an OAuth app's page in the community directory.
+type AppListing struct {
+	ApplicationID  string `json:"application_id"`
+	OrganizationID string `json:"organization_id"`
+	Slug           string `json:"slug"`
+	Tagline        string `json:"tagline"`
+	Description    string `json:"description"`
+	// Category is one of the directory categories, for example "crm",
+	// "automation", "ai" or "other".
+	Category   string `json:"category"`
+	InstallURL string `json:"install_url"`
+	SupportURL string `json:"support_url"`
+	PrivacyURL string `json:"privacy_url"`
+	// Status is one of the AppListing* constants. Treat other values as
+	// unknown.
+	Status string `json:"status"`
+	// StatusNote is an operator's note, shown to the developer; it is required
+	// to hide a listing.
+	StatusNote  string     `json:"status_note,omitempty"`
+	StatusAt    *time.Time `json:"status_at,omitempty"`
+	SubmittedAt time.Time  `json:"submitted_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// AppListingParams publishes or edits an app's directory listing.
+type AppListingParams struct {
+	Slug        string `json:"slug"`
+	Tagline     string `json:"tagline"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	InstallURL  string `json:"install_url"`
+	SupportURL  string `json:"support_url"`
+	PrivacyURL  string `json:"privacy_url"`
+}
+
+// Listing returns the app's community directory listing, or nil when the app
+// is not published.
+func (s *OAuthAppService) Listing(ctx context.Context, id string, opts ...RequestOption) (*AppListing, *Response, error) {
+	var out struct {
+		Listing *AppListing `json:"listing"`
+	}
+	resp, err := s.client.get(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Listing, resp, nil
+}
+
+// SaveListing publishes the app to the community directory, or edits its
+// listing. A listing can be refused with the "invalid_listing",
+// "listing_slug_taken" or "app_not_listable" codes.
+func (s *OAuthAppService) SaveListing(ctx context.Context, id string, params *AppListingParams, opts ...RequestOption) (*AppListing, *Response, error) {
+	var out struct {
+		Listing *AppListing `json:"listing"`
+	}
+	resp, err := s.client.put(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", params, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Listing, resp, nil
+}
+
+// DeleteListing unpublishes the app from the community directory.
+func (s *OAuthAppService) DeleteListing(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", opts...)
+}
+
 // --- dynamic client registration (RFC 7591) ---
 
 // DynamicClientParams self-registers a client at runtime, the RFC 7591 way that
@@ -298,7 +468,10 @@ type DynamicClientParams struct {
 	// authenticates with PKCE and holds no secret.
 	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method,omitempty"`
 	// Scope is the space-delimited set being asked for.
-	Scope     string `json:"scope,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// ClientURI and LogoURI are accepted but no longer honored: nobody vouches
+	// for a self-registered client's website or logo, so the server stores
+	// neither.
 	ClientURI string `json:"client_uri,omitempty"`
 	LogoURI   string `json:"logo_uri,omitempty"`
 }

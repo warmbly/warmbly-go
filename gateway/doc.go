@@ -5,8 +5,12 @@
 //
 // # Connecting
 //
-// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, or with a
-// session access token. Register handlers first, then open the connection:
+// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, an OAuth
+// access token granted the realtime scope, or a short-lived connection token.
+// API keys and OAuth tokens are sent in the X-Warmbly-Token handshake header
+// (the server refuses them in the URL); the client does this for you. A key or
+// token reaches only its own workspace, and only the event families its read
+// scopes cover. Register handlers first, then open the connection:
 //
 //	client := gateway.New(apiKey, orgID,
 //		gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail))

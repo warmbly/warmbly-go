@@ -71,6 +71,24 @@ type TemplateIssue struct {
 	// Code is the stable identifier for the rule that fired.
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Field is "subject" or "body" when the issue sits in one of them.
+	Field string `json:"field,omitempty"`
+	// Spans locate the offending text in the copy, when the rule can.
+	Spans []TemplateSpan `json:"spans,omitempty"`
+	// Suggestion is what to write instead, when the rule has one.
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+// TemplateSpan locates the text behind a [TemplateIssue].
+type TemplateSpan struct {
+	// Field is "subject" or "body".
+	Field string `json:"field"`
+	// Text is the exact fragment.
+	Text string `json:"text"`
+	// Line is the 1-based line of that field it sits on; Excerpt is the
+	// whole line for context.
+	Line    int    `json:"line,omitempty"`
+	Excerpt string `json:"excerpt,omitempty"`
 }
 
 // TemplateScoreParams is the copy to score. Pass whichever parts exist.
@@ -135,4 +153,90 @@ func (s *TemplateService) Render(ctx context.Context, id string, variables map[s
 // not just a stored template.
 func (s *TemplateService) Score(ctx context.Context, params *TemplateScoreParams, opts ...RequestOption) (*TemplateScore, *Response, error) {
 	return send[TemplateScore](ctx, s.client.post, "templates/score", params, opts)
+}
+
+// TemplateIssueInfo is the severity of a [TemplateFinding] that is advice
+// rather than a problem.
+const TemplateIssueInfo = "info"
+
+// TemplateFinding is one problem an AI analysis found in copy.
+type TemplateFinding struct {
+	// Severity is "high", "warn" or "info".
+	Severity string `json:"severity"`
+	// Field is "subject" or "body"; empty when the finding is about the email
+	// as a whole.
+	Field string `json:"field,omitempty"`
+	// Text is the exact fragment quoted from the copy; empty when the finding
+	// is about the email as a whole.
+	Text string `json:"text,omitempty"`
+	// Line is the 1-based line of that field the fragment sits on; Excerpt is
+	// the whole line.
+	Line    int    `json:"line,omitempty"`
+	Excerpt string `json:"excerpt,omitempty"`
+	// Issue is why it hurts deliverability and Suggestion is what to write
+	// instead.
+	Issue      string `json:"issue"`
+	Suggestion string `json:"suggestion,omitempty"`
+	// Category is a coarse grouping such as "trigger_word", "tone",
+	// "formatting", "links", "structure" or "authenticity".
+	Category string `json:"category,omitempty"`
+}
+
+// TemplateJudgment is how the copy reads to its recipient, scored on two 0 to
+// 1 scales where 0 is the personal end.
+type TemplateJudgment struct {
+	// ReadsAs runs from a personal note (0) to bulk mail (1).
+	ReadsAs         float64 `json:"reads_as"`
+	Personalization float64 `json:"personalization"`
+	// Ask is what the email asks the reader for, for example "none" or
+	// "several"; the set grows, so treat it as an open string.
+	Ask       string  `json:"ask"`
+	SpamClaim float64 `json:"spam_claim"`
+	// Confidence is the lowest confidence across the scores and the choice.
+	Confidence  float64 `json:"confidence"`
+	Model       string  `json:"model"`
+	InputTokens int     `json:"input_tokens"`
+}
+
+// TemplateAnalysis is the AI spam analysis of a piece of copy: which word,
+// which sentence, whether in the subject or the body, and what to write
+// instead.
+type TemplateAnalysis struct {
+	// Score runs 0 to 100, higher being safer.
+	Score   int    `json:"score"`
+	Verdict string `json:"verdict"`
+	// Findings is never nil.
+	Findings []TemplateFinding `json:"findings"`
+	// SuggestedSubject and Improvements are absent when only the judgment
+	// could run (no language model configured).
+	SuggestedSubject string   `json:"suggested_subject,omitempty"`
+	Improvements     []string `json:"improvements,omitempty"`
+	// Rules is the rules-based score of the same copy, from the same request.
+	Rules TemplateScore `json:"rules"`
+	// Judgment is how the copy reads to its recipient; nil when unavailable.
+	Judgment *TemplateJudgment `json:"judgment,omitempty"`
+	// Model and TokensUsed describe the analysis call.
+	Model      string `json:"model"`
+	TokensUsed int    `json:"tokens_used"`
+	// CreditsCharged is what this call cost and CreditsRemaining the balance
+	// afterwards. A self-hosted model charges nothing.
+	CreditsCharged   int `json:"credits_charged"`
+	CreditsRemaining int `json:"credits_remaining"`
+}
+
+// Analyze runs an AI spam analysis of arbitrary copy, which spends AI credits
+// (use an idempotency key to make a retry safe). Pass at least one of subject
+// and bodies; the three together may be at most 60,000 bytes. It needs the
+// templates write scope and AI access, and is refused with a 503 identified
+// "ai_not_configured" on a deployment without an AI provider, and a 403 without
+// an active plan or trial. [TemplateService.Score] is the free rules-only check.
+func (s *TemplateService) Analyze(ctx context.Context, params *TemplateScoreParams, opts ...RequestOption) (*TemplateAnalysis, *Response, error) {
+	out, resp, err := send[TemplateAnalysis](ctx, s.client.post, "templates/analyze", params, opts)
+	if err != nil {
+		return nil, resp, err
+	}
+	if out.Findings == nil {
+		out.Findings = []TemplateFinding{}
+	}
+	return out, resp, nil
 }

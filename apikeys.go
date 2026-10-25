@@ -100,6 +100,11 @@ const (
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
 		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+
+	// PermAppGrantable is every scope a third-party OAuth app may be granted:
+	// all of [PermFullAccess] except [PermAPIKeys]. Requesting more is trimmed
+	// by the server, not refused.
+	PermAppGrantable = PermFullAccess &^ PermAPIKeys
 )
 
 // API key lifecycle states returned in [APIKey.Status].
@@ -231,6 +236,13 @@ type Permission struct {
 type PermissionCatalog struct {
 	Permissions []Permission      `json:"permissions"`
 	Presets     PermissionPresets `json:"presets"`
+	// Grantable is the widest scope mask the caller may put on a key: the
+	// scopes its own role (or, for a key caller, its own key) includes. A key
+	// asking for a bit outside it is refused.
+	Grantable uint64 `json:"grantable"`
+	// AppScopes is every scope a third-party OAuth app may request. It is the
+	// full mask less [PermAPIKeys]: key management stays with people.
+	AppScopes uint64 `json:"app_scopes"`
 }
 
 // PermissionPresets are the server-side preset masks.

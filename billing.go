@@ -50,6 +50,20 @@ type Subscription struct {
 	// caller does not have to look it up in [MetaService.Plans].
 	Plan *Plan `json:"plan,omitempty"`
 
+	// Managed is true while an operator-granted plan is in force: it never
+	// touches Stripe, so Status can stay "incomplete" on a workspace that is
+	// entitled to everything. Decide "paid" from Managed as well as Status.
+	Managed bool `json:"managed"`
+	// ManagedAt, ManagedBy, ManagedReason and ManagedUntil describe the grant;
+	// a nil ManagedUntil is open-ended.
+	ManagedAt     *time.Time `json:"managed_at,omitempty"`
+	ManagedBy     *string    `json:"managed_by,omitempty"`
+	ManagedReason *string    `json:"managed_reason,omitempty"`
+	ManagedUntil  *time.Time `json:"managed_until,omitempty"`
+	// ManagedPlanID is the granted plan, held beside PlanID (the plan the
+	// workspace pays for) rather than on top of it.
+	ManagedPlanID *string `json:"managed_plan_id,omitempty"`
+
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }

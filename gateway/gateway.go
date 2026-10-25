@@ -59,8 +59,9 @@ const stableSession = 30 * time.Second
 const maxJoinRetryDelay = 2 * time.Minute
 
 // Codes carried in [JoinError.Code]. The gateway uses the same set for a
-// refused socket handshake and for a refused channel join, though only the join
-// path delivers them in a machine-readable body today.
+// refused socket handshake and for a refused channel join. A refused handshake
+// answers HTTP 403 with a JSON body {code, reason}; this client does not read
+// that body, so it surfaces only as [ErrForbidden].
 const (
 	// JoinCodeUnauthenticated means no credential was presented at all.
 	JoinCodeUnauthenticated = 4003
@@ -113,6 +114,14 @@ const (
 	JoinReasonInvalidCampaignID  = "invalid_campaign_id"
 	JoinReasonInvalidAccountID   = "invalid_account_id"
 	JoinReasonInvalidOperationID = "invalid_operation_id"
+	// JoinReasonJWTRequired, JoinReasonAdminMFARequired and
+	// JoinReasonNotAnAdmin refuse the platform admin feed, which is not open to
+	// developers: an API key or OAuth token, a session that did not verify a
+	// second factor, and a member without platform admin rights respectively.
+	// All carry [JoinCodePermissionDenied]; this client never joins that topic.
+	JoinReasonJWTRequired      = "jwt_required"
+	JoinReasonAdminMFARequired = "admin_mfa_required"
+	JoinReasonNotAnAdmin       = "not_an_admin"
 )
 
 // ErrUnauthorized is returned by [Client.Open] when the credential is rejected.
@@ -397,8 +406,11 @@ func WithResumeFrom(seq int) Option {
 }
 
 // New creates a gateway client for one workspace, authenticated with token: an
-// API key holding the realtime-subscribe scope, or a session access token. It
-// does not connect; call [Client.Open].
+// API key ("wmbly_", holding the realtime-subscribe scope), an OAuth access
+// token ("wmat_", granted the realtime scope), or a short-lived connection
+// token. API keys and OAuth tokens are sent in the [CredentialHeader] handshake
+// header; the server refuses them in the URL. It does not connect; call
+// [Client.Open].
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,
@@ -630,7 +642,7 @@ func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), c.handshakeHeader())
 	if derr != nil {
 		// The socket refuses the upgrade at the HTTP layer when the credential
 		// is bad, so a dial failure can be terminal rather than transient.
@@ -797,10 +809,10 @@ func (c *Client) handleRefusal(ctx context.Context, conn *wsconn.Conn, book *joi
 }
 
 // handshakeError classifies a refused websocket upgrade. The gateway answers a
-// connect-level refusal with an HTTP status and no machine-readable body — the
-// reason never reaches the client — so this can only separate "bad credential"
-// from "not permitted", and returns nil for anything else so the caller reports
-// the transport error instead.
+// connect-level refusal with HTTP 403 and a JSON {code, reason} body, but the
+// transport discards the body, so this can only separate "bad credential" from
+// "not permitted" by status, and returns nil for anything else so the caller
+// reports the transport error instead.
 func handshakeError(resp *http.Response) error {
 	if resp == nil {
 		return nil
@@ -815,17 +827,47 @@ func handshakeError(resp *http.Response) error {
 	return nil
 }
 
-// socketURL builds the dial URL, carrying the credential and wire version.
+// CredentialHeader is the handshake header the gateway reads an API key or
+// OAuth access token from. The server refuses those credentials in the URL
+// (code 4003) because URLs end up in proxy and access logs.
+const CredentialHeader = "X-Warmbly-Token"
+
+// longLivedToken reports whether token is an API key ("wmbly_") or an OAuth
+// access token ("wmat_"): the credentials that belong in [CredentialHeader]
+// rather than the query string. Anything else is a short-lived connection token,
+// which is the one credential the server still accepts in the URL.
+func longLivedToken(token string) bool {
+	return strings.HasPrefix(token, "wmbly_") || strings.HasPrefix(token, "wmat_")
+}
+
+// socketURL builds the dial URL, carrying the wire version and, for a
+// short-lived connection token, the credential. API keys and OAuth tokens are
+// sent in the handshake header instead; see [Client.handshakeHeader].
 func (c *Client) socketURL() string {
 	u, err := url.Parse(c.url)
 	if err != nil {
 		return c.url
 	}
 	q := u.Query()
-	q.Set("token", c.token)
+	if longLivedToken(c.token) {
+		q.Del("token")
+	} else {
+		q.Set("token", c.token)
+	}
 	q.Set("vsn", protocolVersion)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// handshakeHeader returns the extra headers for the upgrade request: the
+// credential, for an API key or OAuth access token.
+func (c *Client) handshakeHeader() http.Header {
+	if !longLivedToken(c.token) {
+		return nil
+	}
+	h := make(http.Header)
+	h.Set(CredentialHeader, c.token)
+	return h
 }
 
 // sendJoin joins one topic and records the attempt so the reply can be matched

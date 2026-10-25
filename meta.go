@@ -2,6 +2,8 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
+	"net/url"
 	"time"
 )
 
@@ -53,8 +55,11 @@ type Plan struct {
 	AIGeneration bool `json:"ai_generation"`
 	AccountLimit uint `json:"account_limit"`
 
-	Price           float32 `json:"price"`
-	DiscountedPrice float32 `json:"discounted_price"`
+	Price float32 `json:"price"`
+	// PriceYearly is what StripePriceIDYearly charges. Nil means the plan is
+	// monthly only, so nothing may offer it yearly.
+	PriceYearly     *float32 `json:"price_yearly,omitempty"`
+	DiscountedPrice float32  `json:"discounted_price"`
 	// Duration is [DurationMonth] or [DurationYear].
 	Duration string `json:"duration"`
 	// Savings is the percentage saved against the monthly price.
@@ -140,10 +145,97 @@ type GatewayTicket struct {
 	URL string `json:"url"`
 	// ExpiresIn is the ticket's lifetime in seconds.
 	ExpiresIn float64 `json:"expires_in"`
+	// ProxyPath is the same ticket as a path on the API origin
+	// ("/realtime/socket/websocket?token=..."), for a browser whose content
+	// security policy only permits connections to the API host. Dial it against
+	// the API's own host instead of URL. Empty when the server has no
+	// websocket endpoint configured.
+	ProxyPath string `json:"proxy_path,omitempty"`
 }
 
 // GatewayTicket mints a single-use websocket ticket for the current session.
 // This route is session-only.
 func (s *MetaService) GatewayTicket(ctx context.Context, opts ...RequestOption) (*GatewayTicket, *Response, error) {
 	return send[GatewayTicket](ctx, s.client.post, "getaway", nil, opts)
+}
+
+// Dashboard lists whose layout a member can save, for
+// [MetaService.ViewPreferences]. An unknown view fails with a 400.
+const (
+	ViewContacts      = "contacts"
+	ViewCampaignLeads = "campaign_leads"
+	// ViewUniboxRail is the unibox scope rail. It has no columns or sort; its
+	// layout is a JSON document in [ViewPreferences.Layout].
+	ViewUniboxRail = "unibox_rail"
+)
+
+// ViewSort is the saved ordering of a list, in the contacts search's terms.
+type ViewSort struct {
+	// By is a contact search sort key or "custom:<field>"; an empty By in an
+	// update selects the default sort.
+	By      string `json:"by"`
+	Reverse bool   `json:"reverse"`
+}
+
+// ViewPreferences is one member's saved layout for one list in one workspace.
+// An empty Columns means the default layout and a nil Sort the default sort.
+type ViewPreferences struct {
+	// View is one of the View* constants.
+	View    string    `json:"view"`
+	Columns []string  `json:"columns"`
+	Sort    *ViewSort `json:"sort,omitempty"`
+	// Layout is the saved document of a view that keeps one
+	// ([ViewUniboxRail]); absent when none is saved.
+	Layout    json.RawMessage `json:"layout,omitempty"`
+	UpdatedAt *time.Time      `json:"updated_at,omitempty"`
+}
+
+// ViewPreferencesParams is a partial write of a saved layout: a nil field
+// keeps what is saved, so a sort click made before the columns have loaded
+// cannot erase them.
+type ViewPreferencesParams struct {
+	// Columns is the ordered column ids: built-in ids for the list, or
+	// "custom:<field>". A pointer to an empty slice restores the default
+	// layout; at most 64 columns, each at most 300 characters.
+	Columns *[]string `json:"columns,omitempty"`
+	// Sort is the saved ordering; a Sort with an empty By restores the default.
+	Sort *ViewSort `json:"sort,omitempty"`
+	// Layout replaces a layout document; pass json.RawMessage("null") to
+	// restore the default of a view that has one.
+	Layout json.RawMessage `json:"layout,omitempty"`
+}
+
+// ViewPreferences returns the caller's saved layout for one dashboard list in
+// the session's workspace, or the empty layout when none is saved. The
+// layout is per member and per workspace; it is session-only and needs a
+// workspace on the session.
+func (s *MetaService) ViewPreferences(ctx context.Context, view string, opts ...RequestOption) (*ViewPreferences, *Response, error) {
+	var out struct {
+		Preferences *ViewPreferences `json:"preferences"`
+	}
+	resp, err := s.client.get(ctx, "me/views/"+url.PathEscape(view), &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Preferences, resp, nil
+}
+
+// UpdateViewPreferences writes the caller's saved layout for one list: the
+// columns, the sort, the layout, or any of them, and returns what is saved. A
+// column id that is not valid for the list fails with "invalid_column", a
+// repeated one with "duplicate_column" and too many with "too_many_columns".
+func (s *MetaService) UpdateViewPreferences(ctx context.Context, view string, params *ViewPreferencesParams, opts ...RequestOption) (*ViewPreferences, *Response, error) {
+	var out struct {
+		Preferences *ViewPreferences `json:"preferences"`
+	}
+	resp, err := s.client.put(ctx, "me/views/"+url.PathEscape(view), params, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Preferences, resp, nil
+}
+
+// ResetViewPreferences forgets the caller's saved layout for one list.
+func (s *MetaService) ResetViewPreferences(ctx context.Context, view string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "me/views/"+url.PathEscape(view), opts...)
 }

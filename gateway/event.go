@@ -59,6 +59,14 @@ const (
 	EventEmailClicked EventName = "EMAIL_CLICKED"
 	// EventEmailReplied fires when a human reply lands for a campaign contact.
 	EventEmailReplied EventName = "EMAIL_REPLIED"
+	// EventDirectEmailOpened fires when a recipient opens a tracked email that
+	// was not sent by a campaign (a one-to-one message from the inbox, for
+	// example). Payload: [EngagementEvent], with no campaign id. It requires
+	// view_analytics.
+	EventDirectEmailOpened EventName = "DIRECT_EMAIL_OPENED"
+	// EventDirectEmailClicked is the click counterpart of
+	// [EventDirectEmailOpened]. Payload: [EngagementEvent].
+	EventDirectEmailClicked EventName = "DIRECT_EMAIL_CLICKED"
 
 	// EventEmailReceived fires when a message lands in a connected mailbox.
 	// Payload: [InboxEvent].
@@ -96,6 +104,10 @@ const (
 	// after a bulk change too large to stream row by row. It is pushed on the
 	// user channel of the member who ran the operation and decodes as a
 	// [BulkEvent] carrying the operation id.
+	//
+	// A change no single member made (for example a CRM sync) sends the same
+	// event to the whole workspace instead: it then arrives on the org channel
+	// with no operation id.
 	EventContactsReload EventName = "CONTACTS_RELOAD"
 )
 
@@ -112,6 +124,22 @@ const (
 	// constants) and [AccountEvent.Reason] the throttle reason (a SyncThrottle*
 	// constant), empty once the throttle is released.
 	EventAccountSyncState EventName = "ACCOUNT_SYNC_STATE"
+	// EventWarmupPlacement fires when a warmup partner sees where one of the
+	// workspace's warmup emails landed. [AccountEvent.Status] is "inbox",
+	// "tabs" or "spam", or, when the recipient's mailbox reports what a spam
+	// rescue came to, one of the WarmupPlacementRescue* values. It requires
+	// manage_emails.
+	EventWarmupPlacement EventName = "WARMUP_PLACEMENT"
+)
+
+// Spam-rescue outcomes carried in [AccountEvent.Status] on
+// [EventWarmupPlacement], alongside the landing spots "inbox", "tabs" and
+// "spam".
+const (
+	WarmupPlacementRescueMoved      = "rescue_moved"
+	WarmupPlacementRescueAlreadyOut = "rescue_already_out"
+	WarmupPlacementRescueGone       = "rescue_gone"
+	WarmupPlacementRescueFailed     = "rescue_failed"
 )
 
 // Backfill statuses carried in [AccountEvent.Status] on [EventAccountSyncState].
@@ -134,12 +162,13 @@ const (
 
 // Bulk operation events. Payload: [BulkEvent].
 //
-// These events carry no workspace id, so the org channel never sees them. They
-// are delivered on the user channel of the member who started the operation,
-// and on the operation's own bulk:<operation_id> topic ([BulkTopic]). The bulk
-// topic is joinable by any member but pushes an event only to the socket of
-// the user who started the operation; joining someone else's operation yields
-// an open channel that never receives anything.
+// They are addressed to the member who started the operation, so they arrive on
+// that member's user channel and on the operation's own bulk:<operation_id>
+// topic ([BulkTopic]). The bulk topic is joinable by any member but pushes an
+// event only to the socket of the user who started the operation; joining
+// someone else's operation yields an open channel that never receives anything.
+// An API key or OAuth token receives them only for operations in its own
+// workspace. [BulkEvent.OrgID] names that workspace when the server sets it.
 const (
 	EventBulkStarted   EventName = "BULK_STARTED"
 	EventBulkProgress  EventName = "BULK_PROGRESS"
@@ -190,6 +219,28 @@ const (
 	// EventAIResearchProgress fires as each run in a contact-research batch
 	// completes. Payload: [ResearchProgress].
 	EventAIResearchProgress EventName = "AI_RESEARCH_PROGRESS"
+	// EventMailboxImportProgress fires on the org channel as a mailbox import
+	// moves: at most once a second per import while rows settle, and always
+	// when it completes or is canceled. It carries the import id and status,
+	// not the rows; refetch the import. It requires manage_emails.
+	// Payload: [ImportProgressEvent].
+	EventMailboxImportProgress EventName = "MAILBOX_IMPORT_PROGRESS"
+	// EventContactImportProgress fires on the org channel as a background
+	// contact import moves: when it queues and starts, at most once a second
+	// while rows settle, and when it completes, fails or is canceled. It
+	// requires view_contacts. Payload: [ImportProgressEvent].
+	EventContactImportProgress EventName = "CONTACT_IMPORT_PROGRESS"
+	// EventPlacementTestUpdated fires when an inbox placement test starts, each
+	// time one of its copies gets a verdict, and when it finishes or is
+	// canceled. It carries ids and a status, not the results; refetch the
+	// test. A placement batch sends the same event with a batch id in place of
+	// a test id. It requires view_analytics. Payload: [PlacementTestEvent].
+	EventPlacementTestUpdated EventName = "PLACEMENT_TEST_UPDATED"
+	// EventCRMSynced fires when mirrored CRM records changed because a
+	// connected CRM pushed or pulled, so deal, task and contact views should
+	// refetch. Payload: [CRMSyncedEvent].
+	EventCRMSynced EventName = "CRM_SYNCED"
+
 	// EventAIDraftReady fires when the inbox agent has a reply awaiting
 	// review. It requires unibox access. Payload: [DraftReadyEvent].
 	EventAIDraftReady EventName = "AI_DRAFT_READY"
@@ -410,17 +461,26 @@ type EngagementEvent struct {
 	// later.
 	OccurredAt time.Time `json:"occurred_at,omitempty"`
 
-	// Client, DeviceType, CountryCode and City describe where and on what the
-	// engagement happened, when the consumer could tell. Any of them may be
-	// empty.
-	Client      string `json:"client,omitempty"`
-	DeviceType  string `json:"device_type,omitempty"`
-	CountryCode string `json:"country_code,omitempty"`
-	City        string `json:"city,omitempty"`
+	// Client, ClientType, DeviceType, OS, Browser, CountryCode and City
+	// describe where and on what the engagement happened, when the consumer
+	// could tell. Any of them may be empty.
+	Client string `json:"client,omitempty"`
+	// ClientType is "app" or "webmail".
+	ClientType string `json:"client_type,omitempty"`
+	// DeviceHidden is true when a mailbox provider's image proxy fetched the
+	// message, so the device is unknowable and DeviceType, OS and Browser say
+	// nothing about the recipient.
+	DeviceHidden bool   `json:"device_hidden,omitempty"`
+	DeviceType   string `json:"device_type,omitempty"`
+	OS           string `json:"os,omitempty"`
+	Browser      string `json:"browser,omitempty"`
+	CountryCode  string `json:"country_code,omitempty"`
+	City         string `json:"city,omitempty"`
 
-	// EmailAccountID and MessageID are reserved for the sending mailbox and
-	// the provider message id. The current server does not populate them on
-	// pulse events; use [InboxEvent] for mailbox-level identifiers.
+	// EmailAccountID is the sending mailbox, set on opens and clicks (and the
+	// direct variants) when the tracking service knows it. MessageID is
+	// reserved for the provider message id and is not populated; use
+	// [InboxEvent] for mailbox-level identifiers.
 	EmailAccountID string `json:"email_account_id,omitempty"`
 	MessageID      string `json:"message_id,omitempty"`
 }
@@ -442,8 +502,12 @@ type TaskProgressEvent struct {
 	StepName  string `json:"step_name,omitempty"`
 	StepIndex int    `json:"step_index,omitempty"`
 	// Progress is a percentage from 0 to 100.
-	Progress       int `json:"progress,omitempty"`
-	TotalContacts  int `json:"total_contacts,omitempty"`
+	Progress      int `json:"progress,omitempty"`
+	TotalContacts int `json:"total_contacts,omitempty"`
+	// TotalEmails is contacts times steps: the unit ProcessedCount and
+	// Progress are counted in, where one unit is one sent step rather than one
+	// finished contact.
+	TotalEmails    int `json:"total_emails,omitempty"`
 	ProcessedCount int `json:"processed_count,omitempty"`
 }
 
@@ -570,6 +634,43 @@ type MeetingEvent struct {
 	Source string `json:"source,omitempty"`
 	// State is "booked", "rescheduled" or "canceled".
 	State string `json:"state,omitempty"`
+}
+
+// ImportProgressEvent is the payload of [EventMailboxImportProgress] and
+// [EventContactImportProgress]. It names the import and its state; fetch the
+// import over the REST API for the rows.
+type ImportProgressEvent struct {
+	BaseEvent
+	ImportID string `json:"import_id"`
+	// Status is "running", "completed" or the canceled status for a mailbox import,
+	// and "queued", "running", "completed", "failed" or the canceled status for a
+	// contact import.
+	Status string `json:"status"`
+}
+
+// PlacementTestEvent is the payload of [EventPlacementTestUpdated]. Where the
+// copies landed stays behind the placement endpoints.
+type PlacementTestEvent struct {
+	BaseEvent
+	// TestID is set when one test moved. BatchID is set instead when a batch
+	// moved without one of its tests moving (a mailbox skipped or deferred, the
+	// batch finished).
+	TestID  string `json:"test_id,omitempty"`
+	BatchID string `json:"batch_id,omitempty"`
+	// CampaignID is set for a test of a campaign step.
+	CampaignID string `json:"campaign_id,omitempty"`
+	// Status is "running", "completed", the canceled status or "failed".
+	Status string `json:"status"`
+}
+
+// CRMSyncedEvent is the payload of [EventCRMSynced]: ids only, the records
+// stay behind their list endpoints.
+type CRMSyncedEvent struct {
+	BaseEvent
+	// Objects names what changed, for example deals, tasks or contacts.
+	Objects []string `json:"objects"`
+	// ContactID is set when the change belongs to one contact.
+	ContactID string `json:"contact_id,omitempty"`
 }
 
 // ResearchProgress is the payload of [EventAIResearchProgress]: one contact

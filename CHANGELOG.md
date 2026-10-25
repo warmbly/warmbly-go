@@ -3,6 +3,71 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- `OAuthAppInactive` held the wrong wire value. The server reports a disabled
+  app as `"disabled"`; use the new `OAuthAppDisabled`. The old constant is
+  kept and marked deprecated.
+- The `gateway` client now sends API keys and OAuth tokens in an
+  `X-Warmbly-Token` header (`gateway.CredentialHeader`), because the server
+  refuses them in the URL. Short-lived connection tokens still travel in the
+  query string.
+- `AssistantService.Approve` now reads the transcript for the pending tool call
+  first, because the server requires `tool_call_id` on approval. It returns
+  `ErrNoPendingApproval` when nothing is pending. `ApproveToolCall` skips that
+  read. `always_allow` is now a workspace-wide policy.
+- `AuthService.ChangePassword` documents that the server now ends every session
+  and issues a new token pair. `ChangePasswordSession` returns that pair.
+- Campaign kinds are gone from the server. `Campaign.Kind`, the `Kind` create
+  and list params, `CampaignsOverview.OneTime` and the `CampaignKind*`
+  constants are deprecated and no longer have any effect.
+- `WarmupDomainPlacement.Domain` is deprecated: placement rows are keyed by
+  mail host (`Provider` and `Label`), see `WarmupHostPlacement`.
+- `PoolLinkStartParams.RemoteOrganizationID` is required by the server when
+  starting a pool link.
+
+### Added
+
+- `client.Placement`, a new service for inbox placement tests, batches,
+  coverage, workspace seeds and the per-campaign placement monitor.
+- Mailboxes (`EmailService`): imports, admin grants, inbox vendors, sending
+  domains and tracking redirects, send identity, SMTP certificate pinning,
+  sync skip list, direct tracking, app-password switch, `StartOAuthWith`.
+- Analytics: `AccountsPage`, `DashboardFor`, `CampaignBetween`,
+  `WarmupPlacement`, `Direct`, `InboxTagging`. Unibox: `MoveToFolder`,
+  `MarkThreadsSeen`, `SnoozeThreads`, `UnsnoozeThreads`.
+- Campaigns: `SendPlan`, per-lead hold, pause, resume and CC, the placement
+  monitor and `CreateStepWith`. Contacts: the import lifecycle
+  (`ListImports` ... `DownloadImportFailures`), `BulkDeleteMatching`, select-all
+  filters on bulk edit and verification. Segments: `SetMembersMatching`.
+  Templates: `Analyze`.
+- Authentication: re-authentication (`Reauth`, `ReauthMethods` and the passkey,
+  SSO and native flows), `ResetPasswordSession`, `LinkSSO`,
+  `CompleteProductTour`, `RegenerateRecoveryCodes`.
+- Organization: member access scoping, invitation access, workspace category
+  and timezone. Billing and meta: managed subscriptions, view preferences.
+- CRM: bulk task update and delete, and the connected HubSpot and Pipedrive
+  surface. Integrations: Salesforce, Apollo, Clay, the Slack panel, the
+  community directory and inbound signing keys. Assistant tool policies. Lead
+  sync by segment. Pool link and cloud link offers, checkout and participation.
+- OAuth: workspace authorizations, app listings, suspension fields and
+  `ListWithAccess`.
+- Realtime: `EventWarmupPlacement`, `EventDirectEmailOpened`,
+  `EventDirectEmailClicked`, `EventMailboxImportProgress`,
+  `EventContactImportProgress`, `EventPlacementTestUpdated`, `EventCRMSynced`
+  with their intents, and new join refusal reasons.
+- 229 `ErrCode*` constants, `Error.Reason`, the `reauth_required` family,
+  `PermAppGrantable`, and new audit entity types.
+- New fields across `Email`, `Campaign`, `Contact`, `Form`, `Session`,
+  `AuthConfig`, `NotificationPreferences`, `OutreachSettings` and others.
+
+### Fixed
+
+- Outreach settings now round-trip `reply_intent` and `inbox_tagging`, which
+  the server resets to defaults when omitted on update.
+
 ## [0.3.1] - 2026-09-07
 
 Picks up the API changes that landed while 0.3.0 was being prepared. Additive,

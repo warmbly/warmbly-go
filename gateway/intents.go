@@ -63,4 +63,21 @@ const (
 	IntentForm = "FORM"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
+	// IntentDirectEmail covers opens and clicks on tracked email that no
+	// campaign sent ([EventDirectEmailOpened], [EventDirectEmailClicked]). They
+	// also match [IntentEmail].
+	IntentDirectEmail = "DIRECT_EMAIL"
+	// IntentPlacementTest covers inbox placement test updates
+	// ([EventPlacementTestUpdated]). It deliberately does not match
+	// [EventWarmupPlacement], which [IntentWarmup] covers.
+	IntentPlacementTest = "PLACEMENT_TEST"
+	// IntentMailboxImport covers mailbox import progress
+	// ([EventMailboxImportProgress]). It is not covered by [IntentAccount].
+	IntentMailboxImport = "MAILBOX_IMPORT"
+	// IntentContactImport covers contact import progress
+	// ([EventContactImportProgress]). It also matches [IntentContact].
+	IntentContactImport = "CONTACT_IMPORT"
+	// IntentCRM covers mirrored-CRM changes ([EventCRMSynced]). The trailing
+	// underscore keeps it to CRM_* event types.
+	IntentCRM = "CRM_"
 )

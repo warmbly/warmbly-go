@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -113,8 +114,10 @@ type User struct {
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
 	DeletionScheduledFor *time.Time `json:"deletion_scheduled_for,omitempty"`
 
-	// Folders, Tags and Categories are the user's label groups, returned on
-	// their own profile.
+	// Folders, Tags and Categories are the label registries of the workspace
+	// the session has selected (empty with none selected; a restricted member
+	// sees only those around their grants), returned on the caller's own
+	// profile.
 	Folders    []Group `json:"folders,omitempty"`
 	Tags       []Group `json:"tags,omitempty"`
 	Categories []Group `json:"categories,omitempty"`
@@ -126,8 +129,19 @@ type User struct {
 // PendingDeletion reports whether the account is scheduled for a hard delete.
 func (u *User) PendingDeletion() bool { return u.DeletionScheduledFor != nil }
 
+// Organization categories returned in [Organization.Category]. Unknown values
+// may appear on newer servers.
+const (
+	// OrganizationCategoryStandard is an ordinary workspace.
+	OrganizationCategoryStandard = "standard"
+	// OrganizationCategoryTest is a tester's sample workspace.
+	OrganizationCategoryTest = "test"
+)
+
 // Organization is a workspace.
 type Organization struct {
+	// Category is one of the OrganizationCategory* constants.
+	Category    string    `json:"category,omitempty"`
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Slug        *string   `json:"slug,omitempty"`
@@ -159,6 +173,11 @@ type Organization struct {
 	// AssistantSharedHistory makes AI assistant conversations visible to every
 	// member with the use-AI permission rather than only their author.
 	AssistantSharedHistory bool `json:"assistant_shared_history"`
+
+	// Timezone is the workspace's IANA zone: the default a new campaign's
+	// schedule is created in, and the clock a mailbox with no timezone of its
+	// own keeps its hours in. Empty means not set.
+	Timezone string `json:"timezone"`
 
 	Owner *User `json:"owner,omitempty"`
 }
@@ -280,6 +299,18 @@ type Member struct {
 	// Email and Name are flattened from the joined user for convenience.
 	Email string `json:"email"`
 	Name  string `json:"name"`
+
+	// AccessScope is [AccessScopeWorkspace] or [AccessScopeRestricted]: which
+	// resources the member's role applies to. Access carries the grants where
+	// the server lists them.
+	AccessScope string        `json:"access_scope"`
+	Access      *MemberAccess `json:"access,omitempty"`
+}
+
+// IsRestricted reports whether the member reaches only the resources granted
+// to them. The owner is never restricted.
+func (m *Member) IsRestricted() bool {
+	return m.Role != RoleOwner && m.AccessScope == AccessScopeRestricted
 }
 
 // Can reports whether the member holds every bit in perms. The owner always
@@ -293,6 +324,51 @@ func (m *Member) Can(perms uint16) bool {
 
 // IsOwner reports whether the member owns the organization.
 func (m *Member) IsOwner() bool { return m.Role == RoleOwner }
+
+// Access scopes returned in [MemberAccess.Scope] and [Member.AccessScope].
+// Unknown values may appear on newer servers; treat them as restricted.
+const (
+	// AccessScopeWorkspace is every resource in the workspace.
+	AccessScopeWorkspace = "workspace"
+	// AccessScopeRestricted is only the resources granted to the member.
+	AccessScopeRestricted = "restricted"
+)
+
+// MaxAccessGrants bounds each grant list on one member.
+const MaxAccessGrants = 500
+
+// MemberAccess is the resource scope set on a member or an invitation. A
+// restricted member's role can grant at most view-campaigns, view-analytics
+// and unibox access, and only on the resources listed here. Campaign access
+// never grants a mailbox.
+type MemberAccess struct {
+	// Scope is [AccessScopeWorkspace] or [AccessScopeRestricted].
+	Scope string `json:"scope"`
+	// CampaignFolderIDs grant every campaign the folder holds at the time of
+	// the request.
+	CampaignFolderIDs []string `json:"campaign_folder_ids"`
+	CampaignIDs       []string `json:"campaign_ids"`
+	EmailAccountIDs   []string `json:"email_account_ids"`
+}
+
+// SetMemberAccessParams replaces a member's whole access scope, so a retry
+// lands on the same state. The grant lists are ignored for a workspace scope.
+type SetMemberAccessParams struct {
+	// Scope is [AccessScopeWorkspace] or [AccessScopeRestricted]; required.
+	Scope             string   `json:"scope"`
+	CampaignFolderIDs []string `json:"campaign_folder_ids"`
+	CampaignIDs       []string `json:"campaign_ids"`
+	EmailAccountIDs   []string `json:"email_account_ids"`
+}
+
+// SuggestedSender is a mailbox sending for the campaigns an administrator is
+// about to grant, for review before granting it.
+type SuggestedSender struct {
+	ID          string   `json:"id"`
+	Email       string   `json:"email"`
+	Name        string   `json:"name"`
+	CampaignIDs []string `json:"campaign_ids"`
+}
 
 // Role is an organization-scoped custom role: a named permission set members
 // are assigned to. Editing a role writes through to every member holding it.
@@ -340,13 +416,20 @@ type Invitation struct {
 	InvitedBy      string       `json:"invited_by"`
 	ExpiresAt      time.Time    `json:"expires_at"`
 	CreatedAt      time.Time    `json:"created_at"`
+	// Access restricts the invitee from the moment they join; nil is the
+	// entire workspace.
+	Access *MemberAccess `json:"access,omitempty"`
+	// Lapsed is the server's "expired" flag, set on rows listed with
+	// IncludeExpired; such an invitation grants nothing and can only be sent
+	// again. Use [Invitation.Expired] to test an invitation either way.
+	Lapsed bool `json:"expired,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
 }
 
 // Expired reports whether the invitation has lapsed.
-func (i *Invitation) Expired() bool { return timeNow().After(i.ExpiresAt) }
+func (i *Invitation) Expired() bool { return i.Lapsed || timeNow().After(i.ExpiresAt) }
 
 // InvitationPreview is the public view of an invitation, resolved from its
 // token before the recipient commits to joining. It deliberately carries only
@@ -370,6 +453,8 @@ type InvitationPreview struct {
 // OrganizationCreateParams creates a workspace.
 type OrganizationCreateParams struct {
 	Name string `json:"name"`
+	// Timezone is the workspace timezone, an IANA name. Optional.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // OrganizationUpdateParams updates the current workspace. Nil fields are left
@@ -387,6 +472,10 @@ type OrganizationUpdateParams struct {
 
 	InboxAgentEnabled      *bool `json:"inbox_agent_enabled,omitempty"`
 	AssistantSharedHistory *bool `json:"assistant_shared_history,omitempty"`
+
+	// Timezone is the workspace timezone, an IANA name; an empty string clears
+	// it. Changing it reschedules parked warmup and campaign sends.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // InviteMemberParams invites someone by email into one or more roles.
@@ -396,6 +485,9 @@ type InviteMemberParams struct {
 	RoleIDs []string `json:"role_ids,omitempty"`
 	// RoleID is a single-role shorthand for RoleIDs.
 	RoleID *string `json:"role_id,omitempty"`
+	// Access restricts the invitee from the moment they join; nil is the
+	// entire workspace.
+	Access *MemberAccess `json:"access,omitempty"`
 }
 
 // UpdateMemberParams replaces a member's assigned roles.
@@ -776,6 +868,33 @@ func (s *OrganizationService) RemoveMember(ctx context.Context, id string, opts 
 	return s.client.delete(ctx, "organization/members/"+url.PathEscape(id), opts...)
 }
 
+// MemberAccess returns which resources the member's role applies to.
+// Requires the manage-team permission.
+func (s *OrganizationService) MemberAccess(ctx context.Context, userID string, opts ...RequestOption) (*MemberAccess, *Response, error) {
+	return fetch[MemberAccess](ctx, s.client, "organization/members/"+url.PathEscape(userID)+"/access", opts)
+}
+
+// SetMemberAccess replaces a member's access scope and returns the updated
+// membership. Requires the manage-team permission. The server refuses to
+// restrict a member whose role grants more than a restricted scope can hold.
+func (s *OrganizationService) SetMemberAccess(ctx context.Context, userID string, params *SetMemberAccessParams, opts ...RequestOption) (*Member, *Response, error) {
+	return send[Member](ctx, s.client.put, "organization/members/"+url.PathEscape(userID)+"/access", params, opts)
+}
+
+// SuggestedSenders returns the mailboxes the given campaigns and folders send
+// from, for an administrator to review before granting them with
+// [OrganizationService.SetMemberAccess]. Requires the manage-team permission.
+func (s *OrganizationService) SuggestedSenders(ctx context.Context, campaignIDs, campaignFolderIDs []string, opts ...RequestOption) ([]SuggestedSender, *Response, error) {
+	q := make(url.Values)
+	if len(campaignIDs) > 0 {
+		q.Set("campaign_ids", strings.Join(campaignIDs, ","))
+	}
+	if len(campaignFolderIDs) > 0 {
+		q.Set("campaign_folder_ids", strings.Join(campaignFolderIDs, ","))
+	}
+	return fetchData[SuggestedSender](ctx, s.client, withQuery("organization/access/suggested-senders", q), opts)
+}
+
 // TransferOwnership hands the workspace to another member. Only the current
 // owner may call it.
 func (s *OrganizationService) TransferOwnership(ctx context.Context, newOwnerUserID string, opts ...RequestOption) (*Response, error) {
@@ -812,6 +931,22 @@ func (s *OrganizationService) DeleteRole(ctx context.Context, id string, opts ..
 // Invitations returns the workspace's pending invitations.
 func (s *OrganizationService) Invitations(ctx context.Context, opts ...RequestOption) ([]Invitation, *Response, error) {
 	return fetchData[Invitation](ctx, s.client, "organization/invitations", opts)
+}
+
+// InvitationListParams filters [OrganizationService.ListInvitations].
+type InvitationListParams struct {
+	// IncludeExpired adds invitations that lapsed unaccepted, flagged
+	// [Invitation.Lapsed], so they can be sent again.
+	IncludeExpired bool
+}
+
+// ListInvitations is [OrganizationService.Invitations] with filters.
+func (s *OrganizationService) ListInvitations(ctx context.Context, params *InvitationListParams, opts ...RequestOption) ([]Invitation, *Response, error) {
+	q := make(url.Values)
+	if params != nil && params.IncludeExpired {
+		q.Set("include_expired", "true")
+	}
+	return fetchData[Invitation](ctx, s.client, withQuery("organization/invitations", q), opts)
 }
 
 // CancelInvitation withdraws a pending invitation.

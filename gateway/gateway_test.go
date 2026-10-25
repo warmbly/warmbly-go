@@ -125,9 +125,11 @@ func TestExtractSeq(t *testing.T) {
 }
 
 func TestSocketURLCarriesCredentialAndVersion(t *testing.T) {
-	c := New("wmbly_key", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
+	// A short-lived connection token is the one credential the server still
+	// accepts in the URL.
+	c := New("eyJ.conn.token", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
 	got := c.socketURL()
-	for _, want := range []string{"token=wmbly_key", "vsn=" + protocolVersion} {
+	for _, want := range []string{"token=eyJ.conn.token", "vsn=" + protocolVersion} {
 		if !strings.Contains(got, want) {
 			t.Errorf("socketURL() = %q, want it to contain %q", got, want)
 		}

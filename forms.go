@@ -215,6 +215,10 @@ type Form struct {
 	// RedirectURL, when set, sends the visitor to your own thank-you page
 	// instead of showing SuccessMessage.
 	RedirectURL string `json:"redirect_url"`
+	// RedirectURLActive is false when RedirectURL is not on one of the
+	// workspace's own domains, in which case visitors see SuccessMessage
+	// instead. Nil when the server did not say (no RedirectURL set).
+	RedirectURLActive *bool `json:"redirect_url_active,omitempty"`
 	// CampaignID is the campaign new contacts are enrolled in on submit.
 	// Sending still follows that campaign's own schedule and limits; a form
 	// never causes immediate mail.
@@ -229,6 +233,11 @@ type Form struct {
 	// CaptchaEnabled adds a Cloudflare Turnstile challenge. It only takes
 	// effect when [FormsConfig.CaptchaAvailable] is true for the instance.
 	CaptchaEnabled bool `json:"captcha_enabled"`
+	// TriageEnabled classifies each submission with an AI judgment: junk is
+	// kept but creates no contact and joins no campaign. See
+	// [FormSubmission.Triage]. It only works when [FormsConfig.TriageAvailable]
+	// is true for the instance.
+	TriageEnabled bool `json:"triage_enabled"`
 
 	// LogoURL, CoverURL and BackgroundURL are the public object URLs of the
 	// uploaded brand assets; empty when none is set. Change them with
@@ -402,6 +411,8 @@ type FormUpdateParams struct {
 	CategoryIDs    *[]string `json:"category_ids,omitempty"`
 	AllowedDomains *[]string `json:"allowed_domains,omitempty"`
 	CaptchaEnabled *bool     `json:"captcha_enabled,omitempty"`
+	// TriageEnabled switches submission triage; see [Form.TriageEnabled].
+	TriageEnabled *bool `json:"triage_enabled,omitempty"`
 }
 
 // MarshalJSON emits campaign_id as an explicit null when ClearCampaign is set,
@@ -430,7 +441,22 @@ type FormsConfig struct {
 	// CaptchaAvailable reports whether the operator configured a captcha
 	// provider, which [Form.CaptchaEnabled] needs to take effect.
 	CaptchaAvailable bool `json:"captcha_available"`
+	// TriageAvailable reports whether submission triage is configured, which
+	// [Form.TriageEnabled] needs to take effect.
+	TriageAvailable bool `json:"triage_available"`
 }
+
+// Verdicts of submission triage, in [FormSubmission.Triage]. The set can grow;
+// treat the field as an open string.
+const (
+	FormTriageBuyer     = "buyer"
+	FormTriageVendor    = "vendor"
+	FormTriageJobSeeker = "job_seeker"
+	FormTriageOther     = "other"
+	// FormTriageJunk submissions are kept but create no contact and join no
+	// campaign.
+	FormTriageJunk = "junk"
+)
 
 // FormSubmission is one public submit, kept verbatim.
 type FormSubmission struct {
@@ -448,8 +474,13 @@ type FormSubmission struct {
 	Data map[string]any `json:"data"`
 	// SourceURL is the page the form was submitted from (the host page for
 	// an embed, the hosted page otherwise).
-	SourceURL string    `json:"source_url"`
-	CreatedAt time.Time `json:"created_at"`
+	SourceURL string `json:"source_url"`
+	// Triage is one of the FormTriage* verdicts; empty when the form did not
+	// triage or the call did not complete. TriageConfidence is the model's own
+	// confidence from 0 to 1.
+	Triage           string    `json:"triage"`
+	TriageConfidence float64   `json:"triage_confidence"`
+	CreatedAt        time.Time `json:"created_at"`
 
 	// ContactEmail, ContactName and CampaignName are display summaries of
 	// the linked records, resolved at read time; empty when unlinked.

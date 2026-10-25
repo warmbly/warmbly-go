@@ -66,7 +66,7 @@ const (
 	// phone, company, custom.*) take the text operators; comparisons ignore
 	// case.
 	SegmentFieldText SegmentFieldKind = "text"
-	// SegmentFieldEnum fields (source, verification_status, esp_provider)
+	// SegmentFieldEnum fields (source, verification_status, mail_host, esp_provider)
 	// take in/not_in with Values drawn from [SegmentFieldSpec.Options].
 	SegmentFieldEnum SegmentFieldKind = "enum"
 	// SegmentFieldBool fields (subscribed, suppressed, is_catch_all) take
@@ -163,8 +163,9 @@ const (
 	SegmentMaxConditions = 50
 	// SegmentMaxListValues is the most entries a list condition may hold.
 	SegmentMaxListValues = 200
-	// SegmentMaxMemberBatch is the most contact IDs one SetMembers or
-	// MemberModes call accepts.
+	// SegmentMaxMemberBatch is the most contact IDs one MemberModes call
+	// accepts. SetMembers takes up to [ContactMaxBatchIDs] ids, or a whole
+	// search through [SegmentService.SetMembersMatching].
 	SegmentMaxMemberBatch = 1000
 	// SegmentMaxOverrides caps the Overrides listing.
 	SegmentMaxOverrides = 500
@@ -224,6 +225,9 @@ type SegmentFieldSpec struct {
 	Kind  SegmentFieldKind `json:"kind"`
 	// Options lists the accepted Values of an enum field; nil otherwise.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels names an enum's values for display where the value alone
+	// is not readable; a value missing from it shows as itself.
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 }
 
 // SegmentCreateParams creates a segment. Name is required; everything else
@@ -339,7 +343,7 @@ func (s *SegmentService) Delete(ctx context.Context, id string, opts ...RequestO
 // SetMembers writes one manual override on a batch of contacts:
 // [SegmentMemberInclude] pins them in, [SegmentMemberExclude] pins them out,
 // [SegmentMemberAuto] clears any override so the conditions decide again. Up
-// to [SegmentMaxMemberBatch] IDs per call; IDs outside the organization are
+// to [ContactMaxBatchIDs] IDs per call; IDs outside the organization are
 // ignored. It returns how many rows changed. Pinning in (or clearing an
 // exclude) can admit new members, so linked campaigns are synced afterwards.
 func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs []string, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
@@ -347,6 +351,29 @@ func (s *SegmentService) SetMembers(ctx context.Context, id string, contactIDs [
 		Contacts []string          `json:"contacts"`
 		Mode     SegmentMemberMode `json:"mode"`
 	}{Contacts: contactIDs, Mode: mode}
+	var out struct {
+		Updated int `json:"updated"`
+	}
+	resp, err := s.client.post(ctx, "segments/"+url.PathEscape(id)+"/members", body, &out, opts...)
+	if err != nil {
+		return 0, resp, err
+	}
+	return out.Updated, resp, nil
+}
+
+// SetMembersMatching is [SegmentService.SetMembers] for a selection, so it can
+// take "select all matching" (up to [ContactMaxBulkSelection] contacts, minus
+// sel.Exclude) as well as an id list. A selection that matches nothing is a
+// 400. It returns how many rows changed.
+func (s *SegmentService) SetMembersMatching(ctx context.Context, id string, sel *ContactSelection, mode SegmentMemberMode, opts ...RequestOption) (int, *Response, error) {
+	var body struct {
+		ContactSelection
+		Mode SegmentMemberMode `json:"mode"`
+	}
+	if sel != nil {
+		body.ContactSelection = *sel
+	}
+	body.Mode = mode
 	var out struct {
 		Updated int `json:"updated"`
 	}

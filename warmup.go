@@ -62,7 +62,10 @@ type WarmupRoutingRuleParams struct {
 	RecipientMatchType  string  `json:"recipient_match_type"`
 	RecipientMatchValue string  `json:"recipient_match_value,omitempty"`
 	Weight              float64 `json:"weight,omitempty"`
-	Enabled             *bool   `json:"enabled,omitempty"`
+	// Enabled switches the rule on. The server reads an omitted value as
+	// false, so set it explicitly: a rule sent without it is stored disabled
+	// (on update, it is disabled).
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // List returns the workspace's routing rules in priority order.

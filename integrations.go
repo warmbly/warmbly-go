@@ -31,6 +31,12 @@ const (
 	ProviderCalendly     = "calendly"
 	ProviderCalCom       = "cal_com"
 	ProviderGoogleSheets = "google_sheets"
+	// ProviderApollo imports Apollo lists as contacts and enriches contacts
+	// through Apollo's people match; it connects by API key.
+	ProviderApollo = "apollo"
+	// ProviderClay takes rows from a Clay table's HTTP API column through a
+	// per-connection inbound URL and can send events back to a table.
+	ProviderClay = "clay"
 	// ProviderMillionVerifier is a pay-as-you-go address verifier connected
 	// by API key. While it has credits it replaces the built-in check for
 	// every contact you import; when they run out the built-in check takes
@@ -38,6 +44,9 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier, connected like
+	// [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -88,6 +97,9 @@ type IntegrationCatalogEntry struct {
 	// provider, so an unconfigured one can be greyed out rather than failing
 	// at connect time.
 	Configured bool `json:"configured"`
+	// Rank is the provider's popularity on this instance, 1 being the most
+	// used: workspaces with a live connection, ties broken by catalog order.
+	Rank int `json:"rank"`
 	// Capability is the provider's raw capability descriptor, when it has one.
 	Capability json.RawMessage `json:"capability,omitempty"`
 }
@@ -398,6 +410,48 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 	return out.Sent, resp, nil
 }
 
+// PushSelection is [IntegrationService.Push] for a [ContactSelection], which
+// can name "select all matching" through its filter. The push is synchronous
+// against the provider's API, so a selection resolving to more than 500
+// contacts is refused with "too_many_contacts".
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, selection *ContactSelection, opts ...RequestOption) (*PushResult, *Response, error) {
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", selection, opts)
+}
+
+// SetInboundSigningKey sets the key a Calendly or Cal.com connection's
+// deliveries must be signed with, on top of the secret in the inbound URL. An
+// empty key goes back to the URL secret alone. Any other provider, or a key
+// of the wrong length, is a 400. Requires the integrations scope with
+// manage-settings.
+func (s *IntegrationService) SetInboundSigningKey(ctx context.Context, id, signingKey string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
+	body := struct {
+		SigningKey string `json:"signing_key"`
+	}{SigningKey: signingKey}
+	var out struct {
+		Connection *IntegrationConnection `json:"connection"`
+	}
+	resp, err := s.client.put(ctx, "integrations/connections/"+url.PathEscape(id)+"/signing-key", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Connection, resp, nil
+}
+
+// RotateInboundURL mints a new inbound URL for a Calendly or Cal.com
+// connection and returns it; the previous URL stops working at once. Treat
+// the URL as a credential. Requires the integrations scope with
+// manage-settings.
+func (s *IntegrationService) RotateInboundURL(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		InboundWebhookURL string `json:"inbound_webhook_url"`
+	}
+	resp, err := s.client.post(ctx, "integrations/connections/"+url.PathEscape(id)+"/rotate-inbound-url", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.InboundWebhookURL, resp, nil
+}
+
 // Push sends the given contacts to the provider now, rather than waiting for
 // an event to fire.
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
@@ -409,8 +463,35 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 
 // --- OAuth connect flow (session-only) ---
 
+// Salesforce login environments for [IntegrationOAuthStartParams.Environment].
+const (
+	SalesforceProduction = "production"
+	SalesforceSandbox    = "sandbox"
+)
+
+// IntegrationOAuthStartParams begins the consent flow for an OAuth provider.
+type IntegrationOAuthStartParams struct {
+	// Provider is one of the Provider* constants.
+	Provider string `json:"provider"`
+	// Label names the resulting connection.
+	Label string `json:"label,omitempty"`
+	// Environment ([SalesforceProduction] or [SalesforceSandbox]) and Domain (a
+	// Salesforce My Domain host) choose the login server. They are ignored for
+	// other providers; a Domain that is not a Salesforce host fails with
+	// "invalid_salesforce_domain".
+	Environment string `json:"environment,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+}
+
+// StartOAuthWith is [IntegrationService.StartOAuth] with the Salesforce login
+// server options. Session-only; needs the manage-settings permission.
+func (s *IntegrationService) StartOAuthWith(ctx context.Context, params *IntegrationOAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", params, opts)
+}
+
 // StartOAuth begins the consent flow for an OAuth provider and returns the URL
 // to send the user to. The label, if given, names the resulting connection.
+// Use [IntegrationService.StartOAuthWith] to choose a Salesforce login server.
 func (s *IntegrationService) StartOAuth(ctx context.Context, provider, label string, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
 	body := struct {
 		Provider string `json:"provider"`

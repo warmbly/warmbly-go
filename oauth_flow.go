@@ -142,6 +142,13 @@ func (c *OAuth2Config) Exchange(ctx context.Context, code string, opts ...AuthCo
 }
 
 // Refresh exchanges a refresh token for a fresh access token.
+//
+// Refresh tokens rotate: every refresh returns a new one and the old one stops
+// working. Presenting a refresh token that was already used is treated as theft
+// and ends the whole grant, so store the new token before using it, and never
+// refresh from two places with the same token. A [TokenSource] from
+// [OAuth2Config.TokenSource] serializes refreshes for you. The refreshed scope
+// is also capped by the granting member's current role, so it can shrink.
 func (c *OAuth2Config) Refresh(ctx context.Context, refreshToken string) (*Token, error) {
 	v := url.Values{
 		"grant_type":    {"refresh_token"},

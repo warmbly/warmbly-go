@@ -128,6 +128,40 @@ const (
 	// ([AuditEntityPoolLink]) and the instance side ([AuditEntityCloudLink]).
 	AuditEntityPoolLink  = "pool_link"
 	AuditEntityCloudLink = "cloud_link"
+
+	// AuditEntityCampaignLead is one contact inside one campaign: the entity id
+	// is the contact and the metadata carries the campaign. Written when a
+	// member pauses or resumes that lead's flow, or changes who it copies.
+	AuditEntityCampaignLead = "campaign_lead"
+
+	// Mailbox connection paths beyond a single account: a bulk mailbox import,
+	// a domain-wide grant from the provider's admin console, and a mailbox
+	// vendor connection.
+	AuditEntityMailboxImport = "mailbox_import"
+	AuditEntityMailboxGrant  = "mailbox_grant"
+	AuditEntityMailboxVendor = "mailbox_vendor"
+	// AuditEntityDomainRedirect is a domain's redirect to another address.
+	AuditEntityDomainRedirect = "domain_redirect"
+	// AuditEntityEmailImage is one image in the workspace's library for email
+	// bodies.
+	AuditEntityEmailImage = "email_image"
+
+	// AuditEntityAIToolPolicy is the workspace's "always allow" policy for one
+	// assistant tool, set or revoked.
+	AuditEntityAIToolPolicy = "ai_tool_policy"
+
+	// OAuth apps the workspace owns: the app itself, its community directory
+	// listing, and a member's authorization of an app (revoked by the member
+	// or by a workspace admin).
+	AuditEntityOAuthApplication   = "oauth_application"
+	AuditEntityAppListing         = "app_listing"
+	AuditEntityOAuthAuthorization = "oauth_authorization"
+
+	// Inbox placement: a test or batch started or canceled, and a campaign's
+	// scheduled test set up, changed or removed.
+	AuditEntityPlacementTest    = "placement_test"
+	AuditEntityPlacementBatch   = "placement_batch"
+	AuditEntityPlacementMonitor = "placement_monitor"
 )
 
 // AuditActor is the member who performed an audited action.

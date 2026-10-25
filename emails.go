@@ -25,6 +25,38 @@ const (
 	MailboxStatusRevoked  = "revoked"
 )
 
+// How a mailbox signs in, returned in [Email.AuthMethod].
+const (
+	MailAuthPassword    = "password"
+	MailAuthAppPassword = "app_password"
+	MailAuthOAuth       = "oauth"
+	MailAuthDelegated   = "delegated"
+)
+
+// Test participation modes carried in [Email.TestMode].
+const (
+	// TestModeLegacy takes part in placement tests and warmup traffic as every
+	// mailbox always did.
+	TestModeLegacy = "legacy"
+	// TestModeDiagnostic takes part only in the directions enabled by
+	// [Email.TestSendEnabled] and [Email.TestReceiveEnabled].
+	TestModeDiagnostic = "diagnostic"
+	// TestModeOff stays out of test traffic.
+	TestModeOff = "off"
+)
+
+// Where warmup mail is filed in the mailbox's own client, carried in
+// [Email.WarmupPlacement].
+const (
+	// WarmupPlacementFolder moves warmup mail into one named folder.
+	WarmupPlacementFolder = "folder"
+	// WarmupPlacementInbox leaves warmup mail where the provider put it.
+	WarmupPlacementInbox = "inbox"
+	// WarmupPlacementArchive takes warmup mail out of the inbox through the
+	// provider's archive.
+	WarmupPlacementArchive = "archive"
+)
+
 // Sending-domain authentication states returned in [Email.AuthState].
 const (
 	// AuthStateUnknown means the domain has not been checked yet, the DNS
@@ -70,12 +102,35 @@ type Email struct {
 	// SignatureCode reports whether the HTML signature is edited as raw markup.
 	SignatureCode bool `json:"signature_code"`
 
+	// SendAsEmail is the verified provider alias this mailbox sends from;
+	// empty means the mailbox's own address. The alias list is read through
+	// [EmailService.Identity].
+	SendAsEmail string `json:"send_as_email"`
+
 	// Provider is the mailbox backend: [ProviderGmail], [ProviderOutlook] or
 	// [ProviderSMTPIMAP].
 	Provider string `json:"provider"`
 	// Status is the connection state: [MailboxStatusActive],
 	// [MailboxStatusInactive] or [MailboxStatusRevoked].
 	Status string `json:"status"`
+
+	// MailHost is who hosts the mailbox (for example "google_workspace" or
+	// "microsoft365"), or "" until known. Treat it as an open set.
+	MailHost string `json:"mail_host"`
+	// AuthMethod is how the mailbox signs in: [MailAuthPassword],
+	// [MailAuthAppPassword], [MailAuthOAuth] or [MailAuthDelegated], or ""
+	// until known. Treat it as an open set.
+	AuthMethod string `json:"auth_method"`
+	// DomainGrantID is the administrator grant a delegated mailbox connects
+	// through; see [EmailService.Grants].
+	DomainGrantID *string `json:"domain_grant_id,omitempty"`
+	// VendorConnectionID and Vendor name the inbox vendor account the mailbox
+	// was imported from.
+	VendorConnectionID *string `json:"vendor_connection_id,omitempty"`
+	Vendor             string  `json:"vendor,omitempty"`
+	// AvatarURL is the mailbox's own profile photo; empty when its provider or
+	// vendor has none.
+	AvatarURL string `json:"avatar_url"`
 
 	// LastSyncedAt is when the mailbox was last polled for inbound mail; nil
 	// until the first sync has run. [EmailService.SyncStatus] has the detail.
@@ -88,6 +143,18 @@ type Email struct {
 	// daily limit, the warmup ramp, sending behavior and the workspace's daily
 	// send limit all still apply and the smallest wins.
 	CampaignLimit int `json:"campaign_limit"`
+	// TestMode is how the mailbox takes part in placement tests and warmup
+	// traffic: [TestModeLegacy], [TestModeDiagnostic] or [TestModeOff]. nil
+	// behaves as [TestModeLegacy].
+	TestMode *string `json:"test_mode"`
+	// TestSendEnabled and TestReceiveEnabled pick the direction a
+	// [TestModeDiagnostic] mailbox takes part in.
+	TestSendEnabled    bool `json:"test_send_enabled"`
+	TestReceiveEnabled bool `json:"test_receive_enabled"`
+	// SharedDailyLimit and RollingRecipientLimit are optional extra caps on
+	// the mailbox's sending; nil means no such cap is set.
+	SharedDailyLimit      *int `json:"shared_daily_limit"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit"`
 	// MinWaitTime is the minimum gap, in seconds, between two sends (default
 	// 600). Jitter is added on top. While sending behavior is enabled the
 	// behavior's gap range replaces it.
@@ -100,6 +167,14 @@ type Email struct {
 	// nothing in the account by itself. Gmail and Outlook file their own copy
 	// and ignore the flag. Warmup mail is never filed.
 	SaveToSent bool `json:"save_to_sent"`
+	// RelayFolderMoves makes Archive, Delete and Move to inbox in the unibox
+	// move the message in the mailbox too. On by default.
+	RelayFolderMoves bool `json:"relay_folder_moves"`
+
+	// TrackDirectMail opts this mailbox's hand-written unibox sends into the
+	// open/click tracking campaign mail already gets. Off by default; see
+	// [EmailService.SetDirectTracking].
+	TrackDirectMail bool `json:"track_direct_mail"`
 
 	// TrackingDomain is the custom open/click tracking subdomain, or "" for
 	// the shared host. Only a verified domain is used at send time; see
@@ -145,6 +220,16 @@ type Email struct {
 	WarmupEndTime   string `json:"warmup_end_time"`
 	// WarmupDays is a bitmask of the weekdays warmup runs on.
 	WarmupDays int `json:"warmup_days"`
+	// WarmupPlacement decides where warmup mail is filed in the mailbox's own
+	// client: [WarmupPlacementFolder], [WarmupPlacementInbox] or
+	// [WarmupPlacementArchive]. Empty reads as folder.
+	WarmupPlacement string `json:"warmup_placement"`
+	// WarmupFolder names the destination for [WarmupPlacementFolder]; empty
+	// means the instance default folder.
+	WarmupFolder string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail stays in the mailbox before
+	// it is deleted; 0 follows the instance setting.
+	WarmupRetentionDays int `json:"warmup_retention_days"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behavior and
 	// business-hours window are evaluated in. Empty means not configured, so
@@ -266,6 +351,20 @@ type EmailUpdateParams struct {
 	MinWaitTime *int    `json:"min_wait_time,omitempty"`
 	ReplyTo     *string `json:"reply_to,omitempty"`
 
+	// SendAsEmail picks the verified provider alias the mailbox sends from;
+	// an empty string clears it back to the mailbox's own address. It must be
+	// an address [EmailService.Identity] reports as verified.
+	SendAsEmail *string `json:"send_as_email,omitempty"`
+
+	// TestMode is [TestModeLegacy], [TestModeDiagnostic] or [TestModeOff].
+	TestMode           *string `json:"test_mode,omitempty"`
+	TestSendEnabled    *bool   `json:"test_send_enabled,omitempty"`
+	TestReceiveEnabled *bool   `json:"test_receive_enabled,omitempty"`
+	// SharedDailyLimit and RollingRecipientLimit are the optional extra
+	// sending caps reported on [Email].
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
+
 	// Timezone is the mailbox's own IANA zone, such as "America/Denver". Send
 	// an empty string to clear it, which leaves only the campaign's own window
 	// applying.
@@ -289,6 +388,18 @@ type EmailUpdateParams struct {
 	WarmupStartTime *string `json:"warmup_start_time,omitempty"`
 	WarmupEndTime   *string `json:"warmup_end_time,omitempty"`
 	WarmupDays      *int    `json:"warmup_days,omitempty"`
+	// WarmupPlacement is [WarmupPlacementFolder], [WarmupPlacementInbox] or
+	// [WarmupPlacementArchive]; WarmupFolder names the folder for the first
+	// and is cleared back to the instance default by an empty string.
+	WarmupPlacement *string `json:"warmup_placement,omitempty"`
+	WarmupFolder    *string `json:"warmup_folder,omitempty"`
+	// WarmupRetentionDays is how long warmup mail is kept in the mailbox; 0
+	// goes back to the instance setting.
+	WarmupRetentionDays *int `json:"warmup_retention_days,omitempty"`
+
+	// RelayFolderMoves turns the unibox's filing relay to the mailbox on or
+	// off.
+	RelayFolderMoves *bool `json:"relay_folder_moves,omitempty"`
 
 	// Tags replaces the mailbox's tag ids wholesale when non-nil.
 	Tags []string `json:"tags,omitempty"`
@@ -460,7 +571,7 @@ type VerifyResult struct {
 }
 
 // Connection security modes accepted in [MailboxCredentials.Security]. TLS is
-// mandatory either way; the difference is whether it is negotiated before the
+// required except for [MailSecurityNone] against a loopback host; otherwise the difference is whether it is negotiated before the
 // protocol greeting or upgraded in-band after it.
 const (
 	// MailSecurityTLS is implicit TLS: encrypted from the first byte. The
@@ -469,6 +580,10 @@ const (
 	// MailSecurityStartTLS is a plaintext greeting upgraded in place with
 	// STARTTLS. The convention for SMTP 587, 25 and 2525, and IMAP 143.
 	MailSecurityStartTLS = "starttls"
+	// MailSecurityNone is no encryption at all. The server accepts it only for
+	// a loopback host (a local relay such as Proton Bridge) on a self-hosted
+	// instance and refuses it anywhere else.
+	MailSecurityNone = "none"
 )
 
 // MailboxCredentials are the host, port and login for one leg of an SMTP/IMAP
@@ -479,12 +594,21 @@ type MailboxCredentials struct {
 	Host     string `json:"host"`
 	// Port is any port from 1 to 65535.
 	Port int `json:"port"`
-	// Security is [MailSecurityTLS] or [MailSecurityStartTLS]. Leave it empty
+	// Security is [MailSecurityTLS], [MailSecurityStartTLS] or (loopback hosts
+	// on a self-hosted instance only) [MailSecurityNone]. Leave it empty
 	// to let the port decide (tls for SMTP 465 and IMAP 993, starttls for SMTP
 	// 587 and IMAP 143); set it for anything non-standard, such as a
 	// submission relay on 2525. A server expecting STARTTLS looks unreachable
 	// to a client attempting implicit TLS, and vice versa.
 	Security string `json:"security,omitempty"`
+	// TLSUnverified records the owner's choice to trust this server on its
+	// pinned certificate ([MailboxCredentials.TLSPin]) instead of a
+	// certificate authority. Find the fingerprint with
+	// [EmailService.CheckCertificates].
+	TLSUnverified bool `json:"tls_unverified,omitempty"`
+	// TLSPin is the SHA-256 of the server certificate's public key, as hex. It
+	// is only read when TLSUnverified is set.
+	TLSPin string `json:"tls_pin,omitempty"`
 }
 
 // SMTPIMAPParams connects a mailbox by its own SMTP and IMAP credentials, for
@@ -686,6 +810,9 @@ type MailboxSyncPolicy struct {
 	// OrgDailyMessages caps new plus backfilled messages stored across the
 	// whole organization per UTC day.
 	OrgDailyMessages int `json:"org_daily_messages"`
+	// SkipFolders names the folders the sync leaves alone, each also covering
+	// its subfolders. Per mailbox and only meaningful on IMAP.
+	SkipFolders []string `json:"skip_folders,omitempty"`
 }
 
 // MailboxSyncFolderCursor is the resumable position inside one folder of a
@@ -732,6 +859,12 @@ type MailboxSyncState struct {
 	// server but not yet stored. It drops back to zero once they are admitted.
 	Deferred int `json:"deferred"`
 
+	// FoldersSkippedCap counts folders the sync could not follow because the
+	// mailbox has more than it covers; FoldersSkippedConflict counts folders
+	// the server listed under a name more than once.
+	FoldersSkippedCap      int `json:"folders_skipped_cap,omitempty"`
+	FoldersSkippedConflict int `json:"folders_skipped_conflict,omitempty"`
+
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 }
 
@@ -746,6 +879,21 @@ type MailboxSync struct {
 	// State is nil until the worker has reported once.
 	State  *MailboxSyncState `json:"state"`
 	Policy MailboxSyncPolicy `json:"policy"`
+	// SkipFolders is the stored skip list, the value
+	// [EmailService.UpdateSyncFolders] writes.
+	SkipFolders []string `json:"skip_folders"`
+	// Folders is what the worker last listed on the server, INBOX first; it
+	// is empty for Gmail and Outlook, which have no IMAP folder list.
+	Folders []MailboxSyncFolder `json:"folders"`
+}
+
+// MailboxSyncFolder is one folder the sync has seen on the server.
+type MailboxSyncFolder struct {
+	// Name is the name to use in a skip list.
+	Name string `json:"name"`
+	// Folder is the canonical folder it files under, which tells the special
+	// folders (they cannot be skipped) from ordinary ones.
+	Folder string `json:"folder"`
 }
 
 // Weekday bits for [SendingBehavior.Weekdays]. The mask is Monday-indexed
@@ -1019,6 +1167,175 @@ func (s *EmailService) SyncStatus(ctx context.Context, id string, opts ...Reques
 	return fetch[MailboxSync](ctx, s.client, "emails/"+url.PathEscape(id)+"/sync", opts)
 }
 
+// UpdateSyncFolders replaces the folders the mailbox's sync leaves alone and
+// returns the stored list. The body is the desired list, so a retry converges
+// and needs no idempotency key; an empty or nil list clears it. Only
+// meaningful on IMAP mailboxes. Requires write access to mailboxes
+// (manage-emails).
+func (s *EmailService) UpdateSyncFolders(ctx context.Context, id string, skipFolders []string, opts ...RequestOption) ([]string, *Response, error) {
+	if skipFolders == nil {
+		skipFolders = []string{}
+	}
+	body := struct {
+		SkipFolders []string `json:"skip_folders"`
+	}{SkipFolders: skipFolders}
+	var out struct {
+		SkipFolders []string `json:"skip_folders"`
+	}
+	resp, err := s.client.put(ctx, "emails/"+url.PathEscape(id)+"/sync", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	if out.SkipFolders == nil {
+		out.SkipFolders = []string{}
+	}
+	return out.SkipFolders, resp, nil
+}
+
+// SetDirectTracking switches open and click tracking on the mailbox's
+// hand-written unibox sends (replies and composed mail). It is off by default
+// because a tracking pixel in a one-to-one reply is the owner's call. Requires
+// write access to mailboxes (manage-emails). It returns the stored value.
+func (s *EmailService) SetDirectTracking(ctx context.Context, id string, enabled bool, opts ...RequestOption) (bool, *Response, error) {
+	body := struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: enabled}
+	var out struct {
+		TrackDirectMail bool `json:"track_direct_mail"`
+	}
+	resp, err := s.client.patch(ctx, "emails/"+url.PathEscape(id)+"/direct-tracking", body, &out, opts...)
+	if err != nil {
+		return false, resp, err
+	}
+	return out.TrackDirectMail, resp, nil
+}
+
+// SendAsIdentity is one address the provider has verified a mailbox to send
+// as.
+type SendAsIdentity struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	// IsPrimary marks the mailbox's own address; IsDefault the one the
+	// provider composes from by default (reported, not followed).
+	IsPrimary bool `json:"is_primary"`
+	IsDefault bool `json:"is_default"`
+	// Verified reports that the provider finished verifying the address.
+	// Unverified aliases are listed but cannot be selected.
+	Verified bool `json:"verified"`
+}
+
+// Where a stored signature came from, in [MailboxIdentity.SignatureSource].
+const (
+	// SignatureSourceManual: written in Warmbly.
+	SignatureSourceManual = "manual"
+	// SignatureSourceProvider: imported from the mailbox provider.
+	SignatureSourceProvider = "provider"
+)
+
+// MailboxIdentity is a mailbox's sending identity: which addresses the
+// provider lets it send as, which one is in use, and where its signature came
+// from.
+type MailboxIdentity struct {
+	// Supported reports whether the provider can be asked at all. Only Gmail
+	// exposes send-as identities; other mailboxes answer false with an empty
+	// list rather than an error.
+	Supported bool   `json:"supported"`
+	Provider  string `json:"provider"`
+	// MailboxEmail is the address the mailbox authenticates as, which is what
+	// an empty SendAsEmail means.
+	MailboxEmail string           `json:"mailbox_email"`
+	SendAsEmail  string           `json:"send_as_email"`
+	Identities   []SendAsIdentity `json:"identities"`
+	SyncedAt     *time.Time       `json:"synced_at,omitempty"`
+
+	// SignatureSource is [SignatureSourceManual] or [SignatureSourceProvider].
+	SignatureSource     string     `json:"signature_source"`
+	SignatureImportedAt *time.Time `json:"signature_imported_at,omitempty"`
+}
+
+// Identity returns the mailbox's stored sending identity. It never calls the
+// provider, so it is safe to read on every render; use
+// [EmailService.RefreshIdentity] to re-read the provider.
+func (s *EmailService) Identity(ctx context.Context, id string, opts ...RequestOption) (*MailboxIdentity, *Response, error) {
+	return fetch[MailboxIdentity](ctx, s.client, "emails/"+url.PathEscape(id)+"/identity", opts)
+}
+
+// RefreshIdentity re-reads the mailbox's send-as addresses from the provider
+// and stores them. With importSignature it also overwrites the stored
+// signature with the provider's. It converges on the provider's current state,
+// so a retry is safe. Requires write access to mailboxes (manage-emails).
+func (s *EmailService) RefreshIdentity(ctx context.Context, id string, importSignature bool, opts ...RequestOption) (*MailboxIdentity, *Response, error) {
+	body := struct {
+		ImportSignature bool `json:"import_signature"`
+	}{ImportSignature: importSignature}
+	return send[MailboxIdentity](ctx, s.client.post, "emails/"+url.PathEscape(id)+"/identity/refresh", body, opts)
+}
+
+// MailCertificate describes the certificate a mail server presented.
+type MailCertificate struct {
+	// Fingerprint is the SHA-256 of the certificate's public key, as hex.
+	Fingerprint string `json:"fingerprint"`
+	Subject     string `json:"subject,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	// NotAfter is the expiry, RFC 3339.
+	NotAfter   string `json:"not_after,omitempty"`
+	SelfSigned bool   `json:"self_signed,omitempty"`
+	// Trusted is set when the chain also passes CA and host name checks.
+	Trusted bool `json:"trusted,omitempty"`
+}
+
+// MailServerCertificate is one server's certificate policy on a mailbox.
+type MailServerCertificate struct {
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	TLSUnverified bool   `json:"tls_unverified"`
+	TLSPin        string `json:"tls_pin,omitempty"`
+	// Observed is what the server presented on a check; nil on a plain read.
+	Observed *MailCertificate `json:"observed,omitempty"`
+}
+
+// MailboxCertificates is an SMTP/IMAP mailbox's certificate policy per server.
+type MailboxCertificates struct {
+	SMTP MailServerCertificate `json:"smtp"`
+	IMAP MailServerCertificate `json:"imap"`
+}
+
+// Certificates returns the stored certificate policy of an SMTP/IMAP
+// mailbox, per server. It makes no connection.
+func (s *EmailService) Certificates(ctx context.Context, id string, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	return fetch[MailboxCertificates](ctx, s.client, "emails/"+url.PathEscape(id)+"/certificates", opts)
+}
+
+// CheckCertificates dials both servers with the stored credentials and reports
+// the certificate each presents now, in [MailServerCertificate.Observed]. It
+// changes nothing, so a retry is safe. Session-only; requires manage-emails.
+func (s *EmailService) CheckCertificates(ctx context.Context, id string, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	return send[MailboxCertificates](ctx, s.client.post, "emails/onboarding/smtp-imap/"+url.PathEscape(id)+"/certificates/check", nil, opts)
+}
+
+// ConfirmCertificates pins the fingerprints the owner confirmed, one per
+// server that is trusted on a pin (an empty pin leaves that server on normal
+// CA verification). The body is the desired state, so a retry converges.
+// Session-only; requires manage-emails.
+func (s *EmailService) ConfirmCertificates(ctx context.Context, id, smtpPin, imapPin string, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	body := struct {
+		SMTPPin string `json:"smtp_pin"`
+		IMAPPin string `json:"imap_pin"`
+	}{SMTPPin: smtpPin, IMAPPin: imapPin}
+	return send[MailboxCertificates](ctx, s.client.post, "emails/onboarding/smtp-imap/"+url.PathEscape(id)+"/certificates/confirm", body, opts)
+}
+
+// SwitchToAppPassword moves a Gmail mailbox off per-mailbox Google sign-in
+// onto IMAP and SMTP with an app password, which the server checks live
+// before storing it. It is refused once the mailbox has already switched.
+// Session-only; requires manage-emails and a selected organization.
+func (s *EmailService) SwitchToAppPassword(ctx context.Context, id, appPassword string, opts ...RequestOption) (*Email, *Response, error) {
+	body := struct {
+		AppPassword string `json:"app_password"`
+	}{AppPassword: appPassword}
+	return send[Email](ctx, s.client.post, "emails/onboarding/app-password/"+url.PathEscape(id), body, opts)
+}
+
 // Behavior returns the mailbox's sending-behavior profile, substituting the
 // defaults for a mailbox that has never been configured so the result is
 // always a complete profile. Deployments without the behavior engine answer
@@ -1139,6 +1456,34 @@ func (s *EmailService) StartOAuth(ctx context.Context, provider string, opts ...
 		Provider string `json:"provider"`
 	}{Provider: provider}
 	return send[OAuthStartResult](ctx, s.client.post, "emails/onboarding/oauth/start", body, opts)
+}
+
+// OAuthStartParams are the options for [EmailService.StartOAuthWith].
+type OAuthStartParams struct {
+	// Provider is [ProviderGmail] or [ProviderOutlook].
+	Provider string `json:"provider"`
+	// LoginHint preselects the mailbox in the provider's account picker.
+	LoginHint string `json:"login_hint,omitempty"`
+	// Return is "web" when a browser app starts the flow: the sign-in window
+	// then hands its result back to the app's /oauth-return page (the server
+	// takes the app origin from the request's Origin header). Leave it empty
+	// for the popup and native flows.
+	Return string `json:"return,omitempty"`
+}
+
+// MailboxOAuthStart is the answer to [EmailService.StartOAuthWith].
+type MailboxOAuthStart struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+	// AdminConsentURL (Microsoft only) lets an administrator approve sign-in
+	// for their whole organization.
+	AdminConsentURL string `json:"admin_consent_url,omitempty"`
+}
+
+// StartOAuthWith is [EmailService.StartOAuth] with the sign-in hint and
+// return options, and it reports the Microsoft administrator-consent link.
+func (s *EmailService) StartOAuthWith(ctx context.Context, params *OAuthStartParams, opts ...RequestOption) (*MailboxOAuthStart, *Response, error) {
+	return send[MailboxOAuthStart](ctx, s.client.post, "emails/onboarding/oauth/start", params, opts)
 }
 
 // FinishOAuth exchanges the authorization code for a connected mailbox. It

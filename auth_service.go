@@ -44,6 +44,19 @@ type Session struct {
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// DeviceToken is set when a confirmed login code asked to remember the
+	// browser ([ConfirmParams.RememberDevice]). Send it back as
+	// [LoginParams.DeviceToken] to skip the emailed code next time.
+	DeviceToken string `json:"device_token,omitempty"`
+
+	// LinkRequired is true when a federated sign-in resolved to an existing
+	// password account: no tokens are issued until the account's password
+	// reaches [AuthService.LinkSSO] with PendingToken. LinkEmail and
+	// LinkProvider name the address and provider to show on the password form.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -65,6 +78,10 @@ type LoginParams struct {
 	// on a closed deployment fails with "registration_invite_only" or
 	// "registration_closed".
 	Invite string `json:"invite,omitempty"`
+
+	// DeviceToken is the [Session.DeviceToken] a previous confirmed sign-in
+	// returned. A valid one skips the emailed code. Sign-in only.
+	DeviceToken string `json:"device_token,omitempty"`
 }
 
 // AuthStep is the outcome of the first step of a sign-in or signup. Either
@@ -107,6 +124,10 @@ type ConfirmParams struct {
 	Session   string `json:"session"`
 	Code      string `json:"code"`
 	Turnstile string `json:"turnstile,omitempty"`
+
+	// RememberDevice asks for a [Session.DeviceToken] so the next sign-in from
+	// this client skips the emailed code. Sign-in only.
+	RememberDevice bool `json:"remember_device,omitempty"`
 }
 
 // UserSession is one active session on the account.
@@ -283,6 +304,29 @@ type AuthConfig struct {
 	// layout is whatever the operator chose.
 	WebsocketURL string `json:"websocket_url,omitempty"`
 	AppURL       string `json:"app_url,omitempty"`
+	// APIURL is this API's own public base as the server sees it, for
+	// building copyable examples that name the right host.
+	APIURL string `json:"api_url,omitempty"`
+	// AppAttest reports whether the native iOS app may prove itself with App
+	// Attest instead of a captcha. Other clients ignore it.
+	AppAttest bool `json:"app_attest"`
+	// GmailOAuthConnect is whether a new Gmail mailbox may be connected with
+	// Google sign-in; false means the app-password route is the only one.
+	GmailOAuthConnect bool `json:"gmail_oauth_connect"`
+	// Brand is what the deployment calls itself. Every field is empty on a
+	// self-host that configured no branding.
+	Brand AuthBrand `json:"brand"`
+}
+
+// AuthBrand is the public half of a deployment's branding: what a sign-in
+// screen or shared page may show.
+type AuthBrand struct {
+	Name         string `json:"name"`
+	WebsiteURL   string `json:"website_url,omitempty"`
+	WebsiteLabel string `json:"website_label,omitempty"`
+	TermsURL     string `json:"terms_url,omitempty"`
+	PrivacyURL   string `json:"privacy_url,omitempty"`
+	SupportEmail string `json:"support_email,omitempty"`
 }
 
 // InstanceInfo is which Warmbly a self-hosted instance runs and whether a
@@ -449,6 +493,15 @@ const (
 	// NotifDomainAuth fires when a sending domain starts failing SPF or
 	// DMARC: the warning before the send gate applies.
 	NotifDomainAuth = "health_domain_auth"
+	// NotifPlacementFinished tells whoever started an inbox placement test
+	// where its copies landed.
+	NotifPlacementFinished = "placement_finished"
+	// NotifPlacementAlert fires when a campaign's scheduled placement test
+	// comes back below its alert threshold.
+	NotifPlacementAlert = "placement_alert"
+	// NotifInboxActionRequired fires when automatic tagging finds automated
+	// mail that needs someone to act, such as a failed payment.
+	NotifInboxActionRequired = "inbox_action_required"
 )
 
 // ChannelPrefs are the delivery toggles for one notification category.
@@ -481,6 +534,12 @@ type NotificationPreferences struct {
 	// act.
 	CampaignPaused CategoryPref `json:"campaign_paused"`
 	DomainAuth     CategoryPref `json:"health_domain_auth"`
+	// PlacementFinished and PlacementAlert are the inbox placement test pair;
+	// PlacementAlert emails by default. InboxActionRequired is mailbox mail
+	// that needs someone to act, and also emails by default.
+	PlacementFinished   CategoryPref `json:"placement_finished"`
+	PlacementAlert      CategoryPref `json:"placement_alert"`
+	InboxActionRequired CategoryPref `json:"inbox_action_required"`
 
 	// EmailDigestMinutes bundles pending notification emails into one send.
 	// It must fall within [NotificationEmailDelivery.MinMinutes] and
@@ -582,6 +641,55 @@ func (s *AuthService) ResetPasswordConfirm(ctx context.Context, session, passwor
 		Turnstile string `json:"turnstile,omitempty"`
 	}{Session: session, Password: password, Turnstile: turnstile}
 	return s.client.post(ctx, "auth/reset-password/confirm", body, nil, opts...)
+}
+
+// ResetPasswordConfirmParams completes a password reset.
+type ResetPasswordConfirmParams struct {
+	// Session is the handle from [AuthService.ResetPasswordSession]. The
+	// emailed link token itself is still accepted.
+	Session  string `json:"session"`
+	Password string `json:"password"`
+	// RevokeAPICredentials also ends the account's app authorizations and the
+	// API keys it created.
+	RevokeAPICredentials bool   `json:"revoke_api_credentials,omitempty"`
+	Turnstile            string `json:"turnstile,omitempty"`
+}
+
+// ResetPasswordConfirmWith is [AuthService.ResetPasswordConfirm] with the
+// optional revoke flag.
+func (s *AuthService) ResetPasswordConfirmWith(ctx context.Context, params *ResetPasswordConfirmParams, opts ...RequestOption) (*Response, error) {
+	return s.client.post(ctx, "auth/reset-password/confirm", params, nil, opts...)
+}
+
+// ResetSession is the reset session an emailed link opens.
+type ResetSession struct {
+	// Session is the handle to pass to [AuthService.ResetPasswordConfirm].
+	Session   string    `json:"session"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ResetPasswordSession exchanges the token from the emailed reset link for a
+// reset session, so the token itself never has to travel in a later URL. It
+// needs no credentials. An unknown or expired token fails with code
+// "reset_link_invalid" ([ErrCodeResetLinkInvalid]).
+func (s *AuthService) ResetPasswordSession(ctx context.Context, linkToken string, opts ...RequestOption) (*ResetSession, *Response, error) {
+	body := struct {
+		Token string `json:"token"`
+	}{Token: linkToken}
+	return send[ResetSession](ctx, s.client.post, "auth/reset-password/session", body, opts)
+}
+
+// LinkSSO finishes a federated sign-in that resolved to an existing password
+// account ([Session.LinkRequired]): it takes the account's password, attaches
+// the identity and returns the session (with the usual 2FA challenge fields).
+// An expired challenge or too many wrong passwords fails with code
+// "sso_link_expired" ([ErrCodeSSOLinkExpired]); start the sign-in over.
+func (s *AuthService) LinkSSO(ctx context.Context, pendingToken, password string, opts ...RequestOption) (*Session, *Response, error) {
+	body := struct {
+		PendingToken string `json:"pending_token"`
+		Password     string `json:"password"`
+	}{PendingToken: pendingToken, Password: password}
+	return send[Session](ctx, s.client.post, "auth/sso/link", body, opts)
 }
 
 // Refresh exchanges a refresh token for a fresh token pair. See
@@ -856,6 +964,20 @@ func (s *AuthService) CompleteOnboarding(ctx context.Context, params *Onboarding
 	return send[User](ctx, s.client.patch, "auth/me/onboarding", params, opts)
 }
 
+// CompleteProductTour records that the caller finished or skipped the
+// dashboard's product tour and returns when. Repeating it is harmless: the
+// first time is kept.
+func (s *AuthService) CompleteProductTour(ctx context.Context, opts ...RequestOption) (time.Time, *Response, error) {
+	var out struct {
+		At time.Time `json:"product_tour_completed_at"`
+	}
+	resp, err := s.client.put(ctx, "auth/me/product-tour", nil, &out, opts...)
+	if err != nil {
+		return time.Time{}, resp, err
+	}
+	return out.At, resp, nil
+}
+
 // UploadAvatar sets the caller's profile picture and returns the URL it is now
 // served from. The image must be a PNG or JPEG, at most 2 MB and 1024 pixels
 // on a side; anything else is refused. The previous avatar is deleted.
@@ -876,12 +998,46 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, opts ...RequestOption) (
 }
 
 // ChangePassword sets a new password, which requires the current one.
+//
+// The server ends every session on a password change, this one included, and
+// answers with the token pair of a replacement session. This method discards
+// that pair, so a bearer-token client is signed out afterwards; use
+// [AuthService.ChangePasswordSession] to receive it. It needs a recent
+// confirmation only through the current password itself.
 func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
 	}{CurrentPassword: currentPassword, NewPassword: newPassword}
 	return s.client.post(ctx, "auth/me/password", body, nil, opts...)
+}
+
+// ChangePasswordParams changes the caller's password.
+type ChangePasswordParams struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	// RevokeAPICredentials also ends the account's app authorizations and the
+	// API keys it created. A deployment that cannot do this answers with code
+	// "api_credentials_revoke_unsupported".
+	RevokeAPICredentials bool `json:"revoke_api_credentials,omitempty"`
+}
+
+// ChangePasswordSession is [AuthService.ChangePassword] returning the new
+// session. Every session on the account ends with the change; the returned
+// token pair belongs to a new session for this device and must replace the
+// credentials in use. The result is nil when the server issued no replacement
+// session. A server that stored the password but could not reissue a session
+// answers 409 with code "password_changed_sign_in_again": sign in again.
+func (s *AuthService) ChangePasswordSession(ctx context.Context, params *ChangePasswordParams, opts ...RequestOption) (*Session, *Response, error) {
+	out := new(Session)
+	resp, err := s.client.post(ctx, "auth/me/password", params, out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	if out.AccessToken == "" {
+		return nil, resp, nil
+	}
+	return out, resp, nil
 }
 
 // SetUndoSendSeconds sets how long an instant send is held, and stays
@@ -922,6 +1078,16 @@ func (s *AuthService) DisableTwoFA(ctx context.Context, code string, opts ...Req
 		Code string `json:"code"`
 	}{Code: code}
 	return s.client.deleteBody(ctx, "auth/2fa", body, opts...)
+}
+
+// RegenerateRecoveryCodes replaces the account's recovery codes with a new set,
+// shown once; the old ones stop working. It requires a current authenticator
+// code or an unused recovery code, and the failed-code budget applies.
+func (s *AuthService) RegenerateRecoveryCodes(ctx context.Context, code string, opts ...RequestOption) (*TwoFARecoveryCodes, *Response, error) {
+	body := struct {
+		Code string `json:"code"`
+	}{Code: code}
+	return send[TwoFARecoveryCodes](ctx, s.client.post, "auth/2fa/recovery-codes", body, opts)
 }
 
 // VerifyTwoFA completes a sign-in that stopped at the two-factor step, using
@@ -1084,4 +1250,133 @@ func (s *AuthService) CancelDeletion(ctx context.Context, reason string, opts ..
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
 	return s.client.deleteBody(ctx, "me/danger-zone/delete", body, opts...)
+}
+
+// --- re-authentication ---
+
+// Sensitive account actions (minting an API key, registering or deleting a
+// passkey, transferring a workspace, scheduling a deletion, rotating a secret)
+// need a recent confirmation on the session: the server answers 403 with code
+// "reauth_required" ([ErrCodeReauthRequired]) when the last one is older than
+// [ReauthResult.ValidForSeconds] (five minutes), and 401 with the same code
+// when the credential is not a signed-in session at all. API keys and OAuth
+// app tokens skip the check. Confirm through [AuthService.Reauth] or one of
+// the browser/native/passkey flows below, then repeat the call. Which methods
+// the account can use is [AuthService.ReauthMethods].
+
+// ReauthResult is the confirmation window a successful re-authentication
+// opens on the session.
+type ReauthResult struct {
+	// ValidForSeconds is how long the confirmation lasts.
+	ValidForSeconds int `json:"valid_for_seconds"`
+}
+
+// ReauthParams confirms the caller with a password or a second-factor code.
+// Send one of them; an account without a password confirms with Code.
+type ReauthParams struct {
+	Password string `json:"password,omitempty"`
+	// Code is a current authenticator code or a recovery code.
+	Code string `json:"code,omitempty"`
+}
+
+// ReauthMethod is one linked identity the account can re-verify with in a
+// browser window.
+type ReauthMethod struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// ReauthMethods lists the ways the signed-in account can confirm it is the
+// holder, so a client offers only those.
+type ReauthMethods struct {
+	Password bool `json:"password"`
+	TOTP     bool `json:"totp"`
+	Passkey  bool `json:"passkey"`
+	// Providers run in a browser window ([AuthService.BeginSSOReauth]);
+	// NativeProviders take an ID token from a native app
+	// ([AuthService.ReauthNative]).
+	Providers       []ReauthMethod `json:"providers"`
+	NativeProviders []string       `json:"native_providers"`
+	ValidForSeconds int            `json:"valid_for_seconds"`
+}
+
+// Reauth confirms the caller with a password or second-factor code and stamps
+// the session. Wrong proof fails with the generic credentials error and spends
+// an hourly attempt budget ("reauth_limited" once spent). An account with
+// neither factor fails with "reauth_no_factor" and must use another method.
+// It needs a signed-in session, not an API key.
+func (s *AuthService) Reauth(ctx context.Context, params *ReauthParams, opts ...RequestOption) (*ReauthResult, *Response, error) {
+	return send[ReauthResult](ctx, s.client.post, "auth/reauth", params, opts)
+}
+
+// ReauthMethods reports how the caller can confirm it is them.
+func (s *AuthService) ReauthMethods(ctx context.Context, opts ...RequestOption) (*ReauthMethods, *Response, error) {
+	return fetch[ReauthMethods](ctx, s.client, "auth/reauth/methods", opts)
+}
+
+// BeginPasskeyReauth asks for one of the account's own passkeys and returns the
+// raw WebAuthn request options for the authenticator.
+func (s *AuthService) BeginPasskeyReauth(ctx context.Context, opts ...RequestOption) (json.RawMessage, *Response, error) {
+	var out struct {
+		Options json.RawMessage `json:"options"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth/passkey/begin", nil, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Options, resp, nil
+}
+
+// FinishPasskeyReauth verifies the authenticator's assertion and stamps the
+// session.
+func (s *AuthService) FinishPasskeyReauth(ctx context.Context, assertion json.RawMessage, opts ...RequestOption) (*ReauthResult, *Response, error) {
+	body := struct {
+		Credential json.RawMessage `json:"credential"`
+	}{Credential: assertion}
+	return send[ReauthResult](ctx, s.client.post, "auth/reauth/passkey/finish", body, opts)
+}
+
+// BeginSSOReauth starts a provider authorization for an identity linked to the
+// account (an id from [ReauthMethods.Providers]). Open the returned URL in a
+// browser window and keep Binding for [AuthService.FinishSSOReauth].
+func (s *AuthService) BeginSSOReauth(ctx context.Context, provider string, opts ...RequestOption) (*SSORedirect, *Response, error) {
+	body := struct {
+		Provider string `json:"provider"`
+	}{Provider: provider}
+	return send[SSORedirect](ctx, s.client.post, "auth/reauth/sso/begin", body, opts)
+}
+
+// FinishSSOReauth redeems the code the provider flow handed back, with the
+// binding from [AuthService.BeginSSOReauth], and stamps the session. An
+// identity that is not the one linked fails with "reauth_identity_mismatch",
+// a spent or expired code with "reauth_expired".
+func (s *AuthService) FinishSSOReauth(ctx context.Context, code, binding string, opts ...RequestOption) (*ReauthResult, *Response, error) {
+	body := struct {
+		Code    string `json:"code"`
+		Binding string `json:"binding"`
+	}{Code: code, Binding: binding}
+	return send[ReauthResult](ctx, s.client.post, "auth/reauth/sso/finish", body, opts)
+}
+
+// BeginNativeReauth returns the nonce a native app passes to Apple or Google
+// so the ID token it gets back can be presented to [AuthService.ReauthNative].
+func (s *AuthService) BeginNativeReauth(ctx context.Context, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		Nonce string `json:"nonce"`
+	}
+	resp, err := s.client.post(ctx, "auth/reauth/native/begin", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.Nonce, resp, nil
+}
+
+// ReauthNative confirms the caller with a native Apple or Google ID token
+// carrying the nonce from [AuthService.BeginNativeReauth].
+func (s *AuthService) ReauthNative(ctx context.Context, provider, idToken string, opts ...RequestOption) (*ReauthResult, *Response, error) {
+	body := struct {
+		Provider string `json:"provider"`
+		IDToken  string `json:"id_token"`
+	}{Provider: provider, IDToken: idToken}
+	return send[ReauthResult](ctx, s.client.post, "auth/reauth/native", body, opts)
 }
