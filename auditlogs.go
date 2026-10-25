@@ -112,6 +112,11 @@ const (
 	AuditEntityMailboxGrant   = "mailbox_grant"
 	AuditEntityDomainRedirect = "domain_redirect"
 
+	// AuditEntityOAuthApplication is one of the workspace's OAuth apps created,
+	// edited, deleted, given a new logo, or its client or webhook secret
+	// rotated. No secret is written to the log.
+	AuditEntityOAuthApplication = "oauth_application"
+
 	// AuditEntityEmailImage is one image in the workspace's library for email
 	// bodies.
 	AuditEntityEmailImage = "email_image"

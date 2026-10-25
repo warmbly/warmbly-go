@@ -443,6 +443,10 @@ type AccountStatus struct {
 	// ColdRamp is present only while the warmup-to-cold graduation ceiling
 	// holds today's cold allowance below the mailbox's own campaign limit.
 	ColdRamp *ColdRamp `json:"cold_ramp,omitempty"`
+	// SendRecoveryReason names a send safety hold: "authentication" (cleared
+	// by reconnecting the mailbox), "permanent", "conflict" or "unknown".
+	// Absent when sending is not held; treat an unknown value as a hold.
+	SendRecoveryReason string `json:"send_recovery_reason,omitempty"`
 }
 
 // WarmupStatus is a mailbox's warmup ramp as the scheduler will act on it.
@@ -470,6 +474,9 @@ type WarmupStatus struct {
 	// SendFailure is present while the newest warmup send failed and no later
 	// one was confirmed delivered.
 	SendFailure *WarmupSendFailure `json:"send_failure,omitempty"`
+	// NextSendAt is when the mailbox's next warmup send is queued for; nil
+	// while nothing is queued, for example while warmup is paused.
+	NextSendAt *time.Time `json:"next_send_at,omitempty"`
 }
 
 // WarmupPartnerLimit explains a target held below the ramp because a mailbox
@@ -523,6 +530,11 @@ type WarmupRampHold struct {
 	ResumesAt time.Time `json:"resumes_at"`
 }
 
+// WarmupReasonCloudEvidenceUnavailable is [WarmupHealth.Reason] while Warmbly
+// Cloud has no current report for a mailbox it warms. It holds cold sends
+// until one arrives; it is not a Cloud quarantine or block.
+const WarmupReasonCloudEvidenceUnavailable = "cloud_evidence_unavailable"
+
 // WarmupHealth is a mailbox's standing in the warmup pool.
 type WarmupHealth struct {
 	// PoolType is the pool the mailbox warms in: "premium" or "free".
@@ -533,8 +545,10 @@ type WarmupHealth struct {
 	// State is one of the Band* constants.
 	State string `json:"state"`
 	// Score runs 0 to 100, higher being healthier.
-	Score  float64 `json:"score"`
-	Reason string  `json:"reason,omitempty"`
+	Score float64 `json:"score"`
+	// Reason says why the state is not healthy. [WarmupReasonCloudEvidenceUnavailable]
+	// marks a Warmbly Cloud mailbox with no current report from Cloud.
+	Reason string `json:"reason,omitempty"`
 	// SpamScore is always 0 on current servers: the accumulating score was
 	// retired and the key stays for compatibility. Read Score and Reason.
 	SpamScore    int        `json:"spam_score"`
@@ -601,6 +615,20 @@ const (
 	AccountErrorOperationUnknown = "unknown"
 	AccountErrorOperationSync    = "sync"
 	AccountErrorOperationSend    = "send"
+)
+
+// Values of [AccountError.ErrorCode] for a mailbox that trusts a server on its
+// own certificate and was not connected. Both are warnings: the mailbox is not
+// deactivated, its credentials are not marked invalid and nothing it was due
+// to send or sync is dropped. Resolve them with
+// [EmailService.CheckCertificates] and [EmailService.ConfirmCertificates].
+const (
+	// AccountErrorTLSCertificateChanged is a server presenting a public key
+	// other than the one confirmed for it.
+	AccountErrorTLSCertificateChanged = "TLS_CERTIFICATE_CHANGED"
+	// AccountErrorTLSCertificateUnconfirmed is a server trusted on its own
+	// certificate whose fingerprint was never confirmed.
+	AccountErrorTLSCertificateUnconfirmed = "TLS_CERTIFICATE_UNCONFIRMED"
 )
 
 // AccountDailyUsage is a mailbox's sending against today's caps. The warmup

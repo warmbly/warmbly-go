@@ -131,9 +131,14 @@ const (
 
 // Mailbox events. Payload: [AccountEvent].
 const (
-	EventAccountConnected     EventName = "ACCOUNT_CONNECTED"
-	EventAccountDisconnected  EventName = "ACCOUNT_DISCONNECTED"
-	EventAccountError         EventName = "ACCOUNT_ERROR"
+	EventAccountConnected    EventName = "ACCOUNT_CONNECTED"
+	EventAccountDisconnected EventName = "ACCOUNT_DISCONNECTED"
+	EventAccountError        EventName = "ACCOUNT_ERROR"
+	// EventAccountSynced fires when a mailbox's settings changed, from a
+	// request or outside one (for example a sync of the warmup settings
+	// Warmbly Cloud holds), so open views should refetch the mailbox.
+	// [AccountEvent.Status] is the mailbox status. It requires mailbox
+	// management access and is covered by [IntentAccount].
 	EventAccountSynced        EventName = "ACCOUNT_SYNCED"
 	EventAccountHealthChanged EventName = "ACCOUNT_HEALTH_CHANGED"
 	// EventAccountSyncState fires when a mailbox's initial import finishes, or
@@ -157,7 +162,8 @@ const (
 )
 
 // Landing places carried in [AccountEvent.Status] on [EventWarmupPlacement].
-// Treat an unrecognized value as [LandedUnknown].
+// The same field carries the Landed* rescue outcomes below. Treat an
+// unrecognized value as [LandedUnknown].
 const (
 	LandedInbox = "inbox"
 	// LandedTabs is a Gmail category tab (Promotions, Updates, Social,
@@ -168,6 +174,17 @@ const (
 	// LandedCustom is any folder other than the inbox, archive and spam.
 	LandedCustom  = "custom"
 	LandedUnknown = "unknown"
+)
+
+// Rescue outcomes also carried in [AccountEvent.Status] on
+// [EventWarmupPlacement], when the recipient's mailbox reports what a spam
+// rescue came to. Moved and already-out leave the message out of spam; gone
+// and failed do not.
+const (
+	LandedRescueMoved      = "rescue_moved"
+	LandedRescueAlreadyOut = "rescue_already_out"
+	LandedRescueGone       = "rescue_gone"
+	LandedRescueFailed     = "rescue_failed"
 )
 
 // Import statuses carried in [ImportProgressEvent.Status]. A contact import

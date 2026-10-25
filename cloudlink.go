@@ -143,6 +143,12 @@ type CloudLinkMailbox struct {
 	// warmup standing. The instance's own send gates follow that standing
 	// only while it is fresh.
 	StandingObservedAt *time.Time `json:"standing_observed_at,omitempty"`
+	// SettingsObservedAt is when the mailbox's local warmup settings last
+	// matched the ones Warmbly Cloud reported.
+	SettingsObservedAt *time.Time `json:"settings_observed_at,omitempty"`
+	// IndependentSMTP marks an SMTP/IMAP mailbox associated with its own
+	// Cloud copy: both keep their independent credentials.
+	IndependentSMTP bool `json:"independent_smtp,omitempty"`
 }
 
 // Enrollment states returned in [CloudLinkMailbox.EnrollmentState].

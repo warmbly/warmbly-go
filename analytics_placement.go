@@ -49,8 +49,19 @@ type WarmupPlacementCounts struct {
 	Tabs int `json:"tabs"`
 	Spam int `json:"spam"`
 	// Rescued is spam placements the recipient's mailbox was told to move
-	// back to the inbox; the move itself is not confirmed back.
+	// back to the inbox. The outcome counters are what that mailbox reported.
 	Rescued int `json:"rescued"`
+	// RescueConfirmed is rescues that left the message out of spam (moved, or
+	// already out when the rescue ran). Servers before the outcome report
+	// sent null, which decodes as 0.
+	RescueConfirmed int `json:"rescue_confirmed"`
+	// RescueMissing is rescues whose message was no longer in the mailbox.
+	RescueMissing int `json:"rescue_missing"`
+	// RescueFailed is rescues the provider refused.
+	RescueFailed int `json:"rescue_failed"`
+	// RescueUnreported is requested rescues with no outcome yet, including
+	// every rescue from before outcomes were recorded.
+	RescueUnreported int `json:"rescue_unreported"`
 	// Unconfirmed is mail sent more than 24 hours ago that no recipient has
 	// reported seeing.
 	Unconfirmed int      `json:"unconfirmed"`
@@ -66,6 +77,11 @@ type WarmupPlacementDayGroup struct {
 	Tabs    int    `json:"tabs"`
 	Spam    int    `json:"spam"`
 	Rescued int    `json:"rescued"`
+	// RescueConfirmed, RescueMissing and RescueFailed split Rescued by what
+	// the recipient's mailbox reported.
+	RescueConfirmed int `json:"rescue_confirmed"`
+	RescueMissing   int `json:"rescue_missing"`
+	RescueFailed    int `json:"rescue_failed"`
 }
 
 // WarmupPlacementDay is one UTC day of placement.

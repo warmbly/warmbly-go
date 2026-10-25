@@ -693,6 +693,51 @@ func (s *AuthService) ResetPasswordConfirm(ctx context.Context, session, passwor
 	return s.client.post(ctx, "auth/reset-password/confirm", body, nil, opts...)
 }
 
+// ResetPasswordConfirmParams completes a password reset with the optional
+// revoke flag; see [AuthService.ResetPasswordConfirmWith].
+type ResetPasswordConfirmParams struct {
+	// Session is the handle from [AuthService.ResetPasswordSession]. The
+	// emailed link token itself is still accepted, for clients that predate
+	// that step.
+	Session  string `json:"session"`
+	Password string `json:"password"`
+	// RevokeAPICredentials also ends every app the account authorized (OAuth
+	// grants and their tokens) and every API key it created, in all its
+	// workspaces. A server that cannot do this fails with
+	// [ErrCodeCredentialRevokeUnsupported] and leaves the password unchanged.
+	RevokeAPICredentials bool   `json:"revoke_api_credentials,omitempty"`
+	Turnstile            string `json:"turnstile,omitempty"`
+}
+
+// ResetPasswordConfirmWith is [AuthService.ResetPasswordConfirm] with the
+// option to also revoke the account's API credentials. Every session the
+// account holds ends before the new password is stored; if that cannot be
+// done the call fails with [ErrCodeSessionsNotEnded] and nothing changes.
+func (s *AuthService) ResetPasswordConfirmWith(ctx context.Context, params *ResetPasswordConfirmParams, opts ...RequestOption) (*Response, error) {
+	return s.client.post(ctx, "auth/reset-password/confirm", params, nil, opts...)
+}
+
+// ResetSession is the short-lived reset session an emailed link opens.
+type ResetSession struct {
+	// Session is the handle to pass to [AuthService.ResetPasswordConfirm].
+	Session string `json:"session"`
+	// ExpiresAt is when the session lapses: 15 minutes after it was opened, or
+	// when the link expires if that is sooner.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ResetPasswordSession exchanges the token from the emailed reset link for a
+// reset session, so the confirm step carries nothing in a URL; drop the link
+// token from the address bar once you hold the session. The link token is not
+// spent here, only by the confirm step. It needs no credentials. An expired,
+// used or superseded link fails with a 401 carrying [ErrCodeResetLinkInvalid].
+func (s *AuthService) ResetPasswordSession(ctx context.Context, linkToken string, opts ...RequestOption) (*ResetSession, *Response, error) {
+	body := struct {
+		Token string `json:"token"`
+	}{Token: linkToken}
+	return send[ResetSession](ctx, s.client.post, "auth/reset-password/session", body, opts)
+}
+
 // Refresh exchanges a refresh token for a fresh token pair. See
 // [RefreshTokenSource] to have the client do this automatically.
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string, opts ...RequestOption) (*Session, *Response, error) {
@@ -1020,6 +1065,27 @@ func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPa
 		NewPassword     string `json:"new_password"`
 	}{CurrentPassword: currentPassword, NewPassword: newPassword}
 	return send[Session](ctx, s.client.post, "auth/me/password", body, opts)
+}
+
+// ChangePasswordParams changes the caller's password with the optional revoke
+// flag; see [AuthService.ChangePasswordWith].
+type ChangePasswordParams struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	// RevokeAPICredentials also ends every app the account authorized and
+	// every API key it created, in all its workspaces, including keys made by
+	// warmbly auth login. A server that cannot do this fails with
+	// [ErrCodeCredentialRevokeUnsupported] and leaves the password unchanged.
+	RevokeAPICredentials bool `json:"revoke_api_credentials,omitempty"`
+}
+
+// ChangePasswordWith is [AuthService.ChangePassword] with the option to also
+// revoke the account's API credentials. The result is the new session for
+// this device, as for ChangePassword. Every other session ends before the new
+// password is stored; if that fails the call fails with
+// [ErrCodeSessionsNotEnded] and the password is unchanged.
+func (s *AuthService) ChangePasswordWith(ctx context.Context, params *ChangePasswordParams, opts ...RequestOption) (*Session, *Response, error) {
+	return send[Session](ctx, s.client.post, "auth/me/password", params, opts)
 }
 
 // CompleteProductTour records that the caller finished or skipped the

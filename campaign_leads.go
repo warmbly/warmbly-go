@@ -61,16 +61,23 @@ const (
 	SendLimitDomainAuth         = "domain_auth"
 	SendLimitResting            = "resting"
 	SendLimitHealthHold         = "warmup_health_hold"
-	SendLimitOtherCampaigns     = "other_campaigns"
-	SendLimitHealthPace         = "warmup_health_pace"
-	SendLimitMailboxHours       = "mailbox_hours"
-	SendLimitSpacing            = "spacing"
-	SendLimitSendingWindow      = "sending_window"
-	SendLimitNotRunning         = "not_running"
-	SendLimitOrgDailyLimit      = "org_daily_limit"
-	SendLimitNewLeadCap         = "new_lead_cap"
-	SendLimitLeads              = "leads"
-	SendLimitSendingBehavior    = "sending_behavior"
+	// SendLimitCloudStatusHold holds cold sends from a Warmbly Cloud mailbox
+	// until Cloud reports a current status; it is not a Cloud quarantine.
+	SendLimitCloudStatusHold = "cloud_status_hold"
+	// SendLimitRecovery and SendLimitCooldown are the send safety hold and
+	// the post-hold cooldown.
+	SendLimitRecovery        = "send_recovery"
+	SendLimitCooldown        = "send_cooldown"
+	SendLimitOtherCampaigns  = "other_campaigns"
+	SendLimitHealthPace      = "warmup_health_pace"
+	SendLimitMailboxHours    = "mailbox_hours"
+	SendLimitSpacing         = "spacing"
+	SendLimitSendingWindow   = "sending_window"
+	SendLimitNotRunning      = "not_running"
+	SendLimitOrgDailyLimit   = "org_daily_limit"
+	SendLimitNewLeadCap      = "new_lead_cap"
+	SendLimitLeads           = "leads"
+	SendLimitSendingBehavior = "sending_behavior"
 	// SendBottleneckBudgetSpent is the bottleneck of a campaign that has sent
 	// everything its mailboxes had today: no limit binds, the day is simply
 	// used.
@@ -87,7 +94,13 @@ const (
 	MailboxPlanDomainAuth   = "domain_auth"
 	MailboxPlanResting      = "resting"
 	MailboxPlanHealthHold   = "health_hold"
-	MailboxPlanWindowClosed = "window_closed"
+	// MailboxPlanCloudStatusHold: Warmbly Cloud has not reported a current
+	// status, so cold sends from the mailbox wait for one.
+	MailboxPlanCloudStatusHold = "cloud_status_hold"
+	MailboxPlanRecovery        = "send_recovery"
+	MailboxPlanCooldown        = "send_cooldown"
+	MailboxPlanAdmission       = "send_authority"
+	MailboxPlanWindowClosed    = "window_closed"
 	// MailboxPlanNoWorker is a mailbox no heartbeating worker holds right now.
 	MailboxPlanNoWorker = "no_worker"
 )

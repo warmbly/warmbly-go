@@ -245,7 +245,9 @@ type Email struct {
 	// "HH:MM" in the mailbox timezone.
 	WarmupStartTime string `json:"warmup_start_time"`
 	WarmupEndTime   string `json:"warmup_end_time"`
-	// WarmupDays is a bitmask of the weekdays warmup runs on.
+	// WarmupDays is a bitmask of the weekdays warmup mail goes out: 1 Monday,
+	// 2 Tuesday, 4 Wednesday, 8 Thursday, 16 Friday, 32 Saturday, 64 Sunday.
+	// 31 is Monday to Friday; 0 means every day.
 	WarmupDays int `json:"warmup_days"`
 	// WarmupPlacement decides where warmup mail ends up in the owner's own
 	// mail client, one of the WarmupPlacement* constants. WarmupFolder is the
@@ -692,6 +694,20 @@ type MailboxCredentials struct {
 	// submission relay on 2525. A server expecting STARTTLS looks unreachable
 	// to a client attempting implicit TLS, and vice versa.
 	Security string `json:"security,omitempty"`
+	// TLSUnverified trusts this server on its own certificate instead of a
+	// certificate authority, for a server with a self-signed or company
+	// certificate. It only takes effect when the certificate fails
+	// verification: the connection test then records the SHA-256 fingerprint
+	// of the server's public key and the mailbox connects only while the
+	// server presents that key. A server whose certificate verifies keeps
+	// normal checking either way. Compare the fingerprint with the one the
+	// server's owner gives you before relying on it.
+	TLSUnverified bool `json:"tls_unverified,omitempty"`
+	// TLSPin, with TLSUnverified, requires a specific fingerprint up front
+	// (64 hexadecimal characters; colons, spaces and a "sha256:" prefix are
+	// ignored), so the test fails rather than pin anything else. A malformed
+	// value fails with [ErrCodeInvalidTLSPin].
+	TLSPin string `json:"tls_pin,omitempty"`
 }
 
 // SMTPIMAPParams connects a mailbox by its own SMTP and IMAP credentials, for
@@ -1559,4 +1575,76 @@ func (s *EmailService) ConnectSMTPIMAPBulk(ctx context.Context, params *SMTPIMAP
 // 400 (use [EmailService.ReauthOAuth]). Requires the manage-emails permission.
 func (s *EmailService) UpdateSMTPIMAPCredentials(ctx context.Context, id string, params *SMTPIMAPCredentialsParams, opts ...RequestOption) (*Email, *Response, error) {
 	return send[Email](ctx, s.client.put, "emails/onboarding/smtp-imap/"+url.PathEscape(id), params, opts)
+}
+
+// MailCertificate describes the certificate a mail server presented.
+type MailCertificate struct {
+	// Fingerprint is the SHA-256 of the leaf's public key, lowercase hex.
+	Fingerprint string `json:"fingerprint"`
+	Subject     string `json:"subject,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	// NotAfter is the expiry, RFC 3339.
+	NotAfter   string `json:"not_after,omitempty"`
+	SelfSigned bool   `json:"self_signed,omitempty"`
+	// Trusted is set when the chain also passes certificate authority and
+	// host name verification.
+	Trusted bool `json:"trusted,omitempty"`
+}
+
+// MailboxServerCertificate is one server's certificate policy on an SMTP/IMAP
+// mailbox.
+type MailboxServerCertificate struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	// TLSUnverified reports that the mailbox trusts this server on its own
+	// certificate rather than a certificate authority.
+	TLSUnverified bool `json:"tls_unverified"`
+	// TLSPin is the SHA-256 fingerprint the server is trusted on, lowercase
+	// hex. Empty when it is verified by a certificate authority.
+	TLSPin string `json:"tls_pin,omitempty"`
+	// Observed is what the server presented on a check; nil on a plain read.
+	Observed *MailCertificate `json:"observed,omitempty"`
+}
+
+// MailboxCertificates is an SMTP/IMAP mailbox's certificate policy per server.
+type MailboxCertificates struct {
+	SMTP MailboxServerCertificate `json:"smtp"`
+	IMAP MailboxServerCertificate `json:"imap"`
+}
+
+// ConfirmCertificatesParams names the fingerprints the owner confirmed, one
+// per server that is trusted on its own certificate.
+type ConfirmCertificatesParams struct {
+	SMTPPin string `json:"smtp_pin"`
+	IMAPPin string `json:"imap_pin"`
+}
+
+// Certificates reads an SMTP/IMAP mailbox's certificate policy for each
+// server. It contacts no server. A Gmail or Outlook mailbox fails with a 400,
+// since it has no certificate choice. Requires the read-emails permission
+// (READ_EMAILS for an API key).
+func (s *EmailService) Certificates(ctx context.Context, id string, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	return fetch[MailboxCertificates](ctx, s.client, "emails/"+url.PathEscape(id)+"/certificates", opts)
+}
+
+// CheckCertificates runs a connection test with the mailbox's stored
+// password and reports the certificate each server presents now in
+// [MailboxServerCertificate.Observed]. It stores nothing, so a retry is safe.
+// Requires the manage-emails permission.
+func (s *EmailService) CheckCertificates(ctx context.Context, id string, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	return send[MailboxCertificates](ctx, s.client.post, "emails/onboarding/smtp-imap/"+url.PathEscape(id)+"/certificates/check", nil, opts)
+}
+
+// ConfirmCertificates pins the fingerprints the owner confirmed after
+// [EmailService.CheckCertificates], tests against exactly those, stores them
+// and loads the mailbox back onto its worker, which clears a
+// [AccountErrorTLSCertificateChanged] or [AccountErrorTLSCertificateUnconfirmed]
+// error. The body is the desired pins, so a retry converges on the same stored
+// value. It fails with [ErrCodeMailboxCertificateNotPinned] when neither
+// server is trusted on its own certificate, [ErrCodeInvalidTLSPin] for a
+// missing or malformed fingerprint, and [ErrCodeMailboxTLSFailed] when a
+// server did not present the confirmed certificate (nothing is changed; check
+// again). Requires the manage-emails permission.
+func (s *EmailService) ConfirmCertificates(ctx context.Context, id string, params *ConfirmCertificatesParams, opts ...RequestOption) (*MailboxCertificates, *Response, error) {
+	return send[MailboxCertificates](ctx, s.client.post, "emails/onboarding/smtp-imap/"+url.PathEscape(id)+"/certificates/confirm", params, opts)
 }

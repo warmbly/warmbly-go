@@ -429,13 +429,19 @@ type Invitation struct {
 	CreatedAt      time.Time    `json:"created_at"`
 	// Access is the resource scope the invitee lands with, when one was set.
 	Access *MemberAccess `json:"access,omitempty"`
+	// Lapsed is the server's "expired" flag, set on rows listed with
+	// [InvitationListParams.IncludeExpired]; such an invitation grants nothing
+	// and can only be sent again by inviting the same address. Use
+	// [Invitation.Expired] to test an invitation either way.
+	Lapsed bool `json:"expired,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
 }
 
-// Expired reports whether the invitation has lapsed.
-func (i *Invitation) Expired() bool { return timeNow().After(i.ExpiresAt) }
+// Expired reports whether the invitation has lapsed, by the server's flag or
+// by its expiry time.
+func (i *Invitation) Expired() bool { return i.Lapsed || timeNow().After(i.ExpiresAt) }
 
 // InvitationPreview is the public view of an invitation, resolved from its
 // token before the recipient commits to joining. It deliberately carries only
@@ -954,6 +960,23 @@ func (s *OrganizationService) DeleteRole(ctx context.Context, id string, opts ..
 // [OrgPermManageTeam].
 func (s *OrganizationService) Invitations(ctx context.Context, opts ...RequestOption) ([]Invitation, *Response, error) {
 	return fetchData[Invitation](ctx, s.client, "organization/invitations", opts)
+}
+
+// InvitationListParams filters [OrganizationService.ListInvitations].
+type InvitationListParams struct {
+	// IncludeExpired also lists the 50 most recently expired invitations,
+	// each flagged [Invitation.Lapsed], so they can be sent again.
+	IncludeExpired bool
+}
+
+// ListInvitations is [OrganizationService.Invitations] with filters. It needs
+// [OrgPermManageTeam].
+func (s *OrganizationService) ListInvitations(ctx context.Context, params *InvitationListParams, opts ...RequestOption) ([]Invitation, *Response, error) {
+	q := make(url.Values)
+	if params != nil && params.IncludeExpired {
+		q.Set("include_expired", "true")
+	}
+	return fetchData[Invitation](ctx, s.client, withQuery("organization/invitations", q), opts)
 }
 
 // CancelInvitation withdraws a pending invitation of the current workspace. It

@@ -14,13 +14,16 @@ import (
 //	  "error":      "Not Found",
 //	  "message":    "Resource not found.",
 //	  "code":       "not_found",
+//	  "reason":     "certificate_untrusted",
 //	  "request_id": "0b6f...",
 //	  "retry_after": 30
 //	}
 //
 // "error" and "message" are for people; branch on [Error.Code] and the HTTP
-// status. "retry_after" appears only where the endpoint has a wait to quote
-// (rate limiting); the client also fills it from the Retry-After header.
+// status. "reason" appears on a few codes only, as a finer key for when one
+// code has more than one next step. "retry_after" appears only where the
+// endpoint has a wait to quote (rate limiting); the client also fills it from
+// the Retry-After header.
 //
 // The package sentinels ([ErrNotFound], [ErrUnauthorized], ...) can be matched
 // with errors.Is to branch on the HTTP status without parsing the body, and
@@ -43,6 +46,10 @@ type Error struct {
 	Message string `json:"message"`
 	// Code is a stable, machine-readable error code.
 	Code string `json:"code"`
+	// Reason is an optional finer key on a few codes (for example
+	// [ErrReasonCertificateUntrusted] on [ErrCodeMailboxTLSFailed]). Treat an
+	// unknown or empty Reason as the plain Code.
+	Reason string `json:"reason,omitempty"`
 	// RequestID identifies the request server-side and should be included in
 	// any support correspondence.
 	RequestID string `json:"request_id"`
@@ -549,6 +556,235 @@ const (
 	ErrCodeSlackLinkInvalid = "slack_link_invalid"
 	// ErrCodeSlackNotLinked is a 404: the member has not linked a Slack account in this workspace.
 	ErrCodeSlackNotLinked = "slack_not_linked"
+)
+
+// Refusals added by the third API sync: sign-in and session state, account and
+// workspace standing, mailbox certificates, request hygiene, uploads,
+// invitations, redirects, and the Warmbly Cloud link.
+const (
+	// ErrCodeSessionEnded is a 401: the session behind the token was signed
+	// out, revoked, or ended by a password change. Refreshing will not help;
+	// sign in again.
+	ErrCodeSessionEnded = "session_ended"
+	// ErrCodeAttemptCheckUnavailable is a 503 with Retry-After: the attempt
+	// budget of a password, code or sign-in check could not be read, so nothing
+	// was compared and the attempt was not counted. Retry after
+	// [Error.RetryAfter]. A CLI or Warmbly Cloud pairing-code lookup answers
+	// the same code when its lookup budget cannot be read.
+	ErrCodeAttemptCheckUnavailable = "attempt_check_unavailable"
+	// ErrCodeCodeLookupLimited is a 429 with Retry-After: 60: too many
+	// pairing-code lookups, approvals or denials for the signed-in member.
+	ErrCodeCodeLookupLimited = "code_lookup_limited"
+	// ErrCodeResetLinkInvalid is a 401: the reset link or reset session from
+	// [AuthService.ResetPasswordSession] or the confirm step expired, was
+	// already used, or was issued before the password last changed. Request a
+	// new link.
+	ErrCodeResetLinkInvalid = "reset_link_invalid"
+	// ErrCodeCredentialRevokeUnsupported is a 400: revoke_api_credentials was
+	// sent to a server that cannot honor it. The password was not changed;
+	// send the request again without it.
+	ErrCodeCredentialRevokeUnsupported = "api_credentials_revoke_unsupported"
+	// ErrCodeSessionsNotEnded is a 503 with Retry-After: the other sessions
+	// could not be signed out, so the password was not changed. Retry.
+	ErrCodeSessionsNotEnded = "sessions_not_ended"
+
+	// Account and workspace standing. These are not permission problems and a
+	// role change does not lift them.
+	// ErrCodeAccountSuspended is a 403: the account is suspended and cannot
+	// sign in.
+	ErrCodeAccountSuspended = "account_suspended"
+	// ErrCodeAccountSendingSuspended is a 403: the account may not send mail;
+	// a manual send is refused and nothing else is affected.
+	ErrCodeAccountSendingSuspended = "account_sending_suspended"
+	// ErrCodeAccountWorkspaceCreateSuspended is a 403: the account may not
+	// create workspaces. It can still join one it is invited to.
+	ErrCodeAccountWorkspaceCreateSuspended = "account_workspace_create_suspended"
+	// ErrCodeWorkspaceSendingSuspended is a 403: sending is paused for the
+	// whole workspace while it is under review.
+	ErrCodeWorkspaceSendingSuspended = "workspace_sending_suspended"
+
+	// Request hygiene.
+	// ErrCodeDuplicateQueryParameter is a 400: a query parameter appeared more
+	// than once on a route that reads it as a single value. The message names
+	// it.
+	ErrCodeDuplicateQueryParameter = "duplicate_query_parameter"
+	// ErrCodeDuplicateHeader is a 400: Authorization, X-Warmbly-Token,
+	// Idempotency-Key or Origin was sent on more than one header line.
+	ErrCodeDuplicateHeader = "duplicate_header"
+
+	// Mailbox certificates.
+	// ErrCodeInvalidTLSPin is a 400: a tls_pin that is not a SHA-256
+	// fingerprint (64 hexadecimal characters), or a certificate confirmation
+	// missing the fingerprint of a server the mailbox trusts on its own
+	// certificate.
+	ErrCodeInvalidTLSPin = "invalid_tls_pin"
+	// ErrCodeMailboxCertificateNotPinned is a 400: a certificate confirmation
+	// on a mailbox whose servers are both verified by a certificate authority,
+	// so there is nothing to confirm.
+	ErrCodeMailboxCertificateNotPinned = "mailbox_certificate_not_pinned"
+
+	// Image uploads (avatars, app logos, form images, email images), checked
+	// by content rather than by file name.
+	// ErrCodeImageUnreadable is a 400: the file is empty or does not decode as
+	// an image.
+	ErrCodeImageUnreadable = "image_unreadable"
+	// ErrCodeImageFormatNotAllowed is a 400: an image, but not a format this
+	// upload takes.
+	ErrCodeImageFormatNotAllowed = "image_format_not_allowed"
+	// ErrCodeImageTooLarge is a 400: the file is over the size limit.
+	ErrCodeImageTooLarge = "image_too_large"
+	// ErrCodeImageDimensionsTooLarge is a 400: the image is wider or taller
+	// than the limit.
+	ErrCodeImageDimensionsTooLarge = "image_dimensions_too_large"
+	// ErrCodeImageTooSmall is a 400: an OAuth app logo under 32px on a side.
+	ErrCodeImageTooSmall = "image_too_small"
+
+	// ErrCodeRedirectTargetNotOwnDomain is a 400: a form's redirect_url, a
+	// sending domain's redirect target_url, or a vendor forwarding url is not
+	// on one of the workspace's own domains.
+	ErrCodeRedirectTargetNotOwnDomain = "redirect_target_not_own_domain"
+
+	// Invitations accepted late.
+	// ErrCodeInvitationExpired is a 400: accepting an invitation older than 48
+	// hours. It stays on the team page, where it can be sent again.
+	ErrCodeInvitationExpired = "invitation_expired"
+	// ErrCodeInvitationUsedOrExpired is a 400: the invitation was accepted or
+	// expired while the request was in flight.
+	ErrCodeInvitationUsedOrExpired = "invitation_used_or_expired"
+	// ErrCodeInvitationRolesRemoved is a 400: every role on the invitation was
+	// deleted after it was sent. Ask for a new one.
+	ErrCodeInvitationRolesRemoved = "invitation_roles_removed"
+
+	// CLI sign-in (warmbly auth login).
+	// ErrCodeCLIAuthRequest is a 400: a CLI poll without a device_code.
+	ErrCodeCLIAuthRequest = "cli_auth_request"
+	// ErrCodeCLIAuthScopes is a 400: the CLI asked for scopes that include
+	// permission bits this instance does not grant.
+	ErrCodeCLIAuthScopes = "cli_auth_scopes"
+	// ErrCodeCLIAuthCodeNotFound is a 404: the code is unknown or has expired.
+	ErrCodeCLIAuthCodeNotFound = "cli_auth_code_not_found"
+	// ErrCodeCLIAuthCodeUsed is a 409: the code has already been used.
+	ErrCodeCLIAuthCodeUsed = "cli_auth_code_used"
+	// ErrCodeCLIAuthForbidden is a 403: approving a CLI sign-in needs the
+	// manage-API-keys permission in the workspace, because it mints a key.
+	ErrCodeCLIAuthForbidden = "cli_auth_forbidden"
+
+	// Warmbly Cloud link, as raised on a self-hosted instance.
+	// ErrCodeCloudLinkConnected is a 409: the workspace is already connected
+	// to Warmbly Cloud.
+	ErrCodeCloudLinkConnected = "cloud_link_connected"
+	// ErrCodeCloudLinkNotConnected is a 409: there is no connection to change
+	// or disconnect.
+	ErrCodeCloudLinkNotConnected = "cloud_link_not_connected"
+	// ErrCodeCloudLinkNoKey is a 409: the instance has no
+	// CREDENTIALS_ENCRYPTION_KEY, so it cannot store the Cloud token.
+	ErrCodeCloudLinkNoKey = "cloud_link_no_key"
+	// ErrCodeCloudLinkURL is a 400: the Cloud URL does not start with https://.
+	ErrCodeCloudLinkURL = "cloud_link_url"
+	// ErrCodeCloudLinkNoPending is a 404: no connection is in progress for the
+	// workspace. Start it again.
+	ErrCodeCloudLinkNoPending = "cloud_link_no_pending"
+	// ErrCodeCloudLinkCodeExpired is a 404: the connection code expired before
+	// it was approved in Warmbly Cloud.
+	ErrCodeCloudLinkCodeExpired = "cloud_link_code_expired"
+	// ErrCodeCloudLinkMailboxInactive is a 422: only active mailboxes can be
+	// enrolled in Warmbly Cloud warmup.
+	ErrCodeCloudLinkMailboxInactive = "cloud_link_mailbox_inactive"
+	// ErrCodeCloudLinkOAuthMailbox is a 422: a Google or Microsoft mailbox
+	// connected with the instance's own OAuth app cannot be warmed by Cloud,
+	// because its refresh grant is bound to that app.
+	ErrCodeCloudLinkOAuthMailbox = "cloud_link_oauth_mailbox"
+	// ErrCodeCloudLinkLifecycle is a 400: a pause or resume request named an
+	// action other than pause or resume.
+	ErrCodeCloudLinkLifecycle = "cloud_link_lifecycle"
+	// ErrCodeCloudLinkDisconnecting is a 409: the workspace is disconnecting
+	// from Warmbly Cloud. Retry once it has finished.
+	ErrCodeCloudLinkDisconnecting = "cloud_link_disconnecting"
+	// ErrCodeCloudLinkUnreachable is a 503: Warmbly Cloud could not be reached.
+	ErrCodeCloudLinkUnreachable = "cloud_link_unreachable"
+	// ErrCodeCloudLinkBadResponse is a 503: Warmbly Cloud answered without the
+	// mailbox's warmup settings.
+	ErrCodeCloudLinkBadResponse = "cloud_link_bad_response"
+	// ErrCodeCloudLinkSMTPAssociationProtocol is a 409: Cloud does not
+	// advertise smtp_association_protocol 1. Nothing was changed.
+	ErrCodeCloudLinkSMTPAssociationProtocol = "cloud_link_smtp_association_protocol"
+	// ErrCodeCloudLinkSMTPAssociation is a 409: the selected existing Cloud
+	// SMTP/IMAP mailbox could not be associated. Do not delete it or replace
+	// passwords to repair the association.
+	ErrCodeCloudLinkSMTPAssociation = "cloud_link_smtp_association"
+	// ErrCodeCloudWarmupValueUnsupported is a 422: Warmbly Cloud does not take
+	// 0 from an instance for the starting volume, maximum, daily increase or
+	// reply rate.
+	ErrCodeCloudWarmupValueUnsupported = "cloud_warmup_value_unsupported"
+	// ErrCodeCloudWarmupNotApplied is a 409: Cloud answered but did not apply
+	// the named settings. The mailbox now shows the values Cloud reported. The
+	// rest of the patch was not applied; retry with a new idempotency key.
+	ErrCodeCloudWarmupNotApplied = "cloud_warmup_not_applied"
+	// ErrCodeCloudWarmupManaged is a 409: participation, the shared daily and
+	// recipient limits, and stopping warmup are changed with the mailbox's
+	// Warmbly Cloud controls, not on the mailbox.
+	ErrCodeCloudWarmupManaged = "cloud_warmup_managed"
+
+	// Pool link refusals from Warmbly Cloud's side, passed through by a
+	// self-hosted instance.
+	// ErrCodePoolLinkRequest is a 400: the connection request is missing the
+	// instance name.
+	ErrCodePoolLinkRequest = "pool_link_request"
+	// ErrCodePoolLinkCredential is a 400: enrolling a mailbox needs a
+	// credential that matches its provider.
+	ErrCodePoolLinkCredential = "pool_link_credential"
+	// ErrCodePoolLinkCodeNotFound is a 404: the connection code is unknown or
+	// has expired.
+	ErrCodePoolLinkCodeNotFound = "pool_link_code_not_found"
+	// ErrCodePoolLinkCodeUsed is a 409: the connection code was already used.
+	ErrCodePoolLinkCodeUsed = "pool_link_code_used"
+	// ErrCodePoolLinkDenied is a 403: the connection was declined in Cloud.
+	ErrCodePoolLinkDenied = "pool_link_denied"
+	// ErrCodePoolLinkRevoked is a 401: the instance's link was revoked.
+	// Reconnect from the instance's settings.
+	ErrCodePoolLinkRevoked = "pool_link_revoked"
+	// ErrCodePoolLinkInstanceNotFound is a 404: the linked instance no longer
+	// exists in Cloud.
+	ErrCodePoolLinkInstanceNotFound = "pool_link_instance_not_found"
+	// ErrCodePoolLinkMailboxNotFound is a 404: the mailbox is not enrolled.
+	ErrCodePoolLinkMailboxNotFound = "pool_link_mailbox_not_found"
+	// ErrCodePoolLinkMailboxLimit is a 402: the Cloud workspace used its free
+	// allowance of linked mailboxes.
+	ErrCodePoolLinkMailboxLimit = "pool_link_mailbox_limit"
+	// ErrCodePoolLinkAlreadyAdopted is a 409: the mailbox is already linked to
+	// an instance.
+	ErrCodePoolLinkAlreadyAdopted = "pool_link_already_adopted"
+	// ErrCodePoolLinkNotAdoptable is a 422: the Cloud mailbox cannot be linked
+	// (inactive, an unsupported provider, or a Microsoft whole-organization
+	// grant).
+	ErrCodePoolLinkNotAdoptable = "pool_link_not_adoptable"
+	// ErrCodePoolLinkNotManaged is a 403: the credential is held by the
+	// instance, not by Cloud, so Cloud cannot act on it.
+	ErrCodePoolLinkNotManaged = "pool_link_not_managed"
+	// ErrCodePoolLinkMailboxBlocked is a 403: Cloud blocked the mailbox for
+	// hurting the pool; sending from it is suspended until reviewed.
+	ErrCodePoolLinkMailboxBlocked = "pool_link_mailbox_blocked"
+	// ErrCodePoolLinkMailboxInactive is a 403: the mailbox is not active in
+	// Cloud. Reconnect it to keep sending.
+	ErrCodePoolLinkMailboxInactive = "pool_link_mailbox_inactive"
+	// ErrCodePoolLinkWarmupUnavailable is a 403: warmup is not available on
+	// the Cloud workspace.
+	ErrCodePoolLinkWarmupUnavailable = "pool_link_warmup_unavailable"
+	// ErrCodePoolLinkOAuthPending is a 409: a mailbox sign-in started through
+	// Cloud has not completed yet. Poll again.
+	ErrCodePoolLinkOAuthPending = "pool_link_oauth_pending"
+	// ErrCodePoolLinkOAuthSession is a 404: the mailbox sign-in session is
+	// unknown or has expired.
+	ErrCodePoolLinkOAuthSession = "pool_link_oauth_session"
+)
+
+// Values of [Error.Reason].
+const (
+	// ErrReasonCertificateUntrusted accompanies [ErrCodeMailboxTLSFailed] when
+	// the server's own certificate failed verification and the owner can
+	// resolve it by trusting that certificate (tls_unverified on the
+	// credentials, then [EmailService.ConfirmCertificates]).
+	ErrReasonCertificateUntrusted = "certificate_untrusted"
 )
 
 // Sentinel errors for matching API failures with errors.Is. They carry only a

@@ -215,6 +215,11 @@ type Form struct {
 	// RedirectURL, when set, sends the visitor to your own thank-you page
 	// instead of showing SuccessMessage.
 	RedirectURL string `json:"redirect_url"`
+	// RedirectURLActive is false when RedirectURL is no longer on one of the
+	// workspace's own domains, so visitors see SuccessMessage instead. Nil
+	// when no redirect is set. A new or changed address that is not on an own
+	// domain is refused with [ErrCodeRedirectTargetNotOwnDomain].
+	RedirectURLActive *bool `json:"redirect_url_active,omitempty"`
 	// CampaignID is the campaign new contacts are enrolled in on submit.
 	// Sending still follows that campaign's own schedule and limits; a form
 	// never causes immediate mail.

@@ -25,6 +25,10 @@ Syncs the SDK with the v1 API as of server commit 169376ef9: inbox placement, co
 
 ### Added
 
+- `AuthService.ResetPasswordSession`, `ResetPasswordConfirmWith` and `ChangePasswordWith`, with `revoke_api_credentials` on both password flows.
+- `EmailService.Certificates`, `CheckCertificates` and `ConfirmCertificates` for pinning a mailbox server certificate, `MailboxCredentials.TLSUnverified` and `TLSPin`, and `Error.Reason`.
+- About 70 more `ErrCode*` constants, rescue outcome counts on warmup placement, `AccountStatus.SendRecoveryReason`, `WarmupStatus.NextSendAt`, `Form.RedirectURLActive`, and `OrganizationService.ListInvitations` with `IncludeExpired`.
+- `gateway.JoinError`: a refused handshake now carries the server's `code`, `reason` and `retry_after_ms`. It still unwraps to `ErrUnauthorized` or `ErrForbidden`.
 - `ApolloService` (`client.Apollo`) for the Apollo integration: `Overview`, `ReplaceKey`, `Lists`, `PreviewImport`, import source CRUD and `RunImportSource`, and `ListEnrichments`, `StartEnrichment`, `GetEnrichment`. `ClayService` (`client.Clay`) with `Get` and `Update`. The Clay inbound webhook is authenticated by the secret in its URL and is not wrapped.
 - `ProviderApollo`, `ProviderClay`, `ActionClaySendRow`, and `ContactSourceApollo`, `ContactSourceClay`, `ContactSourceCRMSync`.
 - `AuthService.ReauthMethods`, `BeginReauthPasskey`, `FinishReauthPasskey`, `BeginReauthSSO` and `FinishReauthSSO` for confirming a session by passkey or linked identity. The native-app ID-token confirmation is not wrapped.

@@ -355,9 +355,12 @@ type PoolLinkWorkspaceMailbox struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
-	// Provider is [ProviderGmail] or [ProviderOutlook].
+	// Provider is [ProviderGmail] or [ProviderOutlook]; a current server can
+	// also list an existing [ProviderSMTPIMAP] mailbox.
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
+	// MailHost is the mailbox's mail server host, for an SMTP/IMAP mailbox.
+	MailHost string `json:"mail_host,omitempty"`
 }
 
 // poolLinkPollFloor is the shortest gap the poll helpers will ever leave
