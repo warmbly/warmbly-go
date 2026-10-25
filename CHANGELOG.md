@@ -5,6 +5,12 @@ grouped by release and version numbers use semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-25
+
+Syncs the SDK with the Warmbly API: a new Placement service, mailbox sources,
+re-authentication, connected CRM and integrations, and new realtime events.
+Several changes track server behaviour that moved, so call sites may need a look.
+
 ### Changed
 
 - `OAuthAppInactive` held the wrong wire value. The server reports a disabled
@@ -320,6 +326,7 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/warmbly/warmbly-go/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0
