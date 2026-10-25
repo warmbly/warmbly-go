@@ -8,6 +8,10 @@ import (
 
 // TeamService groups existing workspace members into named teams, which CRM
 // tasks and deals can be assigned to instead of a single person.
+//
+// Reads need [PermReadCRM] for an API key (view-contacts, [OrgPermViewContacts],
+// for a session); writes need [PermWriteCRM] (manage-team,
+// [OrgPermManageTeam], for a session).
 type TeamService service
 
 // Team is a named group of workspace members.
@@ -41,32 +45,35 @@ type TeamUpdateParams struct {
 	Color *string `json:"color,omitempty"`
 }
 
-// List returns the workspace's teams with their members.
+// List returns the workspace's teams with their members. It needs
+// [PermReadCRM].
 func (s *TeamService) List(ctx context.Context, opts ...RequestOption) ([]Team, *Response, error) {
 	return fetchData[Team](ctx, s.client, "teams", opts)
 }
 
-// Create creates a team.
+// Create creates a team. It needs [PermWriteCRM].
 func (s *TeamService) Create(ctx context.Context, params *TeamCreateParams, opts ...RequestOption) (*Team, *Response, error) {
 	return send[Team](ctx, s.client.post, "teams", params, opts)
 }
 
-// Get retrieves a single team.
+// Get retrieves a single team. It needs [PermReadCRM].
 func (s *TeamService) Get(ctx context.Context, id string, opts ...RequestOption) (*Team, *Response, error) {
 	return fetch[Team](ctx, s.client, "teams/"+url.PathEscape(id), opts)
 }
 
-// Update renames or recolors a team.
+// Update renames or recolors a team. It needs [PermWriteCRM].
 func (s *TeamService) Update(ctx context.Context, id string, params *TeamUpdateParams, opts ...RequestOption) (*Team, *Response, error) {
 	return send[Team](ctx, s.client.patch, "teams/"+url.PathEscape(id), params, opts)
 }
 
-// Delete removes a team. Its members keep their workspace membership.
+// Delete removes a team. Its members keep their workspace membership. It needs
+// [PermWriteCRM].
 func (s *TeamService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "teams/"+url.PathEscape(id), opts...)
 }
 
-// AddMember adds an existing workspace member to a team.
+// AddMember adds an existing workspace member to a team. It needs
+// [PermWriteCRM].
 func (s *TeamService) AddMember(ctx context.Context, id, userID string, opts ...RequestOption) (*Team, *Response, error) {
 	body := struct {
 		UserID string `json:"user_id"`
@@ -74,7 +81,7 @@ func (s *TeamService) AddMember(ctx context.Context, id, userID string, opts ...
 	return send[Team](ctx, s.client.post, "teams/"+url.PathEscape(id)+"/members", body, opts)
 }
 
-// RemoveMember removes someone from a team.
+// RemoveMember removes someone from a team. It needs [PermWriteCRM].
 func (s *TeamService) RemoveMember(ctx context.Context, id, userID string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "teams/"+url.PathEscape(id)+"/members/"+url.PathEscape(userID), opts...)
 }

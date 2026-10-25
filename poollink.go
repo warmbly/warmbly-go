@@ -56,6 +56,10 @@ const (
 // PoolLinkStartParams identifies the instance that wants to link, as shown to
 // the approving member.
 type PoolLinkStartParams struct {
+	// RemoteOrganizationID is the id of the workspace on the instance that is
+	// linking. It is required: a link belongs to one workspace on each side,
+	// and a start without it fails with "pool_link_workspace_required".
+	RemoteOrganizationID string `json:"remote_organization_id"`
 	// InstanceName is the label the approval page shows, typically the host
 	// name or the operator's INSTANCE_NAME.
 	InstanceName string `json:"instance_name"`
@@ -67,6 +71,10 @@ type PoolLinkStartParams struct {
 
 // PoolLinkCodeGrant is the device-code grant that opens a handshake.
 type PoolLinkCodeGrant struct {
+	// WorkspaceScoped is true from a cloud that links per workspace. An
+	// instance should refuse a grant without it: that cloud predates
+	// per-workspace links.
+	WorkspaceScoped bool `json:"workspace_scoped"`
 	// DeviceCode is the secret half: keep it on the instance and send it only
 	// to [PoolLinkService.Poll].
 	DeviceCode string `json:"device_code"`
@@ -115,6 +123,9 @@ type PoolLinkCode struct {
 	InstanceVersion string `json:"instance_version"`
 	// Status is one of the PoolLinkCode* constants.
 	Status string `json:"status"`
+	// RemoteOrganizationID is the instance-side workspace asking to link;
+	// nil on a code opened by an instance that predates per-workspace links.
+	RemoteOrganizationID *string `json:"remote_organization_id,omitempty"`
 	// OrganizationID and InstanceID are set once the code has been approved.
 	OrganizationID *string `json:"organization_id,omitempty"`
 	InstanceID     *string `json:"instance_id,omitempty"`
@@ -127,8 +138,11 @@ type PoolLinkCode struct {
 type PoolLinkInstance struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
+	// RemoteOrganizationID is the workspace on the instance this link serves;
+	// nil for a legacy link that covers the whole instance.
+	RemoteOrganizationID *string `json:"remote_organization_id,omitempty"`
+	Name                 string  `json:"name"`
+	URL                  string  `json:"url"`
 	// Version is the build the instance most recently reported.
 	Version string `json:"version"`
 	// CreatedBy is the member who approved the link, when still known.
@@ -163,11 +177,16 @@ type PoolLinkPlan struct {
 	MailboxLimit *int `json:"mailbox_limit"`
 	// Enrolled is how many linked mailboxes currently count against the cap.
 	Enrolled int `json:"enrolled"`
+	// Warming is how many of them have warmup on and not paused; an enrolled
+	// mailbox is not necessarily warming.
+	Warming int `json:"warming"`
 	// PriceUSD is the monthly price of the paid tier, for an upgrade prompt.
 	PriceUSD int `json:"price_usd"`
 	// UpgradeURL is where to send the operator to upgrade; empty when billing
 	// is off or the paid tier has no price.
 	UpgradeURL string `json:"upgrade_url,omitempty"`
+	// ManageURL is the cloud's billing page; empty when billing is off.
+	ManageURL string `json:"manage_url,omitempty"`
 	// WarmupEntitled is false when the cloud workspace itself is not allowed
 	// to warm, in which case linked mailboxes will not warm either.
 	WarmupEntitled bool `json:"warmup_entitled"`
@@ -184,9 +203,41 @@ type PoolLinkInstanceList struct {
 // instance, as the instance itself sees it. The self-hosted dashboard
 // surfaces it through [CloudLinkStatus.Info].
 type PoolLinkInstanceInfo struct {
-	Instance     PoolLinkInstance     `json:"instance"`
-	Organization PoolLinkOrganization `json:"organization"`
-	Plan         PoolLinkPlan         `json:"plan"`
+	// ManagedConsentProtocol is the version of the durable managed-consent
+	// protocol the cloud speaks; zero from a cloud that predates it.
+	ManagedConsentProtocol int                  `json:"managed_consent_protocol,omitempty"`
+	Instance               PoolLinkInstance     `json:"instance"`
+	Organization           PoolLinkOrganization `json:"organization"`
+	Plan                   PoolLinkPlan         `json:"plan"`
+	// Redirects is the cloud's root-redirect allowance for this instance; nil
+	// from a cloud that does not serve root redirects.
+	Redirects *PoolLinkRedirectOffer `json:"redirects,omitempty"`
+}
+
+// PoolLinkRedirectOffer is how many sending-domain root redirects the cloud
+// serves for a linked instance.
+type PoolLinkRedirectOffer struct {
+	Available bool `json:"available"`
+	// Host is the cloud host a domain's root record points at.
+	Host  string `json:"host,omitempty"`
+	Limit int    `json:"limit"`
+	Used  int    `json:"used"`
+}
+
+// DiagnosticParticipation is how an enrolled mailbox takes part in
+// diagnostic test traffic on the cloud, the pool-link counterpart of
+// [Email.TestMode] and its companion fields.
+type DiagnosticParticipation struct {
+	// Mode is [TestParticipationDiagnostic] or [TestParticipationOff] when
+	// set; [TestParticipationLegacy] is reported for a mailbox that never
+	// chose but cannot be set. Off requires Send and Receive to be false.
+	Mode    string `json:"mode"`
+	Send    bool   `json:"send"`
+	Receive bool   `json:"receive"`
+	// SharedDailyLimit and RollingRecipientLimit are the caps described on
+	// [Email]; nil keeps the default. Negative values are refused.
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
 }
 
 // PoolLinkWarmupSettings is the ramp an enrolled mailbox warms on. It is
@@ -247,8 +298,13 @@ type PoolLinkWarmupHealth struct {
 	State string  `json:"state"`
 	Score float64 `json:"score"`
 	// Reason explains a state other than healthy.
-	Reason    string `json:"reason,omitempty"`
-	SpamScore int    `json:"spam_score"`
+	Reason string `json:"reason,omitempty"`
+	// PoolType is the pool the mailbox warms in, "premium" or "free", and
+	// Source is "cloud" when Warmbly Cloud reported this standing.
+	PoolType string `json:"pool_type,omitempty"`
+	Source   string `json:"source,omitempty"`
+	// Deprecated: SpamScore is always 0. Read Score and Reason instead.
+	SpamScore int `json:"spam_score"`
 	// BlockedUntil is when a quarantine or block lifts on its own.
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
@@ -285,6 +341,12 @@ type PoolLinkMailboxState struct {
 	// AuthState is the cloud's view of the mailbox credential.
 	AuthState string                 `json:"auth_state"`
 	Settings  PoolLinkWarmupSettings `json:"settings"`
+	// Participation is how the mailbox takes part in diagnostic test
+	// traffic on the cloud; set it with [CloudLinkService.SetParticipation].
+	Participation *DiagnosticParticipation `json:"participation,omitempty"`
+	// ConsentCompletedAt is when a managed mailbox's brokered sign-in was
+	// completed, for a mailbox added through the durable consent protocol.
+	ConsentCompletedAt *time.Time `json:"consent_completed_at,omitempty"`
 }
 
 // PoolLinkWorkspaceMailbox is a Google or Microsoft mailbox connected directly
@@ -293,9 +355,12 @@ type PoolLinkWorkspaceMailbox struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
-	// Provider is [ProviderGmail] or [ProviderOutlook].
+	// Provider is [ProviderGmail] or [ProviderOutlook]; a current server can
+	// also list an existing [ProviderSMTPIMAP] mailbox.
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
+	// MailHost is the mailbox's mail server host, for an SMTP/IMAP mailbox.
+	MailHost string `json:"mail_host,omitempty"`
 }
 
 // poolLinkPollFloor is the shortest gap the poll helpers will ever leave
@@ -391,10 +456,15 @@ func (s *PoolLinkService) DescribeCode(ctx context.Context, userCode string, opt
 //
 // organizationID is the workspace to link to, which need not be the session's
 // active one; pass "" to fall back to the session's workspace. The caller
-// needs the manage-settings permission in that workspace. Session-only; the
+// needs the manage-settings permission in that workspace and a recent
+// [AuthService.Reauth] (otherwise [ErrCodeReauthRequired]). Session-only; the
 // call is recorded in the workspace audit log.
 //
-// A code that is no longer pending fails with "pool_link_code_used".
+// A code that is no longer pending fails with "pool_link_code_used"; a
+// workspace that already has an active link with
+// "pool_link_workspace_connected", since each cloud workspace serves one
+// instance workspace; and a code from an instance that predates
+// per-workspace links with "pool_link_workspace_required".
 func (s *PoolLinkService) ApproveCode(ctx context.Context, userCode, organizationID string, opts ...RequestOption) (*PoolLinkInstance, *Response, error) {
 	body := struct {
 		OrganizationID string `json:"organization_id,omitempty"`
@@ -430,4 +500,59 @@ func (s *PoolLinkService) ListInstances(ctx context.Context, opts ...RequestOpti
 // is recorded in the workspace audit log.
 func (s *PoolLinkService) RevokeInstance(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "pool-link/instances/"+url.PathEscape(id), opts...)
+}
+
+// --- the warmup plan (session-only) ---
+
+// Billing periods accepted by [PoolLinkService.Checkout].
+const (
+	PoolLinkIntervalMonth = "month"
+	PoolLinkIntervalYear  = "year"
+)
+
+// PoolLinkOffer is the warmup plan as an upgrade prompt shows it: what it
+// costs and whether it can be bought here. The plan buys unlimited mailboxes
+// in the premium pool for a workspace that only warms, whether its mailboxes
+// are connected directly or through a linked instance, so it is not listed
+// with the other plans.
+type PoolLinkOffer struct {
+	// Available is false when billing is off or no price is configured; the
+	// prompt should then say so rather than open a checkout.
+	Available bool `json:"available"`
+	// MonthlyAvailable and YearlyAvailable say which periods
+	// [PoolLinkService.Checkout] accepts; MonthlyUSD and YearlyUSD are their
+	// prices.
+	MonthlyAvailable bool    `json:"monthly_available"`
+	YearlyAvailable  bool    `json:"yearly_available"`
+	MonthlyUSD       float64 `json:"monthly_usd"`
+	YearlyUSD        float64 `json:"yearly_usd"`
+	Currency         string  `json:"currency"`
+}
+
+// Offer reports the warmup plan's price and which billing periods can be
+// bought. Session-only.
+func (s *PoolLinkService) Offer(ctx context.Context, opts ...RequestOption) (*PoolLinkOffer, *Response, error) {
+	return fetch[PoolLinkOffer](ctx, s.client, "pool-link/offer", opts)
+}
+
+// Checkout opens a Stripe checkout for the warmup plan and returns the URL to
+// send the browser to. interval is [PoolLinkIntervalMonth] or
+// [PoolLinkIntervalYear]; "" means monthly. The price is chosen by the server,
+// never the caller. A period with no price answers 503, as does a deployment
+// without billing.
+//
+// Session-only; needs the manage-billing organization permission and is
+// recorded in the workspace audit log.
+func (s *PoolLinkService) Checkout(ctx context.Context, interval string, opts ...RequestOption) (string, *Response, error) {
+	body := struct {
+		Interval string `json:"interval,omitempty"`
+	}{Interval: interval}
+	var out struct {
+		CheckoutURL string `json:"checkout_url"`
+	}
+	resp, err := s.client.post(ctx, "pool-link/checkout", body, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.CheckoutURL, resp, nil
 }

@@ -44,7 +44,7 @@ var DefaultEndpoint = OAuth2Endpoint{
 //		ClientID:     "...",
 //		ClientSecret: "...",
 //		RedirectURL:  "https://app.example.com/callback",
-//		Scopes:       []string{"campaigns:read", "contacts:read"},
+//		Scopes:       []string{warmbly.ScopeReadCampaigns, warmbly.ScopeReadContacts},
 //	}
 //	verifier := warmbly.GenerateVerifier()
 //	url := cfg.AuthCodeURL(state, warmbly.S256ChallengeOption(verifier))
@@ -59,7 +59,7 @@ type OAuth2Config struct {
 	ClientSecret string
 	// RedirectURL must exactly match one of the application's registered URIs.
 	RedirectURL string
-	// Scopes are the permission keys to request.
+	// Scopes are the permission keys to request, the Scope* constants.
 	Scopes []string
 	// Endpoint overrides the authorization server URLs. Zero uses
 	// [DefaultEndpoint].
@@ -141,7 +141,12 @@ func (c *OAuth2Config) Exchange(ctx context.Context, code string, opts ...AuthCo
 	return retrieveToken(ctx, c.httpClient(), c.tokenURL(), c.ClientID, c.ClientSecret, v)
 }
 
-// Refresh exchanges a refresh token for a fresh access token.
+// Refresh exchanges a refresh token for a fresh access token. Refresh tokens
+// rotate on every exchange: store the returned one and discard the old one,
+// because presenting a refresh token twice ends the whole grant (RFC 9700) and
+// the user has to authorize again. The new token's scope is capped to what
+// the authorizing member's role covers now, and the exchange fails with
+// "invalid_grant" once that is nothing.
 func (c *OAuth2Config) Refresh(ctx context.Context, refreshToken string) (*Token, error) {
 	v := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -203,6 +208,11 @@ func (s *refreshTokenSource) Token() (*Token, error) {
 
 // ClientCredentialsConfig configures the OAuth 2.1 client-credentials grant for
 // machine-to-machine access (no user involved).
+//
+// The Warmbly authorization server currently supports only the
+// authorization_code and refresh_token grants and answers this one with
+// "unsupported_grant_type"; it is kept for authorization servers that do. Use
+// an API key for machine-to-machine access to Warmbly.
 type ClientCredentialsConfig struct {
 	ClientID     string
 	ClientSecret string

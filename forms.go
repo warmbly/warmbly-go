@@ -215,6 +215,11 @@ type Form struct {
 	// RedirectURL, when set, sends the visitor to your own thank-you page
 	// instead of showing SuccessMessage.
 	RedirectURL string `json:"redirect_url"`
+	// RedirectURLActive is false when RedirectURL is no longer on one of the
+	// workspace's own domains, so visitors see SuccessMessage instead. Nil
+	// when no redirect is set. A new or changed address that is not on an own
+	// domain is refused with [ErrCodeRedirectTargetNotOwnDomain].
+	RedirectURLActive *bool `json:"redirect_url_active,omitempty"`
 	// CampaignID is the campaign new contacts are enrolled in on submit.
 	// Sending still follows that campaign's own schedule and limits; a form
 	// never causes immediate mail.
@@ -229,6 +234,10 @@ type Form struct {
 	// CaptchaEnabled adds a Cloudflare Turnstile challenge. It only takes
 	// effect when [FormsConfig.CaptchaAvailable] is true for the instance.
 	CaptchaEnabled bool `json:"captcha_enabled"`
+	// TriageEnabled classifies each submission (see [FormSubmission.Triage]);
+	// junk is kept but creates no contact and joins no campaign. It only takes
+	// effect when [FormsConfig.TriageAvailable] is true for the instance.
+	TriageEnabled bool `json:"triage_enabled"`
 
 	// LogoURL, CoverURL and BackgroundURL are the public object URLs of the
 	// uploaded brand assets; empty when none is set. Change them with
@@ -402,6 +411,8 @@ type FormUpdateParams struct {
 	CategoryIDs    *[]string `json:"category_ids,omitempty"`
 	AllowedDomains *[]string `json:"allowed_domains,omitempty"`
 	CaptchaEnabled *bool     `json:"captcha_enabled,omitempty"`
+	// TriageEnabled classifies each submission; see [Form.TriageEnabled].
+	TriageEnabled *bool `json:"triage_enabled,omitempty"`
 }
 
 // MarshalJSON emits campaign_id as an explicit null when ClearCampaign is set,
@@ -430,6 +441,9 @@ type FormsConfig struct {
 	// CaptchaAvailable reports whether the operator configured a captcha
 	// provider, which [Form.CaptchaEnabled] needs to take effect.
 	CaptchaAvailable bool `json:"captcha_available"`
+	// TriageAvailable reports whether the instance can classify submissions,
+	// which [Form.TriageEnabled] needs to take effect.
+	TriageAvailable bool `json:"triage_available"`
 }
 
 // FormSubmission is one public submit, kept verbatim.
@@ -438,7 +452,7 @@ type FormSubmission struct {
 	FormID         string `json:"form_id"`
 	OrganizationID string `json:"organization_id"`
 	// ContactID is the contact the submission created or updated, or nil
-	// when the form has no email field.
+	// when the form has no email field or the submission is junk.
 	ContactID *string `json:"contact_id,omitempty"`
 	// CampaignID is the campaign whose email carried the personalized link
 	// the visitor arrived through, when there was one.
@@ -448,8 +462,14 @@ type FormSubmission struct {
 	Data map[string]any `json:"data"`
 	// SourceURL is the page the form was submitted from (the host page for
 	// an embed, the hosted page otherwise).
-	SourceURL string    `json:"source_url"`
-	CreatedAt time.Time `json:"created_at"`
+	SourceURL string `json:"source_url"`
+	// Triage is the verdict when the form triages submissions, one of the
+	// FormTriage* constants (or a value this SDK predates). It is empty when
+	// the form did not triage or the classification did not complete.
+	// TriageConfidence is the classifier's own confidence.
+	Triage           string    `json:"triage"`
+	TriageConfidence float64   `json:"triage_confidence"`
+	CreatedAt        time.Time `json:"created_at"`
 
 	// ContactEmail, ContactName and CampaignName are display summaries of
 	// the linked records, resolved at read time; empty when unlinked.
@@ -457,6 +477,17 @@ type FormSubmission struct {
 	ContactName  string `json:"contact_name,omitempty"`
 	CampaignName string `json:"campaign_name,omitempty"`
 }
+
+// Verdicts of [FormSubmission.Triage].
+const (
+	FormTriageBuyer     = "buyer"
+	FormTriageVendor    = "vendor"
+	FormTriageJobSeeker = "job_seeker"
+	FormTriageOther     = "other"
+	// FormTriageJunk submissions are kept but create no contact and join no
+	// campaign.
+	FormTriageJunk = "junk"
+)
 
 // FormSubmissionListParams control [FormService.ListSubmissions]. Submissions
 // are keyset-paginated newest first on created_at rather than by opaque

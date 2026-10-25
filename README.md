@@ -165,6 +165,7 @@ fmt.Println(created.ID)
 | `client.Campaigns` | Campaigns, sequence steps, A/B variants, attachments, senders, preflight, template preview |
 | `client.Contacts` | Contacts and the 360 view, faceted search, address verification, CRM notes, import and export, AI research |
 | `client.Segments` | Saved contact audiences, evaluated live, with per-contact overrides |
+| `client.Placement` | Inbox placement tests and batches against seed inboxes, per-mailbox seed setup and coverage |
 | `client.Suppressions` | The workspace do-not-contact list |
 | `client.Forms` | Hosted lead-capture forms, their submissions and their custom domain |
 | `client.Unibox` | Unified inbox: reading, replying, composing, labels, snoozes, scheduled sends, AI drafts |
@@ -175,6 +176,8 @@ fmt.Println(created.ID)
 | `client.Teams` | Named groups of members for CRM assignment |
 | `client.Meetings` | Calls booked through a connected scheduler |
 | `client.Integrations` | Third-party connections, event subscriptions, field mappings, contact pushes |
+| `client.Apollo` | Apollo lists, list imports and contact enrichment |
+| `client.Clay` | Clay inbound defaults and the table events are sent back to |
 | `client.Automations` | Event-triggered flows across those connections |
 | `client.LeadSync` | Google Sheets to contacts sync |
 | `client.Generation` | AI writing and rewriting |

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -19,6 +20,26 @@ import (
 
 // DefaultURL is the production gateway endpoint.
 const DefaultURL = "wss://realtime.warmbly.com/socket/websocket"
+
+// ProxyPath is the API-origin websocket proxy, relative to the versioned API
+// base (for example https://api.warmbly.com/v1). It exists for browser
+// sessions and accepts only the ticket from Meta.GatewayTicket, whose
+// GatewayTicket.ProxyPath already carries it, never an API key or OAuth access
+// token. Programmatic clients connect to the gateway directly.
+const ProxyPath = "/realtime/socket/websocket"
+
+// CredentialHeader is the handshake header that carries an API key or OAuth
+// access token. The client sets it automatically. Putting either credential
+// in the URL is refused with [JoinCodeUnauthenticated] (unless a self-hosted
+// instance allows it), because URLs end up in proxy and access logs; only the
+// short-lived connection ticket goes in the "token" query parameter.
+const CredentialHeader = "X-Warmbly-Token"
+
+// Credential prefixes the gateway treats as long-lived.
+const (
+	apiKeyPrefix     = "wmbly_"
+	oauthTokenPrefix = "wmat_"
+)
 
 // protocolVersion is the channel wire format this client speaks. Frames are
 // JSON arrays: [join_ref, ref, topic, event, payload].
@@ -59,13 +80,21 @@ const stableSession = 30 * time.Second
 const maxJoinRetryDelay = 2 * time.Minute
 
 // Codes carried in [JoinError.Code]. The gateway uses the same set for a
-// refused socket handshake and for a refused channel join, though only the join
-// path delivers them in a machine-readable body today.
+// refused socket handshake, which answers HTTP 403 with a JSON {code, reason}
+// body, and for a refused channel join.
 const (
-	// JoinCodeUnauthenticated means no credential was presented at all.
+	// JoinCodeUnauthenticated means no credential was presented at all, or an
+	// API key or OAuth token was sent in the URL instead of
+	// [CredentialHeader]. Self-hosted instances can allow the URL with
+	// REALTIME_ALLOW_QUERY_CREDENTIALS on the realtime service.
 	JoinCodeUnauthenticated = 4003
 	// JoinCodeAuthFailed means the credential was presented and rejected:
-	// expired token, unknown or revoked key, bad signature. Re-mint it.
+	// expired token, unknown or revoked key, bad signature, a key whose
+	// creator left the workspace or was banned from signing in, an OAuth app
+	// that was suspended, or a session token that is not a connection ticket.
+	// A connection ticket opens one socket only while the session that minted
+	// it is still signed in, so a used ticket and a signed-out session are
+	// refused with this code too. Re-mint it.
 	JoinCodeAuthFailed = 4004
 	// JoinCodeInvalidTopic means the topic itself is malformed, typically an
 	// id that is not a UUID. Retrying cannot help; fix the topic.
@@ -93,10 +122,15 @@ const (
 	// JoinReasonRateLimited accompanies [JoinCodeRateLimited].
 	JoinReasonRateLimited = "rate_limited"
 	// JoinReasonNotAMember means the credential's owner is not a member of the
-	// workspace in the topic.
+	// workspace in the topic, on the campaign and mailbox channels. The
+	// workspace channel refuses a non-member with the same
+	// [JoinCodePermissionDenied] but a human-readable reason, so branch on the
+	// code there. This is also how a member removed mid-session finds out: the
+	// server disconnects every socket they hold and the rejoin is refused.
 	JoinReasonNotAMember = "not_a_member"
 	// JoinReasonForbidden means the member exists but lacks the permission the
-	// topic requires.
+	// topic requires, or is restricted to selected resources and the
+	// campaign or mailbox in the topic is not one of them.
 	JoinReasonForbidden = "forbidden"
 	// JoinReasonUnauthorized is returned by the user channel when a socket
 	// tries to join a user topic that is not its own.
@@ -113,6 +147,14 @@ const (
 	JoinReasonInvalidCampaignID  = "invalid_campaign_id"
 	JoinReasonInvalidAccountID   = "invalid_account_id"
 	JoinReasonInvalidOperationID = "invalid_operation_id"
+	// JoinReasonJWTRequired, JoinReasonAdminMFARequired and
+	// JoinReasonNotAnAdmin refuse the platform admin feed, which is not open to
+	// developers: an API key or OAuth token, a session that did not verify a
+	// second factor, and a member without platform admin rights respectively.
+	// All carry [JoinCodePermissionDenied]; this client never joins that topic.
+	JoinReasonJWTRequired      = "jwt_required"
+	JoinReasonAdminMFARequired = "admin_mfa_required"
+	JoinReasonNotAnAdmin       = "not_an_admin"
 )
 
 // ErrUnauthorized is returned by [Client.Open] when the credential is rejected.
@@ -123,11 +165,12 @@ var ErrUnauthorized = errors.New("gateway: credential rejected")
 // may not join the workspace.
 //
 // The client stops on it during the first connection, when it almost always
-// means a permission problem. Once a session has joined successfully, a later
-// refused handshake is far more likely to be the handshake budget or the
-// concurrent-connection cap — which look identical from the client, because the
-// gateway refuses a handshake with a plain HTTP 403 and no machine-readable
-// body — so the client backs off and retries instead of giving up.
+// means a permission problem. A current gateway explains a refused handshake in
+// a JSON body, which surfaces as a [JoinError] instead. Against one that does
+// not, a refusal after a session has joined successfully is far more likely to
+// be the handshake budget or the concurrent-connection cap, which look
+// identical from the client, so the client backs off and retries instead of
+// giving up.
 var ErrForbidden = errors.New("gateway: not permitted to join this workspace")
 
 // JoinError is a refused join, or a refused socket handshake.
@@ -359,10 +402,12 @@ func WithLogger(logf func(format string, args ...any)) Option {
 //     cannot eat the allowance a client then needs to rejoin its topics with,
 //     because the two budgets are separate.
 //
-// A handshake refused for rate limiting is indistinguishable from a permission
-// refusal on the wire (both are a plain HTTP 403), so after a session has
-// connected once the client waits a full minute — the length of the budget's
-// fixed window — before dialing again rather than treating it as fatal.
+// A refused handshake answers HTTP 403 with a JSON {code, reason} body, which
+// the client reads: a rate limit quotes its wait and a permission refusal is
+// final. When the body is missing or unreadable the two look alike, so after a
+// session has connected once the client waits a full minute (the length of the
+// budget's fixed window) before dialing again rather than treating it as
+// fatal.
 func WithReconnectBackoff(minDelay, maxDelay time.Duration) Option {
 	return func(c *Client) {
 		if minDelay > 0 {
@@ -396,9 +441,20 @@ func WithResumeFrom(seq int) Option {
 	}
 }
 
-// New creates a gateway client for one workspace, authenticated with token: an
-// API key holding the realtime-subscribe scope, or a session access token. It
-// does not connect; call [Client.Open].
+// New creates a gateway client for one workspace, authenticated with token:
+// an API key (wmbly_) holding the realtime-subscribe permission, an OAuth
+// access token (wmat_) whose grant includes the realtime_subscribe scope, or a
+// single-use ticket a signed-in session mints with Meta.GatewayTicket. API
+// keys and OAuth tokens are sent in [CredentialHeader]; a ticket is sent in
+// the URL. A bare session access token is refused. It does not connect; call
+// [Client.Open].
+//
+// A ticket opens one socket, and only while the session that minted it is
+// still signed in. The client presents the same token on every reconnect, so
+// any reconnect after the first connection is refused (code 4004, "already
+// used"), as is one after the ticket expires or its session signs out. Use an
+// API key or OAuth access token for a connection meant to outlive its first
+// socket, or mint a new ticket for each connection.
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,
@@ -608,7 +664,7 @@ func (c *Client) classify(err error) (fatal bool, cooldown time.Duration) {
 	}
 
 	if errors.Is(err, ErrForbidden) {
-		// A refused handshake carries no machine-readable body, so a 403 on a
+		// A 403 without a readable {code, reason} body (an older gateway) on a
 		// credential that has already connected is more likely the handshake
 		// budget or the connection cap than a permission that vanished
 		// mid-session. Wait out the budget's window instead of giving up.
@@ -630,7 +686,7 @@ func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), c.handshakeHeader())
 	if derr != nil {
 		// The socket refuses the upgrade at the HTTP layer when the credential
 		// is bad, so a dial failure can be terminal rather than transient.
@@ -796,16 +852,34 @@ func (c *Client) handleRefusal(ctx context.Context, conn *wsconn.Conn, book *joi
 	return false, nil
 }
 
-// handshakeError classifies a refused websocket upgrade. The gateway answers a
-// connect-level refusal with an HTTP status and no machine-readable body — the
-// reason never reaches the client — so this can only separate "bad credential"
-// from "not permitted", and returns nil for anything else so the caller reports
-// the transport error instead.
+// handshakeError classifies a refused websocket upgrade. A current gateway
+// answers a connect-level refusal with HTTP 403 and a JSON body {code, reason}
+// (plus retry_after_ms when rate limited); that becomes a [JoinError], so the
+// reason is readable and the code decides whether to retry. An older gateway,
+// or a body that does not parse, falls back to the status alone, which can only
+// separate "bad credential" from "not permitted". It returns nil for any other
+// status so the caller reports the transport error instead.
 func handshakeError(resp *http.Response) error {
 	if resp == nil {
 		return nil
 	}
-	// wsconn has already closed the body on a failed handshake.
+	// wsconn has already read what it keeps of the body and closed the
+	// connection.
+	if resp.StatusCode == http.StatusForbidden && resp.Body != nil {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		var body struct {
+			Code         int    `json:"code"`
+			Reason       string `json:"reason"`
+			RetryAfterMS int    `json:"retry_after_ms"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code != 0 && body.Reason != "" {
+			return &JoinError{
+				Code:       body.Code,
+				Reason:     body.Reason,
+				RetryAfter: time.Duration(body.RetryAfterMS) * time.Millisecond,
+			}
+		}
+	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
@@ -815,17 +889,42 @@ func handshakeError(resp *http.Response) error {
 	return nil
 }
 
-// socketURL builds the dial URL, carrying the credential and wire version.
+// longLived reports whether token is a credential that outlives a session (an
+// API key or an OAuth access token). Those travel in [CredentialHeader]; only a
+// short-lived connection ticket belongs in the URL.
+func longLived(token string) bool {
+	return strings.HasPrefix(token, apiKeyPrefix) || strings.HasPrefix(token, oauthTokenPrefix)
+}
+
+// socketURL builds the dial URL, carrying the wire version and, for a
+// connection ticket, the credential.
 func (c *Client) socketURL() string {
 	u, err := url.Parse(c.url)
 	if err != nil {
 		return c.url
 	}
 	q := u.Query()
-	q.Set("token", c.token)
+	if longLived(c.token) {
+		// A ticket URL from GatewayTicket may still carry a token; never let
+		// a long-lived credential share the query string with it.
+		q.Del("token")
+	} else {
+		q.Set("token", c.token)
+	}
 	q.Set("vsn", protocolVersion)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// handshakeHeader carries an API key or OAuth access token in the handshake,
+// where proxies and access logs do not record it.
+func (c *Client) handshakeHeader() http.Header {
+	if !longLived(c.token) {
+		return nil
+	}
+	h := http.Header{}
+	h.Set(CredentialHeader, c.token)
+	return h
 }
 
 // sendJoin joins one topic and records the attempt so the reply can be matched
@@ -920,6 +1019,7 @@ func (c *Client) handleFrame(msg *frame, primary bool) error {
 		// An extra topic's channel died. The workspace stream is unaffected, so
 		// log it and pick the topic up again on the next reconnect.
 		c.logf("gateway: channel %s: %s; not rejoining until the next reconnect", msg.Topic, msg.Event)
+		c.emitLifecycle(EventChannelClosed, ChannelClosed{Topic: msg.Topic, Event: msg.Event})
 		return nil
 	}
 

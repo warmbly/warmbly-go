@@ -9,9 +9,17 @@ import (
 // BillingService reads and changes the workspace's subscription, plan, AI
 // credit balance and spend controls, and the referral program.
 //
-// These routes are session-only and gated on the manage-billing permission, so
-// they need a session token rather than an API key. On a self-hosted deployment
-// with billing disabled they may be absent entirely.
+// These routes are session-only, so they need a session token rather than an
+// API key. Reading the subscription, trial, feature gates, validating a
+// discount code and sending an enterprise inquiry are open to any member;
+// everything that spends money or reads the ledgers needs the manage-billing
+// organization permission ([OrgPermManageBilling]), as each method notes. On a
+// self-hosted deployment with billing disabled they may be absent entirely.
+//
+// Return URLs handed to the payment provider (success, cancel and portal
+// return) are pinned to the deployment's own dashboard: a URL on another host
+// is replaced with the dashboard's billing page, and a path such as
+// "/app/settings/billing" is resolved against the dashboard origin.
 type BillingService service
 
 // Subscription is the workspace's current plan subscription.
@@ -46,6 +54,21 @@ type Subscription struct {
 
 	// IsEnterprise marks a subscription negotiated outside the plan catalog.
 	IsEnterprise bool `json:"is_enterprise"`
+
+	// Managed reports a plan granted by an operator rather than bought
+	// through the payment provider, and still in force. A granted plan never
+	// touches the provider, so Status keeps whatever it was (often
+	// "incomplete"); decide "paid" from Managed or [SubscriptionStatus], never
+	// from Status alone.
+	Managed bool `json:"managed"`
+	// ManagedPlanID is the granted plan, held beside PlanID: when the grant
+	// ends the workspace falls back to the plan it pays for.
+	ManagedPlanID *string    `json:"managed_plan_id,omitempty"`
+	ManagedAt     *time.Time `json:"managed_at,omitempty"`
+	ManagedBy     *string    `json:"managed_by,omitempty"`
+	ManagedReason *string    `json:"managed_reason,omitempty"`
+	// ManagedUntil is when the grant lapses on its own; nil is open-ended.
+	ManagedUntil *time.Time `json:"managed_until,omitempty"`
 	// Plan is the plan this subscription is on, joined in by the API so a
 	// caller does not have to look it up in [MetaService.Plans].
 	Plan *Plan `json:"plan,omitempty"`
@@ -84,7 +107,10 @@ type SubscriptionStatus struct {
 	HasSubscription    bool `json:"has_subscription"`
 	IsInFreeTrial      bool `json:"is_in_free_trial"`
 	IsFreeTrialExpired bool `json:"is_free_trial_expired"`
-	IsPaidSubscriber   bool `json:"is_paid_subscriber"`
+	// IsPaidSubscriber reports a paid plan that includes sending, the inbox,
+	// AI and integrations, whether bought or granted. The warmup-only plan
+	// does not count.
+	IsPaidSubscriber bool `json:"is_paid_subscriber"`
 	// DailyEmailLimit is the send cap the server enforces: an approved limit
 	// increase, else the plan's, else the trial's.
 	DailyEmailLimit int   `json:"daily_email_limit"`
@@ -486,37 +512,39 @@ type EnterpriseInquiryParams struct {
 	Notes           string `json:"notes,omitempty"`
 }
 
-// Get returns the workspace's subscription.
+// Get returns the workspace's subscription. Any member may read it.
 func (s *BillingService) Get(ctx context.Context, opts ...RequestOption) (*Subscription, *Response, error) {
 	return fetch[Subscription](ctx, s.client, "subscription", opts)
 }
 
 // Limits returns the subscription together with the realtime rate limits its
 // plan carries. For the plan-gate view (trial state, daily send cap) see
-// [BillingService.Features].
+// [BillingService.Features]. Any member may read it.
 func (s *BillingService) Limits(ctx context.Context, opts ...RequestOption) (*SubscriptionWithLimits, *Response, error) {
 	return fetch[SubscriptionWithLimits](ctx, s.client, "subscription/limits", opts)
 }
 
-// Trial returns where the workspace stands in its free trial.
+// Trial returns where the workspace stands in its free trial. Any member may
+// read it.
 func (s *BillingService) Trial(ctx context.Context, opts ...RequestOption) (*TrialStatus, *Response, error) {
 	return fetch[TrialStatus](ctx, s.client, "subscription/trial", opts)
 }
 
 // Features returns the capability gates a client should check before offering
-// an action.
+// an action. Any member may read it.
 func (s *BillingService) Features(ctx context.Context, opts ...RequestOption) (*FeatureStatus, *Response, error) {
 	return fetch[FeatureStatus](ctx, s.client, "subscription/features", opts)
 }
 
 // Checkout starts a hosted checkout for a plan and returns the URL to send the
-// user to.
+// user to. It needs [OrgPermManageBilling].
 func (s *BillingService) Checkout(ctx context.Context, params *CheckoutParams, opts ...RequestOption) (*CheckoutSession, *Response, error) {
 	return send[CheckoutSession](ctx, s.client.post, "subscription/checkout", params, opts)
 }
 
 // Portal opens the payment provider's billing portal and returns its URL.
-// returnURL, where the portal sends the user back, is required.
+// returnURL, where the portal sends the user back, is required. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) Portal(ctx context.Context, returnURL string, opts ...RequestOption) (string, *Response, error) {
 	body := struct {
 		ReturnURL string `json:"return_url"`
@@ -535,7 +563,7 @@ func (s *BillingService) Portal(ctx context.Context, returnURL string, opts ...R
 // (atPeriodEnd true), or clears a cancellation that was already scheduled so
 // it renews again (atPeriodEnd false). Either way the workspace keeps its plan
 // until the period actually ends. It needs an active provider subscription; a
-// workspace that never had one is refused.
+// workspace that never had one is refused. It needs [OrgPermManageBilling].
 func (s *BillingService) Cancel(ctx context.Context, atPeriodEnd bool, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		CancelAtPeriodEnd bool `json:"cancel_at_period_end"`
@@ -544,7 +572,7 @@ func (s *BillingService) Cancel(ctx context.Context, atPeriodEnd bool, opts ...R
 }
 
 // ChangePlan moves the workspace to a different plan and returns the updated
-// subscription. It needs the manage-billing organization permission.
+// subscription. It needs [OrgPermManageBilling].
 func (s *BillingService) ChangePlan(ctx context.Context, params *ChangePlanParams, opts ...RequestOption) (*Subscription, *Response, error) {
 	var out struct {
 		Subscription *Subscription `json:"subscription"`
@@ -557,8 +585,7 @@ func (s *BillingService) ChangePlan(ctx context.Context, params *ChangePlanParam
 }
 
 // PreviewPlanChange returns the proration moving to newPlanID would produce,
-// without making the change. It needs the manage-billing organization
-// permission.
+// without making the change. It needs [OrgPermManageBilling].
 func (s *BillingService) PreviewPlanChange(ctx context.Context, newPlanID string, opts ...RequestOption) (*PlanChangePreview, *Response, error) {
 	q := url.Values{"new_plan_id": {newPlanID}}
 	return fetch[PlanChangePreview](ctx, s.client, withQuery("subscription/preview-change", q), opts)
@@ -567,7 +594,8 @@ func (s *BillingService) PreviewPlanChange(ctx context.Context, newPlanID string
 // ValidateDiscount checks a promotion code and reports what it would do. Name
 // a planID to get the amounts it works out to on that plan; pass "" to just
 // check the code. A code that cannot be used is not an error: the preview
-// comes back with [DiscountPreview.Valid] false and a reason.
+// comes back with [DiscountPreview.Valid] false and a reason. Any member may
+// call it.
 func (s *BillingService) ValidateDiscount(ctx context.Context, code, planID string, opts ...RequestOption) (*DiscountPreview, *Response, error) {
 	body := struct {
 		Code   string  `json:"code"`
@@ -581,13 +609,15 @@ func (s *BillingService) ValidateDiscount(ctx context.Context, code, planID stri
 
 // AppliedDiscounts returns the promotions redeemed on the workspace, most
 // recent first. It is not paginated: the server answers with its most recent
-// 50.
+// 50. It needs [OrgPermManageBilling].
 func (s *BillingService) AppliedDiscounts(ctx context.Context, opts ...RequestOption) ([]DiscountRedemption, *Response, error) {
 	return fetchData[DiscountRedemption](ctx, s.client, "subscription/discounts", opts)
 }
 
 // EnterpriseInquiry asks the sales team to get in touch about enterprise
-// pricing and returns the inquiry's id.
+// pricing and returns the inquiry's id. CompanyName and ContactName must be
+// displayable names, and Notes is capped at 2000 characters. Any member may
+// call it.
 func (s *BillingService) EnterpriseInquiry(ctx context.Context, params *EnterpriseInquiryParams, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		InquiryID string `json:"inquiry_id"`
@@ -603,12 +633,13 @@ func (s *BillingService) EnterpriseInquiry(ctx context.Context, params *Enterpri
 
 // Credits returns the workspace's AI credit position. Check
 // [CreditBalance.Unlimited] first: a deployment without billing meters
-// nothing.
+// nothing. It needs [OrgPermManageBilling].
 func (s *BillingService) Credits(ctx context.Context, opts ...RequestOption) (*CreditBalance, *Response, error) {
 	return fetch[CreditBalance](ctx, s.client, "subscription/credits", opts)
 }
 
-// CreditTransactions returns a page of the credit ledger, newest first.
+// CreditTransactions returns a page of the credit ledger, newest first. It
+// needs [OrgPermManageBilling].
 func (s *BillingService) CreditTransactions(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[CreditTransaction], error) {
 	q := make(url.Values)
 	params.apply(q)
@@ -617,7 +648,7 @@ func (s *BillingService) CreditTransactions(ctx context.Context, params *ListOpt
 
 // BuyCredits starts a hosted checkout for a top-up pack (a
 // [CreditPack.Key] from [CreditBalance.Packs]). It requires an active paid
-// plan; all three arguments are required.
+// plan; all three arguments are required. It needs [OrgPermManageBilling].
 func (s *BillingService) BuyCredits(ctx context.Context, pack, successURL, cancelURL string, opts ...RequestOption) (*CheckoutSession, *Response, error) {
 	body := struct {
 		Pack       string `json:"pack"`
@@ -628,26 +659,29 @@ func (s *BillingService) BuyCredits(ctx context.Context, pack, successURL, cance
 }
 
 // CreditUsage returns AI spend over the last days, from 1 to 90. Zero uses the
-// server default.
+// server default. It needs [OrgPermManageBilling].
 func (s *BillingService) CreditUsage(ctx context.Context, days int, opts ...RequestOption) (*CreditUsage, *Response, error) {
 	q := make(url.Values)
 	setPositive(q, "days", days)
 	return fetch[CreditUsage](ctx, s.client, withQuery("subscription/credits/usage", q), opts)
 }
 
-// CreditSettings returns the workspace's AI spend controls.
+// CreditSettings returns the workspace's AI spend controls. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) CreditSettings(ctx context.Context, opts ...RequestOption) (*CreditSettings, *Response, error) {
 	return fetch[CreditSettings](ctx, s.client, "subscription/credits/settings", opts)
 }
 
-// UpdateCreditSettings saves the AI spend controls.
+// UpdateCreditSettings saves the AI spend controls. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) UpdateCreditSettings(ctx context.Context, params *CreditSettingsParams, opts ...RequestOption) (*CreditSettings, *Response, error) {
 	return send[CreditSettings](ctx, s.client.patch, "subscription/credits/settings", params, opts)
 }
 
 // --- referrals ---
 
-// Referral returns the workspace's referral summary.
+// Referral returns the workspace's referral summary. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) Referral(ctx context.Context, opts ...RequestOption) (*ReferralSummary, *Response, error) {
 	return fetch[ReferralSummary](ctx, s.client, "subscription/referral", opts)
 }
@@ -655,20 +689,22 @@ func (s *BillingService) Referral(ctx context.Context, opts ...RequestOption) (*
 // EnsureReferralCode mints the workspace's referral code if it does not have
 // one yet, and returns it either way. It is idempotent: a workspace has one
 // code, and calling this again returns the same one. For the shareable link
-// and the running totals, read [BillingService.Referral].
+// and the running totals, read [BillingService.Referral]. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) EnsureReferralCode(ctx context.Context, opts ...RequestOption) (*ReferralCode, *Response, error) {
 	return send[ReferralCode](ctx, s.client.post, "subscription/referral", nil, opts)
 }
 
 // ReferralAttributions returns a page of the workspaces referred, with where
-// each reward stands.
+// each reward stands. It needs [OrgPermManageBilling].
 func (s *BillingService) ReferralAttributions(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[ReferralAttribution], error) {
 	q := make(url.Values)
 	params.apply(q)
 	return listJSON[ReferralAttribution](ctx, s.client, "subscription/referral/attributions", q, opts...)
 }
 
-// ReferralEarnings returns a page of the referral credit ledger.
+// ReferralEarnings returns a page of the referral credit ledger. It needs
+// [OrgPermManageBilling].
 func (s *BillingService) ReferralEarnings(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[ReferralEarning], error) {
 	q := make(url.Values)
 	params.apply(q)

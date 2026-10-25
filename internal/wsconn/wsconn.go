@@ -8,6 +8,7 @@ package wsconn
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -159,7 +160,7 @@ func Dial(ctx context.Context, urlStr string, header http.Header) (*Conn, *http.
 	if resp.StatusCode != http.StatusSwitchingProtocols ||
 		!strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
 		!headerContainsToken(resp.Header, "Connection", "upgrade") {
-		resp.Body.Close()
+		resp.Body = keepRefusalBody(conn, resp.Body)
 		conn.Close()
 		return nil, resp, fmt.Errorf("wsconn: handshake failed: status %d", resp.StatusCode)
 	}
@@ -479,4 +480,21 @@ func (c *Conn) applyDeadline(ctx context.Context, set func(time.Time) error) fun
 		close(done)
 		_ = set(time.Time{})
 	}
+}
+
+// maxRefusalBody bounds how much of a refused handshake's body is kept.
+const maxRefusalBody = 4 << 10
+
+// refusalBodyWait bounds how long reading a refused handshake's body may take.
+const refusalBodyWait = 2 * time.Second
+
+// keepRefusalBody reads the small body a server may send with a refused
+// upgrade, such as the {code, reason} JSON the Warmbly gateway answers with,
+// and returns it as a body that stays readable after the connection closes.
+// The body is empty when it cannot be read in time.
+func keepRefusalBody(conn net.Conn, body io.ReadCloser) io.ReadCloser {
+	defer body.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(refusalBodyWait))
+	b, _ := io.ReadAll(io.LimitReader(body, maxRefusalBody))
+	return io.NopCloser(bytes.NewReader(b))
 }

@@ -58,9 +58,9 @@ func TestSelfhostSyncRouting(t *testing.T) {
 	}{
 		// Pool link: public handshake.
 		{"poolLink.StartCode", func() error {
-			_, _, e := c.PoolLink.StartCode(ctx, &PoolLinkStartParams{InstanceName: "box", InstanceURL: "https://box.example", InstanceVersion: "1.2.3"})
+			_, _, e := c.PoolLink.StartCode(ctx, &PoolLinkStartParams{RemoteOrganizationID: "org_r", InstanceName: "box", InstanceURL: "https://box.example", InstanceVersion: "1.2.3"})
 			return e
-		}, "POST", "/v1/pool-link/codes", `{"instance_name":"box","instance_url":"https://box.example","instance_version":"1.2.3"}`},
+		}, "POST", "/v1/pool-link/codes", `{"remote_organization_id":"org_r","instance_name":"box","instance_url":"https://box.example","instance_version":"1.2.3"}`},
 		{"poolLink.Poll", func() error { _, _, e := c.PoolLink.Poll(ctx, "dev_1"); return e },
 			"POST", "/v1/pool-link/poll", `{"device_code":"dev_1"}`},
 
