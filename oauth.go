@@ -15,9 +15,16 @@ import (
 // [ClientCredentialsConfig] instead.
 type OAuthAppService service
 
-// OAuth application states returned in [OAuthApp.Status].
+// OAuth application states returned in [OAuthApp.Status]. An operator
+// suspension is reported separately, in [OAuthApp.SuspendedAt].
 const (
-	OAuthAppActive   = "active"
+	OAuthAppActive = "active"
+	// OAuthAppDisabled is an app its owner switched off.
+	OAuthAppDisabled = "disabled"
+	// OAuthAppInactive is the value this SDK used to name the disabled state.
+	// The API sends "disabled", so this constant never matched a response.
+	//
+	// Deprecated: use [OAuthAppDisabled].
 	OAuthAppInactive = "inactive"
 )
 
@@ -53,7 +60,8 @@ type OAuthApp struct {
 	// event the grant's scopes allow.
 	WebhookEvents []string `json:"webhook_events,omitempty"`
 
-	// Status is [OAuthAppActive] or [OAuthAppInactive].
+	// Status is [OAuthAppActive] or [OAuthAppDisabled]; treat other values as
+	// not usable.
 	Status string `json:"status"`
 	// IsPublic marks a client that authenticates with PKCE and no secret, such
 	// as a native app or an MCP client. PKCE is mandatory for these.
@@ -62,9 +70,18 @@ type OAuthApp struct {
 	// the RFC 7591 endpoint.
 	DynamicallyRegistered bool `json:"dynamically_registered"`
 
+	// SuspendedAt is set while an operator has suspended the app; the owner
+	// cannot lift it and the app can neither authorize nor hold tokens.
+	// SuspendedReason says why, when the operator gave one.
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason string     `json:"suspended_reason,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// Usable reports whether the app is active and not suspended.
+func (a *OAuthApp) Usable() bool { return a.Status == OAuthAppActive && a.SuspendedAt == nil }
 
 // OAuthAppWithSecret is an [OAuthApp] together with its plaintext client
 // secret, returned only at creation.
@@ -180,14 +197,17 @@ func (s *OAuthAppService) RotateSecret(ctx context.Context, id string, opts ...R
 	return out.ClientSecret, resp, nil
 }
 
-// UploadLogo stores an app logo (PNG or JPEG, up to 2 MB) and returns its URL,
-// which you then pass in [OAuthAppParams.LogoURL]. It is a separate call so a
-// logo can be uploaded during registration, before the app has an id.
+// UploadLogo stores an app logo (PNG or JPEG, up to 2 MB and 1024 pixels on a
+// side, at least 32) and returns its URL, which you then pass in
+// [OAuthAppParams.LogoURL]. It is a separate call so a logo can be uploaded
+// during registration, before the app has an id; once the app exists,
+// [OAuthAppService.SetLogo] uploads and attaches in one step. The server only
+// accepts logo URLs it issued for the workspace, never an outside address.
 func (s *OAuthAppService) UploadLogo(ctx context.Context, file *FileUpload, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		LogoURL string `json:"logo_url"`
 	}
-	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "logo", file, nil, &out, opts...)
+	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "file", file, nil, &out, opts...)
 	if err != nil {
 		return "", resp, err
 	}

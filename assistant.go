@@ -3,6 +3,7 @@ package warmbly
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"time"
 )
@@ -59,6 +60,24 @@ type PendingTool struct {
 	// human-readable rendering of it.
 	Args        json.RawMessage `json:"args"`
 	ArgsSummary string          `json:"args_summary,omitempty"`
+	// Arguments is Args as indented JSON with sorted keys, capped at 16 KiB;
+	// ArgumentsTruncated says it was cut. It is what an approval card shows.
+	Arguments          string `json:"arguments,omitempty"`
+	ArgumentsTruncated bool   `json:"arguments_truncated,omitempty"`
+	// Preview is what a send would do, set for send-class tools.
+	Preview *AgentSendPreview `json:"preview,omitempty"`
+	// AlwaysAllowOffered reports whether the viewer may answer
+	// [ApprovalAlwaysAllow] for this tool.
+	AlwaysAllowOffered bool `json:"always_allow_offered,omitempty"`
+}
+
+// AgentSendPreview is the resolved shape of a send awaiting approval.
+type AgentSendPreview struct {
+	From     string   `json:"from"`
+	To       []string `json:"to"`
+	Subject  string   `json:"subject"`
+	Body     string   `json:"body"`
+	BodyHTML string   `json:"body_html,omitempty"`
 }
 
 // AgentTranscript is a session rehydrated for display.
@@ -124,8 +143,11 @@ const (
 	ApprovalApprove = "approve"
 	// ApprovalDeny abandons it and lets the assistant continue without it.
 	ApprovalDeny = "deny"
-	// ApprovalAlwaysAllow runs it and stops asking for that tool in this
-	// session.
+	// ApprovalAlwaysAllow runs it and records a workspace-wide policy so the
+	// assistant stops asking for that tool, for every member, until the policy
+	// is revoked with [AssistantService.RevokeToolPolicy]. It is offered only
+	// for write-class tools ([PendingTool.AlwaysAllowOffered]); a send is
+	// always asked about.
 	ApprovalAlwaysAllow = "always_allow"
 )
 
@@ -161,6 +183,16 @@ type AgentEvent struct {
 	EntityType string `json:"entity_type,omitempty"`
 	EntityID   string `json:"entity_id,omitempty"`
 	OpenURL    string `json:"open_url,omitempty"`
+
+	// Arguments, ArgumentsTruncated, Preview and AlwaysAllowOffered describe
+	// an [AgentEventApprovalRequired] card; see [PendingTool].
+	Arguments          string            `json:"arguments,omitempty"`
+	ArgumentsTruncated bool              `json:"arguments_truncated,omitempty"`
+	Preview            *AgentSendPreview `json:"preview,omitempty"`
+	AlwaysAllowOffered bool              `json:"always_allow_offered,omitempty"`
+	// Secrets are values a tool generated that are shown to the member once
+	// and never kept in the transcript. Store them before the run continues.
+	Secrets map[string]string `json:"secrets,omitempty"`
 }
 
 // MessageParams sends a message to the assistant.
@@ -227,13 +259,71 @@ func (s *AssistantService) SendMessage(ctx context.Context, sessionID string, pa
 	return s.streamRun(ctx, "ai/sessions/"+url.PathEscape(sessionID)+"/messages", params, fn, opts)
 }
 
-// Approve answers a paused approval and streams the rest of the run. The
-// decision is [ApprovalApprove], [ApprovalDeny] or [ApprovalAlwaysAllow].
+// Approve answers the approval a session is paused on and streams the rest of
+// the run. The decision is [ApprovalApprove], [ApprovalDeny] or
+// [ApprovalAlwaysAllow].
+//
+// The API wants the tool call being answered, so Approve first reads the
+// session's transcript to find the one waiting and fails with
+// [ErrNoPendingApproval] if there is none. A caller that already holds the
+// call from the stream should use [AssistantService.ApproveToolCall] and skip
+// the extra request.
 func (s *AssistantService) Approve(ctx context.Context, sessionID, decision string, fn func(*AgentEvent) bool, opts ...RequestOption) (*Response, error) {
+	tr, resp, err := s.Transcript(ctx, sessionID, opts...)
+	if err != nil {
+		return resp, err
+	}
+	if tr.Pending == nil || tr.Pending.ToolCallID == "" {
+		return resp, ErrNoPendingApproval
+	}
+	return s.ApproveToolCall(ctx, sessionID, tr.Pending.ToolCallID, decision, fn, opts...)
+}
+
+// ErrNoPendingApproval is returned by [AssistantService.Approve] when the
+// session is not waiting on an approval.
+var ErrNoPendingApproval = errors.New("warmbly: the assistant session has no pending approval")
+
+// ApproveToolCall answers the paused tool call toolCallID
+// ([PendingTool.ToolCallID], or [AgentEvent.ToolCallID] on the
+// [AgentEventApprovalRequired] event) and streams the rest of the run. The
+// decision is [ApprovalApprove], [ApprovalDeny] or [ApprovalAlwaysAllow];
+// anything else is refused with 400.
+func (s *AssistantService) ApproveToolCall(ctx context.Context, sessionID, toolCallID, decision string, fn func(*AgentEvent) bool, opts ...RequestOption) (*Response, error) {
 	body := struct {
-		Decision string `json:"decision"`
-	}{Decision: decision}
+		Decision   string `json:"decision"`
+		ToolCallID string `json:"tool_call_id"`
+	}{Decision: decision, ToolCallID: toolCallID}
 	return s.streamRun(ctx, "ai/sessions/"+url.PathEscape(sessionID)+"/approve", body, fn, opts)
+}
+
+// ToolPolicy is a workspace "always allow" decision for one assistant tool,
+// recorded when a member answered [ApprovalAlwaysAllow]. Only write-class
+// tools can have one.
+type ToolPolicy struct {
+	OrgID string `json:"org_id"`
+	// ToolName is the tool's name, as in [PendingTool.ToolName].
+	ToolName string `json:"tool_name"`
+	// Decision is the recorded decision; today [ApprovalAlwaysAllow].
+	Decision string `json:"decision"`
+	// CreatedBy is the member who set it, when still known, and CreatedByName
+	// their display name.
+	CreatedBy     *string   `json:"created_by,omitempty"`
+	CreatedByName string    `json:"created_by_name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ToolPolicies lists the tools the assistant runs without asking in this
+// workspace (the "data" array of the response). Session-only; needs the
+// manage-settings organization permission.
+func (s *AssistantService) ToolPolicies(ctx context.Context, opts ...RequestOption) ([]ToolPolicy, *Response, error) {
+	return fetchData[ToolPolicy](ctx, s.client, "ai/tool-policies", opts)
+}
+
+// RevokeToolPolicy makes the assistant ask about tool again. tool is
+// [ToolPolicy.ToolName]. Session-only; needs the manage-settings
+// organization permission.
+func (s *AssistantService) RevokeToolPolicy(ctx context.Context, tool string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "ai/tool-policies/"+url.PathEscape(tool), opts...)
 }
 
 func (s *AssistantService) streamRun(ctx context.Context, path string, body any, fn func(*AgentEvent) bool, opts []RequestOption) (*Response, error) {
