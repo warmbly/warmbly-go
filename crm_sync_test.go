@@ -323,3 +323,24 @@ func TestCRMExternalRefOnDealAndTask(t *testing.T) {
 		t.Errorf("task = %+v", task)
 	}
 }
+
+func TestCRMSyncFailuresEmptyIDsIsNoop(t *testing.T) {
+	var got recordedRequest
+	c := routingClient(t, &got)
+	for name, call := range map[string]func() (int64, *Response, error){
+		"discard": func() (int64, *Response, error) {
+			return c.CRM.DiscardSyncFailures(context.Background(), []string{})
+		},
+		"retry": func() (int64, *Response, error) {
+			return c.CRM.RetrySyncFailures(context.Background(), []string{})
+		},
+	} {
+		n, _, err := call()
+		if err != nil || n != 0 {
+			t.Fatalf("%s: n=%d err=%v, want a local no-op", name, n, err)
+		}
+		if got.method != "" {
+			t.Fatalf("%s sent a %s request", name, got.method)
+		}
+	}
+}

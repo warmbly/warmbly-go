@@ -53,7 +53,8 @@ type CloudLinkConnection struct {
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
 	// DisconnectPending is true while the cloud has not yet confirmed an
-	// ended link; retry [CloudLinkService.Disconnect].
+	// ended link; retry [CloudLinkService.DisconnectLegacy] for a legacy link
+	// and [CloudLinkService.Disconnect] for a workspace-scoped one.
 	DisconnectPending bool `json:"disconnect_pending,omitempty"`
 }
 

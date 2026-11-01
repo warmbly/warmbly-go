@@ -437,16 +437,23 @@ type crmJobIDs struct {
 }
 
 // RetrySyncFailures requeues failed sync jobs and returns how many it
-// requeued. Pass no ids to requeue every failed job, or at most 500. It needs
-// [PermIntegrations].
+// requeued. Pass nil ids to requeue every failed job, or at most 500. An
+// empty, non-nil slice is a no-op. It needs [PermIntegrations].
 func (s *CRMService) RetrySyncFailures(ctx context.Context, ids []string, opts ...RequestOption) (int64, *Response, error) {
+	if ids != nil && len(ids) == 0 {
+		return 0, nil, nil
+	}
 	return s.affect(ctx, "crm/sync/retry", crmJobIDs{IDs: ids}, opts)
 }
 
 // DiscardSyncFailures drops failed sync jobs and returns how many it dropped.
-// Pass no ids to drop every failed job, or at most 500. It needs
-// [PermIntegrations].
+// Pass nil ids to drop every failed job, or at most 500. An empty, non-nil
+// slice is a no-op, so a filter that matched nothing never discards them all.
+// It needs [PermIntegrations].
 func (s *CRMService) DiscardSyncFailures(ctx context.Context, ids []string, opts ...RequestOption) (int64, *Response, error) {
+	if ids != nil && len(ids) == 0 {
+		return 0, nil, nil
+	}
 	return s.affect(ctx, "crm/sync/discard", crmJobIDs{IDs: ids}, opts)
 }
 

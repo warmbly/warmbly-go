@@ -62,6 +62,8 @@ const (
 	// LeadHoldCC holds a contact's own lead while they are copied on another
 	// lead's thread in the same campaign, so they never get two sequences.
 	LeadHoldCC = "cc"
+	// LeadHoldInboxTagging is a hold inbox tagging set.
+	LeadHoldInboxTagging = "inbox_tagging"
 )
 
 // Statuses of a [CampaignLeadCC]. Anything but LeadCCActive is left off the
@@ -78,8 +80,8 @@ const (
 )
 
 // CampaignSendPlan is what one campaign will send today and why that number is
-// what it is. It is derived on read through the scheduler's own gates and
-// never stored.
+// what it is. For active campaigns it is computed in the background and served
+// from a stored snapshot; a campaign without a snapshot is computed on request.
 //
 // The arithmetic is a waterfall that adds up: ConfiguredCeiling minus every
 // Limits entry minus SentToday equals ExpectedRemaining.

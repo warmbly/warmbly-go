@@ -439,7 +439,9 @@ type CampaignEstimateParams struct {
 	// StepWaits is each follow-up's wait in days, in order (at most 30). Empty
 	// is a single email.
 	StepWaits []int `json:"step_waits,omitempty"`
-	// CampaignID projects a saved campaign, filling anything not sent from it.
+	// CampaignID projects a saved campaign, filling other fields not sent from
+	// it. Leads enrolled through linked segments are counted only when
+	// SegmentIDs names those segments.
 	CampaignID *string `json:"campaign_id,omitempty"`
 }
 
