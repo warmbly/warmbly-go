@@ -26,6 +26,8 @@ type Pipeline struct {
 	Stages    []PipelineStage `json:"stages,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	// External is set when the pipeline is managed in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // PipelineStage is one column of a pipeline.
@@ -39,6 +41,11 @@ type PipelineStage struct {
 	DealCount int       `json:"deal_count,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Closed, Won and Probability come from a connected CRM's stage metadata.
+	// Closed marks a final stage and Won a final stage that counts as won.
+	Closed      bool     `json:"closed,omitempty"`
+	Won         bool     `json:"won,omitempty"`
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // PipelineCreateParams creates a pipeline, optionally with its initial stages.
@@ -103,6 +110,9 @@ type Deal struct {
 	Contact      *Contact       `json:"contact,omitempty"`
 	Stage        *PipelineStage `json:"stage,omitempty"`
 	CampaignName *string        `json:"campaign_name,omitempty"`
+
+	// External is set when the deal lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // DealCreateParams creates a deal. PipelineID, StageID and Name are required.
@@ -278,6 +288,9 @@ type CRMTask struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// External is set when the task lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // CRMTaskCreateParams creates a task. Title is required.
@@ -378,9 +391,11 @@ type TasksSummary struct {
 
 // --- pipelines ---
 
-// ListPipelines returns the organization's pipelines with their stages.
+// ListPipelines returns the organization's pipelines with their stages. While a
+// connected CRM is the CRM, only its pipelines are returned. The server answers
+// with a bare JSON array here, not a data envelope.
 func (s *CRMService) ListPipelines(ctx context.Context, opts ...RequestOption) ([]Pipeline, *Response, error) {
-	return fetchData[Pipeline](ctx, s.client, "crm/pipelines", opts)
+	return fetchSlice[Pipeline](ctx, s.client, "crm/pipelines", opts)
 }
 
 // CreatePipeline creates a pipeline, optionally seeding its stages.
