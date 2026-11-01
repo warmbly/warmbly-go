@@ -100,6 +100,12 @@ const (
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
 		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+
+	// PermAppGrantable is every scope a third-party OAuth app may be granted.
+	// It is [PermFullAccess] without [PermAPIKeys]: managing API keys stays
+	// with people, and an app token that calls a key-management route is
+	// refused.
+	PermAppGrantable = PermFullAccess &^ PermAPIKeys
 )
 
 // API key lifecycle states returned in [APIKey.Status].
@@ -359,6 +365,16 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	q := make(url.Values)
 	setNonEmpty(q, "reason", reason)
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
+}
+
+// DeletePermanently removes a revoked or expired API key together with its
+// usage logs. Revoking only ends a key; this erases the row and cannot be
+// undone, so it is a separate call. An active key is refused with a 409; revoke
+// it first. It
+// needs [PermAPIKeys] and, like creating a key, is refused to OAuth app
+// tokens.
+func (s *APIKeyService) DeletePermanently(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id)+"/permanent", opts...)
 }
 
 // RevokeSelf revokes the key this client is authenticated with. It is the one

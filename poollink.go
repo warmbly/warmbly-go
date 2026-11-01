@@ -28,9 +28,14 @@ import (
 // permission.
 //
 // The instance's own machine-to-machine surface, /pool-link/instance/*
-// (status, enrollment, brokered access tokens), accepts only the instance
-// token minted by the handshake and is deliberately not modeled here; the
-// self-hosted dashboard reaches it through [CloudLinkService].
+// (status and standing, warmup analytics, enrollment, SMTP association,
+// participation, brokered access tokens, the warmup delivery, arrival and
+// observation reports, the command queue, the placement seed panel and the
+// root redirects), accepts only the instance token minted by the handshake
+// and is deliberately not modeled here. It is the protocol between two
+// Warmbly servers, versioned by capability flags in [PoolLinkInstanceInfo]
+// rather than by the API version, and a self-hosted Warmbly speaks it for
+// you; the self-hosted dashboard's view of it is [CloudLinkService].
 //
 // On a deployment that has the pool link switched off every route answers
 // 501 Not Implemented.
@@ -56,6 +61,11 @@ const (
 // PoolLinkStartParams identifies the instance that wants to link, as shown to
 // the approving member.
 type PoolLinkStartParams struct {
+	// RemoteOrganizationID is the ID of the workspace on the self-hosted
+	// instance that is linking. The link belongs to that workspace, not to the
+	// whole instance, and the API refuses a start without it (409, code
+	// "cloud_link_workspace_required").
+	RemoteOrganizationID string `json:"remote_organization_id"`
 	// InstanceName is the label the approval page shows, typically the host
 	// name or the operator's INSTANCE_NAME.
 	InstanceName string `json:"instance_name"`
@@ -67,6 +77,10 @@ type PoolLinkStartParams struct {
 
 // PoolLinkCodeGrant is the device-code grant that opens a handshake.
 type PoolLinkCodeGrant struct {
+	// WorkspaceScoped is true when the link will belong to one instance
+	// workspace ([PoolLinkStartParams.RemoteOrganizationID]) rather than the
+	// whole instance. Current servers always answer true.
+	WorkspaceScoped bool `json:"workspace_scoped"`
 	// DeviceCode is the secret half: keep it on the instance and send it only
 	// to [PoolLinkService.Poll].
 	DeviceCode string `json:"device_code"`
@@ -105,7 +119,9 @@ type PoolLinkOrganization struct {
 
 // PoolLinkCode describes a pending handshake to the member about to settle it.
 type PoolLinkCode struct {
-	ID string `json:"id"`
+	// RemoteOrganizationID is the instance workspace that asked to link.
+	RemoteOrganizationID *string `json:"remote_organization_id,omitempty"`
+	ID                   string  `json:"id"`
 	// UserCode is the code the operator typed in.
 	UserCode string `json:"user_code"`
 	// InstanceName, InstanceURL and InstanceVersion are what the instance
@@ -125,10 +141,12 @@ type PoolLinkCode struct {
 
 // PoolLinkInstance is a linked self-hosted instance as the workspace sees it.
 type PoolLinkInstance struct {
-	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
+	// RemoteOrganizationID is the instance workspace the link belongs to.
+	RemoteOrganizationID *string `json:"remote_organization_id,omitempty"`
+	ID                   string  `json:"id"`
+	OrganizationID       string  `json:"organization_id"`
+	Name                 string  `json:"name"`
+	URL                  string  `json:"url"`
 	// Version is the build the instance most recently reported.
 	Version string `json:"version"`
 	// CreatedBy is the member who approved the link, when still known.
@@ -163,11 +181,16 @@ type PoolLinkPlan struct {
 	MailboxLimit *int `json:"mailbox_limit"`
 	// Enrolled is how many linked mailboxes currently count against the cap.
 	Enrolled int `json:"enrolled"`
+	// Warming is how many of them have warmup on and not paused; connected is
+	// not warming.
+	Warming int `json:"warming"`
 	// PriceUSD is the monthly price of the paid tier, for an upgrade prompt.
 	PriceUSD int `json:"price_usd"`
 	// UpgradeURL is where to send the operator to upgrade; empty when billing
 	// is off or the paid tier has no price.
 	UpgradeURL string `json:"upgrade_url,omitempty"`
+	// ManageURL is the cloud billing page; empty when billing is off.
+	ManageURL string `json:"manage_url,omitempty"`
 	// WarmupEntitled is false when the cloud workspace itself is not allowed
 	// to warm, in which case linked mailboxes will not warm either.
 	WarmupEntitled bool `json:"warmup_entitled"`
@@ -184,9 +207,86 @@ type PoolLinkInstanceList struct {
 // instance, as the instance itself sees it. The self-hosted dashboard
 // surfaces it through [CloudLinkStatus.Info].
 type PoolLinkInstanceInfo struct {
-	Instance     PoolLinkInstance     `json:"instance"`
-	Organization PoolLinkOrganization `json:"organization"`
-	Plan         PoolLinkPlan         `json:"plan"`
+	// SMTPAssociationProtocol and ManagedConsentProtocol advertise which
+	// versions of those handshakes this cloud speaks; zero means unsupported.
+	SMTPAssociationProtocol int                  `json:"smtp_association_protocol,omitempty"`
+	ManagedConsentProtocol  int                  `json:"managed_consent_protocol,omitempty"`
+	Instance                PoolLinkInstance     `json:"instance"`
+	Organization            PoolLinkOrganization `json:"organization"`
+	Plan                    PoolLinkPlan         `json:"plan"`
+	// Redirects describes the root redirects the cloud serves for the
+	// instance's domains; nil from a cloud that serves none.
+	Redirects *PoolLinkRedirectOffer `json:"redirects,omitempty"`
+	// SelfExecution is the grant to run warmup on the instance without
+	// handing the cloud the mailbox credentials; nil from a cloud that
+	// cannot.
+	SelfExecution *PoolLinkSelfExecution `json:"self_execution,omitempty"`
+}
+
+// PoolLinkRedirectOffer is the root-redirect allowance a linked instance has.
+type PoolLinkRedirectOffer struct {
+	Available bool `json:"available"`
+	// Host is the cloud host the redirect domains point at.
+	Host  string `json:"host,omitempty"`
+	Limit int    `json:"limit"`
+	Used  int    `json:"used"`
+}
+
+// PoolLinkSelfExecution is the instance-facing view of the grant to execute
+// warmup for enrolled mailboxes on the instance itself.
+type PoolLinkSelfExecution struct {
+	Protocol  int        `json:"protocol"`
+	Granted   bool       `json:"granted"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// Who runs an enrolled mailbox's warmup, in [CloudLinkMailbox.Executor] and
+// [PoolLinkMailboxState.Executor]. Empty reads as [PoolLinkExecutorCloud]. The
+// server may add executors; treat an unknown one as cloud.
+const (
+	// PoolLinkExecutorCloud means Warmbly Cloud holds the credential and sends.
+	PoolLinkExecutorCloud = "cloud"
+	// PoolLinkExecutorInstance means the instance keeps the credential and
+	// runs the warmup itself on commands the cloud hands it.
+	PoolLinkExecutorInstance = "instance"
+)
+
+// DiagnosticParticipation is a mailbox's setting for the diagnostic sends
+// (such as inbox placement tests) that use a shared pool of seed mailboxes.
+type DiagnosticParticipation struct {
+	// Mode is [TestParticipationLegacy], [TestParticipationDiagnostic] or
+	// [TestParticipationOff].
+	Mode string `json:"mode"`
+	// Send and Receive say which directions the mailbox takes part in; both
+	// must be false when Mode is off.
+	Send    bool `json:"send"`
+	Receive bool `json:"receive"`
+	// SharedDailyLimit and RollingRecipientLimit cap the shared use; nil
+	// leaves the server default.
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
+}
+
+// Diagnostic participation modes in [DiagnosticParticipation.Mode].
+const (
+	TestParticipationLegacy     = "legacy"
+	TestParticipationDiagnostic = "diagnostic"
+	TestParticipationOff        = "off"
+)
+
+// PoolLinkOffer is the dedicated warmup plan as an upgrade prompt shows it:
+// the plan is not in the public catalog, so this is how its price is learned.
+type PoolLinkOffer struct {
+	// Available is false when billing is off or no price is attached, in which
+	// case a checkout cannot work.
+	Available        bool `json:"available"`
+	MonthlyAvailable bool `json:"monthly_available"`
+	YearlyAvailable  bool `json:"yearly_available"`
+	// MonthlyUSD and YearlyUSD are list prices; YearlyUSD is zero when only
+	// monthly is sold.
+	MonthlyUSD float32 `json:"monthly_usd"`
+	YearlyUSD  float32 `json:"yearly_usd"`
+	Currency   string  `json:"currency"`
 }
 
 // PoolLinkWarmupSettings is the ramp an enrolled mailbox warms on. It is
@@ -225,6 +325,34 @@ type PoolLinkWarmupStatus struct {
 	// RampHold explains a ramp that is not climbing, so a target below the
 	// plain ramp is never an unexplained drop.
 	RampHold *PoolLinkWarmupRampHold `json:"ramp_hold,omitempty"`
+	// PartnerLimit is present while today's target is capped by how many
+	// partners the mailbox can still reach.
+	PartnerLimit *PoolLinkWarmupPartnerLimit `json:"partner_limit,omitempty"`
+	// SendFailure is present while the newest warmup send failed and no later
+	// one was confirmed delivered.
+	SendFailure *PoolLinkWarmupSendFailure `json:"send_failure,omitempty"`
+	// NextSendAt is when the parked warmup wakeup fires; nil while nothing is
+	// queued.
+	NextSendAt *time.Time `json:"next_send_at,omitempty"`
+}
+
+// PoolLinkWarmupPartnerLimit explains a target held below the ramp because a
+// mailbox never writes to the same partner twice in a day.
+type PoolLinkWarmupPartnerLimit struct {
+	// Reachable is how many partners are available to it today, including any
+	// it already wrote to.
+	Reachable int `json:"reachable"`
+	// RampTarget is what the ramp alone would send today.
+	RampTarget int `json:"ramp_target"`
+}
+
+// PoolLinkWarmupSendFailure is why the newest warmup send failed.
+type PoolLinkWarmupSendFailure struct {
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+	// Kind classifies the failure when the server could.
+	Kind           string     `json:"kind,omitempty"`
+	FirstFailureAt *time.Time `json:"first_failure_at,omitempty"`
 }
 
 // PoolLinkWarmupRampHold explains a frozen ramp. It is present for the whole
@@ -247,11 +375,26 @@ type PoolLinkWarmupHealth struct {
 	State string  `json:"state"`
 	Score float64 `json:"score"`
 	// Reason explains a state other than healthy.
-	Reason    string `json:"reason,omitempty"`
-	SpamScore int    `json:"spam_score"`
+	Reason string `json:"reason,omitempty"`
+	// SpamScore is always zero; the field is kept so older clients keep
+	// working. Read Score and Reason instead.
+	SpamScore int `json:"spam_score"`
 	// BlockedUntil is when a quarantine or block lifts on its own.
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
+	// PoolType is the pool the mailbox warms in, "premium" or "free". Source
+	// is "cloud" when Warmbly Cloud warms the mailbox and reported this
+	// standing, and empty for the instance's own pool.
+	PoolType string `json:"pool_type,omitempty"`
+	Source   string `json:"source,omitempty"`
+	// Partner diversity counts confirmed warmup deliveries over seven days.
+	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
+	PartnerDomains7d       int `json:"partner_domains_7d"`
+	PartnerOrganizations7d int `json:"partner_organizations_7d"`
+	// Received7d and Senders7d are the receiving side over the same window:
+	// verified warmup arrivals and the distinct partners they came from.
+	Received7d int `json:"received_7d"`
+	Senders7d  int `json:"senders_7d"`
 }
 
 // PoolLinkMailboxState is the cloud's per-mailbox view of an enrolled
@@ -285,6 +428,14 @@ type PoolLinkMailboxState struct {
 	// AuthState is the cloud's view of the mailbox credential.
 	AuthState string                 `json:"auth_state"`
 	Settings  PoolLinkWarmupSettings `json:"settings"`
+	// Participation is the mailbox's diagnostic-test setting; nil when the
+	// cloud reports none.
+	Participation *DiagnosticParticipation `json:"participation,omitempty"`
+	// ConsentCompletedAt is when the managed sign-in consent finished.
+	ConsentCompletedAt *time.Time `json:"consent_completed_at,omitempty"`
+	// Executor is who runs the mailbox's warmup ([PoolLinkExecutorCloud] or
+	// [PoolLinkExecutorInstance]); empty reads as cloud.
+	Executor string `json:"executor,omitempty"`
 }
 
 // PoolLinkWorkspaceMailbox is a Google or Microsoft mailbox connected directly
@@ -296,6 +447,9 @@ type PoolLinkWorkspaceMailbox struct {
 	// Provider is [ProviderGmail] or [ProviderOutlook].
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
+	// MailHost is the mailbox's mail host when known, for example
+	// "google.com".
+	MailHost string `json:"mail_host,omitempty"`
 }
 
 // poolLinkPollFloor is the shortest gap the poll helpers will ever leave
@@ -430,4 +584,33 @@ func (s *PoolLinkService) ListInstances(ctx context.Context, opts ...RequestOpti
 // is recorded in the workspace audit log.
 func (s *PoolLinkService) RevokeInstance(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "pool-link/instances/"+url.PathEscape(id), opts...)
+}
+
+// Offer returns the dedicated warmup plan's price and whether it can be bought
+// here, for an upgrade prompt. The plan is not in the public catalog
+// ([MetaService.Plans]), so this is the only place its price is published.
+// Session-only; any signed-in member may read it. On a deployment with billing
+// off the offer comes back with Available false.
+func (s *PoolLinkService) Offer(ctx context.Context, opts ...RequestOption) (*PoolLinkOffer, *Response, error) {
+	return fetch[PoolLinkOffer](ctx, s.client, "pool-link/offer", opts)
+}
+
+// Checkout opens a hosted checkout for the warmup plan and returns its URL.
+// interval is [DurationMonth] (the default when empty) or [DurationYear]; the
+// price is resolved on the server. It fails with 503 when the plan has no
+// price for that period and 404 when the plan is not configured on the
+// deployment. Session-only; needs the manage-billing organization permission
+// and a recent confirmation ([AuthService.Reauth]). Recorded in the audit log.
+func (s *PoolLinkService) Checkout(ctx context.Context, interval string, opts ...RequestOption) (string, *Response, error) {
+	body := struct {
+		Interval string `json:"interval,omitempty"`
+	}{Interval: interval}
+	var out struct {
+		CheckoutURL string `json:"checkout_url"`
+	}
+	resp, err := s.client.post(ctx, "pool-link/checkout", body, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.CheckoutURL, resp, nil
 }

@@ -118,6 +118,14 @@ type Contact struct {
 	VerificationConfidence int        `json:"verification_confidence"`
 	IsCatchAll             bool       `json:"is_catch_all"`
 	VerificationCheckedAt  *time.Time `json:"verification_checked_at,omitempty"`
+	// VerificationRequestedAt is set while a member-requested re-check waits to
+	// run; the verdict above stands until it lands.
+	VerificationRequestedAt *time.Time `json:"verification_requested_at,omitempty"`
+
+	// MailHost is who hosts the contact's inbox (for example "google_workspace"
+	// or "microsoft365"), read from the domain's MX by a background sweep;
+	// empty until it has run. The set is open.
+	MailHost string `json:"mail_host"`
 
 	// ESPProvider is the recipient's mail provider, derived from the domain:
 	// "", "gmail", "outlook" or "other". Campaign ESP matching keys off it.
@@ -128,8 +136,29 @@ type Contact struct {
 	// populated only when a search filters by exactly one campaign.
 	CampaignLead *ContactCampaignProgress `json:"campaign_lead,omitempty"`
 
+	// Outreach is the contact's engagement across every campaign. Set on search
+	// rows; nil elsewhere.
+	Outreach *ContactOutreach `json:"outreach,omitempty"`
+
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// ContactOutreach is where a contact stands with your outreach: the emails that
+// reached them, what they did with them, and when each last happened. Opens
+// count people only; a mail client's automatic fetch is not engagement.
+type ContactOutreach struct {
+	Sent    int `json:"sent"`
+	Opened  int `json:"opened"`
+	Clicked int `json:"clicked"`
+	Replied int `json:"replied"`
+	Bounced int `json:"bounced"`
+
+	LastSentAt    *time.Time `json:"last_sent_at,omitempty"`
+	LastOpenedAt  *time.Time `json:"last_opened_at,omitempty"`
+	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
+	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
+	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
 }
 
 // Derived lead states returned in [ContactCampaignProgress.Status],
@@ -194,6 +223,38 @@ type ContactCampaignProgress struct {
 	// FailureReason is the sending worker's reason for the last failed send.
 	// Set only when Status is [LeadStatusFailed].
 	FailureReason string `json:"failure_reason,omitempty"`
+	// Sender is the mailbox address this lead's whole sequence sends from,
+	// once one is chosen.
+	Sender string `json:"sender,omitempty"`
+	// Hold is the per-lead pause, set only while it is live.
+	Hold *ContactLeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this campaign.
+	CC []ContactLeadCC `json:"cc,omitempty"`
+}
+
+// ContactLeadHold is one contact's flow parked inside one campaign.
+type ContactLeadHold struct {
+	Since time.Time `json:"since"`
+	// Until is nil for a hold with no end, which only a person lifts.
+	Until  *time.Time `json:"until,omitempty"`
+	Reason string     `json:"reason,omitempty"`
+	// Source says who parked it: "manual", "out_of_office", "inbox_tagging" or
+	// "crm". The set is open.
+	Source string `json:"source"`
+}
+
+// ContactLeadCC is a contact copied on every email one campaign sends one lead,
+// so several people at one company share a single thread.
+type ContactLeadCC struct {
+	ContactID string `json:"contact_id"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Company   string `json:"company,omitempty"`
+	// Status says whether the next email copies them: "active", "unsubscribed"
+	// or "bounced". Anything but "active" is left off. The set is open.
+	Status    string     `json:"status"`
+	BouncedAt *time.Time `json:"bounced_at,omitempty"`
 }
 
 // ContactEngagement summarizes every email touchpoint recorded for a contact.
@@ -213,6 +274,23 @@ type ContactEngagement struct {
 	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
 	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
 	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
+
+	// ReadsOn is how the contact reads your mail: each client and device a
+	// person's opens came from, most recent first, with how often.
+	ReadsOn []ContactReadingOrigin `json:"reads_on,omitempty"`
+}
+
+// ContactReadingOrigin is one client and device a contact opened mail on.
+type ContactReadingOrigin struct {
+	Client     string `json:"client,omitempty"`
+	ClientType string `json:"client_type,omitempty"`
+	// DeviceHidden is set when the client hides the device.
+	DeviceHidden bool      `json:"device_hidden,omitempty"`
+	DeviceType   string    `json:"device_type,omitempty"`
+	OS           string    `json:"os,omitempty"`
+	Browser      string    `json:"browser,omitempty"`
+	Opens        int       `json:"opens"`
+	LastOpenedAt time.Time `json:"last_opened_at"`
 }
 
 // ContactSuppression records why a contact's address is suppressed. It is nil
@@ -326,10 +404,13 @@ type ContactSentEmail struct {
 	StepID       *string `json:"step_id,omitempty"`
 	StepName     *string `json:"step_name,omitempty"`
 
-	OpenedAt  *time.Time `json:"opened_at,omitempty"`
-	ClickedAt *time.Time `json:"clicked_at,omitempty"`
-	RepliedAt *time.Time `json:"replied_at,omitempty"`
-	BouncedAt *time.Time `json:"bounced_at,omitempty"`
+	// OpenedAt is a person's open. An automated fetch (client prefetch,
+	// security gateway) lands in MachineOpenedAt instead.
+	OpenedAt        *time.Time `json:"opened_at,omitempty"`
+	MachineOpenedAt *time.Time `json:"machine_opened_at,omitempty"`
+	ClickedAt       *time.Time `json:"clicked_at,omitempty"`
+	RepliedAt       *time.Time `json:"replied_at,omitempty"`
+	BouncedAt       *time.Time `json:"bounced_at,omitempty"`
 }
 
 // Timeline event types returned in [TimelineEvent.Type].
@@ -684,11 +765,14 @@ type ContactSearchParams struct {
 	Subscribed   *bool    `json:"subscribed,omitempty"`
 	// VerificationStatus filters by verdict: one of the VerifyStatus*
 	// constants.
-	VerificationStatus string     `json:"verification_status,omitempty"`
-	CreatedAfter       *time.Time `json:"created_after,omitempty"`
-	CreatedBefore      *time.Time `json:"created_before,omitempty"`
-	UpdatedAfter       *time.Time `json:"updated_after,omitempty"`
-	UpdatedBefore      *time.Time `json:"updated_before,omitempty"`
+	VerificationStatus string `json:"verification_status,omitempty"`
+	// MailHosts matches contacts whose inbox host is any of these (see
+	// [Contact.MailHost]); an empty string matches contacts not yet detected.
+	MailHosts     []string   `json:"mail_hosts,omitempty"`
+	CreatedAfter  *time.Time `json:"created_after,omitempty"`
+	CreatedBefore *time.Time `json:"created_before,omitempty"`
+	UpdatedAfter  *time.Time `json:"updated_after,omitempty"`
+	UpdatedBefore *time.Time `json:"updated_before,omitempty"`
 	// SortBy names the column to order by, for example "first_name" or
 	// "campaign_count".
 	SortBy string `json:"sort_by,omitempty"`
@@ -767,8 +851,12 @@ type ContactInput struct {
 // Categories replaces the contact's categories wholesale, while AddCategories
 // and RemoveCategories adjust them incrementally. Use one form or the other.
 type ContactUpdateParams struct {
-	FirstName    *string           `json:"first_name,omitempty"`
-	LastName     *string           `json:"last_name,omitempty"`
+	FirstName *string `json:"first_name,omitempty"`
+	LastName  *string `json:"last_name,omitempty"`
+	// Email replaces the contact's address. It is the contact's identity, so
+	// changing it drops the verification verdict and the delivery evidence that
+	// belonged to the old mailbox.
+	Email        *string           `json:"email,omitempty"`
 	Company      *string           `json:"company,omitempty"`
 	Phone        *string           `json:"phone,omitempty"`
 	CustomFields map[string]string `json:"custom_fields,omitempty"`
@@ -1083,6 +1171,26 @@ type ContactImportPreview struct {
 	// proposes [ImportTargetVerificationStatus] itself when a column's header
 	// or values look like another service's results.
 	SuggestedMapping []ImportColumnMapping `json:"suggested_mapping"`
+	// InferredColumns are the indexes whose suggestion came from a model
+	// reading the values rather than from the header, worth a second look.
+	InferredColumns []int `json:"inferred_columns,omitempty"`
+	// ColumnStats describes every column over the whole file, not the sample,
+	// so a mapper can show how full a column is. Set by background imports
+	// ([ContactService.CreateImport]).
+	ColumnStats []ContactImportColumnStats `json:"column_stats,omitempty"`
+	// MappingSource says where SuggestedMapping came from: "saved" when the
+	// workspace confirmed a mapping for these exact headers before,
+	// "suggested" otherwise.
+	MappingSource string `json:"mapping_source,omitempty"`
+}
+
+// ContactImportColumnStats is one column's fill across the whole file.
+type ContactImportColumnStats struct {
+	Filled int `json:"filled"`
+	// Distinct counts different non-empty values, capped at 1000.
+	Distinct int `json:"distinct"`
+	// Samples are a few distinct non-empty values, in file order.
+	Samples []string `json:"samples"`
 }
 
 // ContactImportParams is the configuration committed alongside the file.
@@ -1151,6 +1259,10 @@ type ContactImportResult struct {
 	// totals.
 	Errors          []ImportRowError `json:"errors,omitempty"`
 	ErrorsTruncated bool             `json:"errors_truncated,omitempty"`
+	// SegmentsPinned is nil when the import had no segment targets. With
+	// targets it is true when every membership write landed and false when one
+	// did not, with the reason among Errors.
+	SegmentsPinned *bool `json:"segments_pinned,omitempty"`
 	// Quality is the file's address-level assessment.
 	Quality *ContactImportQuality `json:"quality,omitempty"`
 }

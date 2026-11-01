@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the SDK version, reported in the default User-Agent.
-const Version = "0.3.1"
+const Version = "0.4.0"
 
 const (
 	defaultBaseURL   = "https://api.warmbly.com/v1/"
@@ -60,6 +60,8 @@ type Client struct {
 	Contacts *ContactService
 	// Segments are saved contact audiences evaluated live.
 	Segments *SegmentService
+	// Placement runs inbox placement tests against seed inboxes.
+	Placement *PlacementService
 	// Suppressions is the workspace's do-not-contact list.
 	Suppressions *SuppressionService
 	// Forms are hosted lead-capture forms and their submissions.
@@ -184,6 +186,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Campaigns = (*CampaignService)(&c.common)
 	c.Contacts = (*ContactService)(&c.common)
 	c.Segments = (*SegmentService)(&c.common)
+	c.Placement = (*PlacementService)(&c.common)
 	c.Suppressions = (*SuppressionService)(&c.common)
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
@@ -340,6 +343,10 @@ type RateLimit struct {
 	Remaining int
 	// Policy is the raw policy string, e.g. "60;w=60".
 	Policy string
+	// Reset is when the current window ends, from X-RateLimit-Reset (Unix
+	// seconds). Only the category limiter sends it; it is the zero time
+	// otherwise.
+	Reset time.Time
 	// RetryAfter is how long to wait before retrying, when provided.
 	RetryAfter time.Duration
 }
@@ -520,6 +527,11 @@ func parseRateLimit(h http.Header) RateLimit {
 		rl.Remaining, _ = strconv.Atoi(v)
 	}
 	rl.Policy = h.Get("X-RateLimit-Policy")
+	if v := h.Get("X-RateLimit-Reset"); v != "" {
+		if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs > 0 {
+			rl.Reset = time.Unix(secs, 0)
+		}
+	}
 	if v := h.Get("Retry-After"); v != "" {
 		if secs, err := strconv.Atoi(v); err == nil {
 			rl.RetryAfter = time.Duration(secs) * time.Second
@@ -707,6 +719,8 @@ type FileUpload struct {
 
 // postMultipart uploads a file (plus any extra form fields) as
 // multipart/form-data. The whole body is buffered so retries can replay it.
+//
+//nolint:unparam // the part name is per endpoint; every endpoint wired so far happens to use "file"
 func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file *FileUpload, fields map[string]string, out any, opts ...RequestOption) (*Response, error) {
 	if file == nil || file.Content == nil {
 		return nil, errors.New("warmbly: a file is required for this upload")

@@ -34,6 +34,10 @@ type CloudLinkService service
 // CloudLinkConnection is the instance's link to a Warmbly Cloud workspace.
 // The instance token is never serialized.
 type CloudLinkConnection struct {
+	// OrganizationID is the instance workspace the link belongs to. Nil marks
+	// a legacy link shared by every workspace on the instance; end one with
+	// [CloudLinkService.DisconnectLegacy].
+	OrganizationID *string `json:"organization_id,omitempty"`
 	// CloudURL is the Warmbly Cloud API the instance is linked to.
 	CloudURL string `json:"cloud_url"`
 	// InstanceID is the instance's ID on the cloud, as
@@ -48,6 +52,10 @@ type CloudLinkConnection struct {
 	// LastError the failure from the most recent attempt, if it failed.
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
+	// DisconnectPending is true while the cloud has not yet confirmed an
+	// ended link; retry [CloudLinkService.DisconnectLegacy] for a legacy link
+	// and [CloudLinkService.Disconnect] for a workspace-scoped one.
+	DisconnectPending bool `json:"disconnect_pending,omitempty"`
 }
 
 // CloudLinkStatus is the dashboard's view of the link.
@@ -56,6 +64,10 @@ type CloudLinkStatus struct {
 	// filled from the local row whenever it does.
 	Connected bool                 `json:"connected"`
 	Link      *CloudLinkConnection `json:"link,omitempty"`
+	// LegacyConnected reports a link shared across the instance's workspaces
+	// that predates workspace-scoped links. It must be ended explicitly with
+	// [CloudLinkService.DisconnectLegacy].
+	LegacyConnected bool `json:"legacy_connected"`
 	// Info is the cloud's own status document for this instance, including
 	// the pool allowance; it is set only when Reachable.
 	Info *PoolLinkInstanceInfo `json:"info,omitempty"`
@@ -72,6 +84,8 @@ type CloudLinkStatus struct {
 // and how to poll. It lives in the instance's memory only, so a restart
 // forgets it.
 type CloudLinkPendingConnect struct {
+	// OrganizationID is the instance workspace the handshake is for.
+	OrganizationID string `json:"organization_id"`
 	// UserCode is the short code the operator types in on Warmbly Cloud.
 	UserCode string `json:"user_code"`
 	// VerificationURL is the cloud page that approves the code; it already
@@ -120,6 +134,30 @@ type CloudLinkMailbox struct {
 	// count, 7-day totals). Nil when not enrolled or when the cloud could not
 	// be reached for the listing.
 	Cloud *PoolLinkMailboxState `json:"cloud,omitempty"`
+
+	// Legacy marks a mailbox enrolled through the legacy instance-wide link.
+	Legacy bool `json:"legacy"`
+	// IndependentSMTP is true for an SMTP/IMAP mailbox that keeps its own
+	// credential on the instance while the cloud holds a separate copy.
+	IndependentSMTP bool `json:"independent_smtp,omitempty"`
+	// EnrollmentState is the enrollment's progress: "active" when
+	// settled, "pending_enroll" while the cloud side is being set up and
+	// "pending_remove" while it is being torn down. Unknown values are
+	// possible.
+	EnrollmentState string `json:"enrollment_state,omitempty"`
+	// StandingObservedAt is when the cloud's warmup standing was last read, and
+	// SettingsObservedAt when the cloud's warmup settings were last mirrored
+	// onto the instance.
+	StandingObservedAt *time.Time `json:"standing_observed_at,omitempty"`
+	SettingsObservedAt *time.Time `json:"settings_observed_at,omitempty"`
+	// Executor is who runs the warmup ([PoolLinkExecutorCloud] or
+	// [PoolLinkExecutorInstance]); empty reads as cloud.
+	Executor string `json:"executor,omitempty"`
+	// CommandsPending is how many commands the cloud has handed the instance
+	// for this mailbox that are waiting, and CommandsFailed how many failed in
+	// the last day. Both are zero unless the instance executes the warmup.
+	CommandsPending int `json:"commands_pending,omitempty"`
+	CommandsFailed  int `json:"commands_failed,omitempty"`
 }
 
 // CloudLinkOAuthStart is the handle on a Google or Microsoft consent brokered
@@ -202,6 +240,16 @@ func (s *CloudLinkService) Disconnect(ctx context.Context, opts ...RequestOption
 	return s.client.delete(ctx, "cloud-link", opts...)
 }
 
+// DisconnectLegacy ends the legacy link that is shared across the instance's
+// workspaces (see [CloudLinkStatus.LegacyConnected]). [CloudLinkService.Disconnect]
+// refuses to touch it and fails with code "cloud_link_workspace_required", so
+// the operator has to confirm this explicitly. The effects match
+// [CloudLinkService.Disconnect], but for every workspace's enrolled mailboxes.
+// Needs the manage-settings permission.
+func (s *CloudLinkService) DisconnectLegacy(ctx context.Context, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "cloud-link?legacy=true", opts...)
+}
+
 // --- enrollment of the instance's own mailboxes ---
 
 // ListMailboxes lists every active mailbox in the session's workspace with
@@ -224,6 +272,33 @@ func (s *CloudLinkService) ListMailboxes(ctx context.Context, opts ...RequestOpt
 // with "pool_link_mailbox_limit".
 func (s *CloudLinkService) EnrollMailbox(ctx context.Context, id string, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
 	return send[CloudLinkMailbox](ctx, s.client.post, "cloud-link/mailboxes/"+url.PathEscape(id)+"/enroll", nil, opts)
+}
+
+// EnrollMailboxAs is [CloudLinkService.EnrollMailbox] with the executor
+// chosen: [PoolLinkExecutorCloud] sends the credential to the cloud, which
+// runs the warmup, while [PoolLinkExecutorInstance] keeps the credential on
+// the instance and runs the warmup there on commands the cloud hands over;
+// the latter needs the cloud workspace to hold the self-execution grant
+// ([PoolLinkInstanceInfo.SelfExecution]). On an already enrolled mailbox it
+// switches the executor. An empty executor behaves like EnrollMailbox.
+func (s *CloudLinkService) EnrollMailboxAs(ctx context.Context, id, executor string, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
+	var body any
+	if executor != "" {
+		body = struct {
+			Executor string `json:"executor"`
+		}{Executor: executor}
+	}
+	return send[CloudLinkMailbox](ctx, s.client.post, "cloud-link/mailboxes/"+url.PathEscape(id)+"/enroll", body, opts)
+}
+
+// SetMailboxParticipation sets whether enrolled mailbox id takes part in the
+// diagnostic sends (such as inbox placement tests) that use shared seed
+// mailboxes, and returns the refreshed row. The setting must be valid: mode
+// "diagnostic" with the directions wanted, or "off" with both false; limits
+// must not be negative. A mailbox that is not enrolled fails with not found.
+// Needs the manage-emails permission; recorded in the audit log.
+func (s *CloudLinkService) SetMailboxParticipation(ctx context.Context, id string, participation *DiagnosticParticipation, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
+	return send[CloudLinkMailbox](ctx, s.client.patch, "cloud-link/mailboxes/"+url.PathEscape(id)+"/participation", participation, opts)
 }
 
 // UnenrollMailbox takes mailbox id out of the pool. An SMTP/IMAP mailbox's

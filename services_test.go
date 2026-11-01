@@ -34,6 +34,7 @@ func routingClient(t *testing.T, got *recordedRequest) *Client {
 
 		// A few endpoints return a bare array; everything else is an envelope.
 		if bareArrayPaths[r.URL.Path] ||
+			(r.Method == http.MethodGet && r.URL.Path == "/v1/crm/pipelines") ||
 			strings.HasSuffix(r.URL.Path, "/steps") ||
 			strings.HasSuffix(r.URL.Path, "/move") {
 			_, _ = w.Write([]byte(`[]`))

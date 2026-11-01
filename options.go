@@ -25,7 +25,7 @@ func WithAPIKey(key string) Option {
 }
 
 // WithAccessToken authenticates the client with a static OAuth 2.1 access token
-// (prefixed "wmblyo_"). Prefer [WithTokenSource] when you have a refresh token
+// (prefixed "wmat_"). Prefer [WithTokenSource] when you have a refresh token
 // and want transparent renewal.
 func WithAccessToken(token string) Option {
 	return func(c *Client) error {

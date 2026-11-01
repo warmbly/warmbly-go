@@ -168,11 +168,17 @@ const (
 	// and delivered only to an endpoint that lists it explicitly.
 	EventCampaignEmailSent      WebhookEventName = "campaign.email_sent"
 	EventCampaignEmailDelivered WebhookEventName = "campaign.email_delivered"
-	EventCampaignEmailOpened    WebhookEventName = "campaign.email_opened"
-	EventCampaignEmailClicked   WebhookEventName = "campaign.email_clicked"
-	EventCampaignEmailBounced   WebhookEventName = "campaign.email_bounced"
-	EventCampaignReplyReceived  WebhookEventName = "campaign.reply_received"
-	EventCampaignUnsubscribed   WebhookEventName = "campaign.unsubscribed"
+	// EventCampaignEmailOpened and EventCampaignEmailClicked fire for a person
+	// only: automated opens (mail privacy proxies, fetches inside seconds of
+	// the send) and clicks (security gateways walking the links) do not.
+	// Payload: [CampaignEngagementPayload].
+	EventCampaignEmailOpened  WebhookEventName = "campaign.email_opened"
+	EventCampaignEmailClicked WebhookEventName = "campaign.email_clicked"
+	EventCampaignEmailBounced WebhookEventName = "campaign.email_bounced"
+	// EventCampaignReplyReceived fires when a human reply lands for a campaign
+	// thread. Payload: [ReplyReceivedPayload].
+	EventCampaignReplyReceived WebhookEventName = "campaign.reply_received"
+	EventCampaignUnsubscribed  WebhookEventName = "campaign.unsubscribed"
 
 	// Campaign lifecycle and configuration.
 	EventCampaignStarted   WebhookEventName = "campaign.started"
@@ -190,8 +196,10 @@ const (
 
 	// Warmup. EventWarmupEmailSent is a firehose event: one per warmup
 	// message, which is the highest-volume family the platform emits.
-	EventWarmupEmailSent       WebhookEventName = "warmup.email_sent"
-	EventWarmupHealthChanged   WebhookEventName = "warmup.health_changed"
+	EventWarmupEmailSent     WebhookEventName = "warmup.email_sent"
+	EventWarmupHealthChanged WebhookEventName = "warmup.health_changed"
+	// EventWarmupPlacementInSpam fires when a warmup message is observed
+	// landing in a spam folder. Payload: [WarmupPlacementInSpamPayload].
 	EventWarmupPlacementInSpam WebhookEventName = "warmup.placement_in_spam"
 	EventWarmupQuarantined     WebhookEventName = "warmup.quarantined"
 	EventWarmupBlocked         WebhookEventName = "warmup.blocked"
@@ -218,6 +226,9 @@ const (
 	// two use, and it is deliberately quiet: see the payload's documentation
 	// for when it does not fire.
 	EventContactCreated WebhookEventName = "contact.created"
+	// EventContactUpdated is raised once for a whole bulk edit, with no
+	// entity id and a metadata of "bulk" and "count": a missing id means
+	// re-read the contacts you track, not that one contact changed.
 	EventContactUpdated WebhookEventName = "contact.updated"
 	EventContactDeleted WebhookEventName = "contact.deleted"
 
@@ -250,10 +261,13 @@ const (
 	EventRoleDeleted       WebhookEventName = "role.deleted"
 
 	// CRM.
-	EventCRMDealCreated    WebhookEventName = "crm.deal_created"
-	EventCRMDealUpdated    WebhookEventName = "crm.deal_updated"
-	EventCRMDealDeleted    WebhookEventName = "crm.deal_deleted"
-	EventCRMTaskCreated    WebhookEventName = "crm.task_created"
+	EventCRMDealCreated WebhookEventName = "crm.deal_created"
+	EventCRMDealUpdated WebhookEventName = "crm.deal_updated"
+	EventCRMDealDeleted WebhookEventName = "crm.deal_deleted"
+	EventCRMTaskCreated WebhookEventName = "crm.task_created"
+	// EventCRMTaskUpdated is raised once for a whole bulk write, with no
+	// entity id and a metadata of "bulk" and "count": a missing id means
+	// re-read the tasks you track, not that one task changed.
 	EventCRMTaskUpdated    WebhookEventName = "crm.task_updated"
 	EventCRMNoteCreated    WebhookEventName = "crm.note_created"
 	EventCRMPipelineUpdate WebhookEventName = "crm.pipeline_updated"
@@ -415,6 +429,98 @@ type FormSubmittedPayload struct {
 	CampaignID string `json:"campaign_id,omitempty"`
 }
 
+// WebhookEngagementOrigin is what an open or click said about where it came
+// from, carried as "origin" on [CampaignEngagementPayload]. Every field is
+// empty when unknown, and the whole object is absent when nothing was known.
+type WebhookEngagementOrigin struct {
+	// Client names the mail client or image proxy when the user agent does.
+	Client string `json:"client,omitempty"`
+	// ClientType is "app" or "webmail".
+	ClientType string `json:"client_type,omitempty"`
+	// DeviceHidden is true when a mailbox provider's image proxy fetched the
+	// message, so the reader's device and network are unknowable.
+	DeviceHidden   bool   `json:"device_hidden,omitempty"`
+	DeviceType     string `json:"device_type,omitempty"`
+	OS             string `json:"os,omitempty"`
+	Browser        string `json:"browser,omitempty"`
+	BrowserVersion string `json:"browser_version,omitempty"`
+	CountryCode    string `json:"country_code,omitempty"`
+	Region         string `json:"region,omitempty"`
+	City           string `json:"city,omitempty"`
+}
+
+// CampaignEngagementPayload is the body of [EventCampaignEmailOpened] and
+// [EventCampaignEmailClicked].
+type CampaignEngagementPayload struct {
+	CampaignID   string `json:"campaign_id"`
+	ContactID    string `json:"contact_id"`
+	ContactEmail string `json:"contact_email"`
+	// SequenceID is the sequence step the message belongs to.
+	SequenceID string `json:"sequence_id"`
+	// URL and LinkLabel are set on a click: the link's destination and its
+	// anchor text.
+	URL       string `json:"url,omitempty"`
+	LinkLabel string `json:"link_label,omitempty"`
+	// Origin describes the mail client, device and location, when the open or
+	// click said anything about itself.
+	Origin *WebhookEngagementOrigin `json:"origin,omitempty"`
+}
+
+// ReplyReceivedPayload is the body of [EventCampaignReplyReceived].
+//
+// ContactID and CampaignID are present only when the reply is linked to that
+// contact or campaign. The AI* fields are the stored inbox-tagging verdict;
+// they are all absent when tagging never judged the message, which
+// [ReplyReceivedPayload.Tagged] reports.
+type ReplyReceivedPayload struct {
+	// ContactEmail is the sender's address.
+	ContactEmail string `json:"contact_email"`
+	ContactID    string `json:"contact_id,omitempty"`
+	CampaignID   string `json:"campaign_id,omitempty"`
+	// Intent and Confidence are the workspace keyword list's reading of the
+	// reply.
+	Intent     string  `json:"intent"`
+	Confidence float64 `json:"confidence"`
+	Subject    string  `json:"subject"`
+	Snippet    string  `json:"snippet"`
+	// ActionTaken is what the platform did in response, if anything.
+	ActionTaken string `json:"action_taken"`
+	// ThreadID lets a handler label or fetch the conversation.
+	ThreadID       string `json:"thread_id"`
+	EmailAccountID string `json:"email_account_id"`
+
+	// AILabels, AIIntent, AIIntentConfidence, AIKind, AIRelevance and
+	// AINeedsReview carry the inbox-tagging verdict. AIKind and AIIntent are
+	// empty strings when tagging was not confident enough to act on them.
+	AILabels           []string `json:"ai_labels,omitempty"`
+	AIIntent           string   `json:"ai_intent,omitempty"`
+	AIIntentConfidence float64  `json:"ai_intent_confidence,omitempty"`
+	AIKind             string   `json:"ai_kind,omitempty"`
+	AIRelevance        *int     `json:"ai_relevance,omitempty"`
+	AINeedsReview      *bool    `json:"ai_needs_review,omitempty"`
+}
+
+// Tagged reports whether inbox tagging judged the message, so the AI*
+// fields are meaningful.
+func (p *ReplyReceivedPayload) Tagged() bool {
+	return p.AIRelevance != nil || p.AINeedsReview != nil
+}
+
+// WarmupPlacementInSpamPayload is the body of [EventWarmupPlacementInSpam].
+// It names the sending mailbox and how the recipient is hosted, never the
+// recipient's address or domain.
+type WarmupPlacementInSpamPayload struct {
+	EmailAccountID string `json:"email_account_id"`
+	// Email is the sending mailbox's address.
+	Email         string `json:"email"`
+	ContentSource string `json:"content_source"`
+	// RecipientProvider is how the recipient mailbox connects, and
+	// RecipientHost who runs its mail, for example "google_workspace" or
+	// "zoho".
+	RecipientProvider string `json:"recipient_provider"`
+	RecipientHost     string `json:"recipient_host"`
+}
+
 // WebhookChallengePayload is the [EventEndpointTest] body, delivered only to
 // the endpoint being verified. Echo [WebhookChallengePayload.Challenge] back —
 // in your response body, or in the [WebhookChallengeHeader] — to confirm the
@@ -507,8 +613,10 @@ func (s *WebhookService) Delete(ctx context.Context, id string, opts ...RequestO
 	return s.client.delete(ctx, "webhooks/"+url.PathEscape(id), opts...)
 }
 
-// RotateSecret issues a new signing secret and returns it. The previous secret
-// stops verifying immediately, so deploy the new one before rotating.
+// RotateSecret issues a new signing secret and returns it. Every delivery
+// signed from now on uses the new secret; deliveries already signed and still
+// in flight keep the old signature until they settle. Update your verifier
+// promptly, and accept both secrets for a short overlap.
 func (s *WebhookService) RotateSecret(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
 	var out struct {
 		Secret string `json:"secret"`

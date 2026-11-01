@@ -56,6 +56,10 @@ type UniboxThread struct {
 	// Labels are the conversation labels on the thread. They share the
 	// category registry with contact tags.
 	Labels []MiniCategory `json:"labels,omitempty"`
+	// AnswersMailboxID is the workspace mailbox that sent the email this
+	// message replies to, when that is not the mailbox holding it: a reply
+	// that landed in a shared reply inbox. Set on thread reads only.
+	AnswersMailboxID *string `json:"answers_mailbox_id,omitempty"`
 }
 
 // UniboxMessage is a single message, as returned by [UniboxService.Get] and by
@@ -72,14 +76,24 @@ type UniboxMessage struct {
 	Mailbox int `json:"mailbox,omitempty"`
 	// Folder is the canonical folder the message is filed in: one of the
 	// Folder* constants. Empty on mail synced before folder tracking.
-	Folder    string   `json:"folder,omitempty"`
-	ThreadID  string   `json:"thread_id"`
-	MessageID string   `json:"message_id,omitempty"`
-	GmailID   string   `json:"gmail_id,omitempty"`
-	ParentID  string   `json:"parent_id,omitempty"`
-	UID       int      `json:"uid,omitempty"`
-	ModSeq    int      `json:"mod_seq,omitempty"`
-	Flags     []string `json:"flags,omitempty"`
+	Folder string `json:"folder,omitempty"`
+	// FolderPath is the source folder's name on the mail server, empty for
+	// providers with no folders (Gmail). ProviderFolder is the canonical
+	// folder the provider last reported, which stops following Folder once the
+	// message is filed in Warmbly.
+	FolderPath     string `json:"folder_path,omitempty"`
+	ProviderFolder string `json:"provider_folder,omitempty"`
+	// AnswersMailboxID is the workspace mailbox that sent the email this
+	// message replies to, when that is not the mailbox holding it. Set on
+	// thread reads only.
+	AnswersMailboxID *string  `json:"answers_mailbox_id,omitempty"`
+	ThreadID         string   `json:"thread_id"`
+	MessageID        string   `json:"message_id,omitempty"`
+	GmailID          string   `json:"gmail_id,omitempty"`
+	ParentID         string   `json:"parent_id,omitempty"`
+	UID              int      `json:"uid,omitempty"`
+	ModSeq           int      `json:"mod_seq,omitempty"`
+	Flags            []string `json:"flags,omitempty"`
 
 	BCC       []string `json:"bcc,omitempty"`
 	CC        []string `json:"cc,omitempty"`
@@ -151,6 +165,14 @@ type UniboxOverview struct {
 	// AwaitingAgentDraft counts threads with a pending inbox-agent draft
 	// waiting for review; see [UniboxService.AgentDrafts].
 	AwaitingAgentDraft int `json:"awaiting_agent_draft"`
+	// Automated counts conversations no person wrote in. They are left out of
+	// Unread, Today, Week, the inbox folder and the mailbox and tag counts.
+	// AutomatedUnread is how many of them are unread.
+	Automated       int `json:"automated"`
+	AutomatedUnread int `json:"automated_unread"`
+	// Drafts counts each visible thread once across mailbox drafts and pending
+	// agent drafts.
+	Drafts int `json:"drafts"`
 	// ScheduledPending is how many sends are queued but not yet out, capped
 	// for display at ScheduledPendingMax.
 	ScheduledPending    int `json:"scheduled_pending"`
@@ -554,6 +576,38 @@ func (s *UniboxService) MarkSeen(ctx context.Context, emailIDs []string, seen bo
 		Seen     bool     `json:"seen"`
 	}{EmailIDs: emailIDs, Seen: seen}
 	return s.client.patch(ctx, "unibox/seen", body, nil, opts...)
+}
+
+// UniboxMoveParams names the messages or conversations to file into a folder.
+type UniboxMoveParams struct {
+	// EmailIDs are message ids, up to 500.
+	EmailIDs []string `json:"email_ids"`
+	// ThreadIDs file whole conversations, up to 500. Each entry is a thread id,
+	// or a message id for mail that never got one. Filing half a conversation
+	// leaves it in the view it was filed out of, so prefer this over EmailIDs
+	// for list rows.
+	ThreadIDs []string `json:"thread_ids,omitempty"`
+	// Folder is the destination: [FolderInbox], [FolderArchive] or
+	// [FolderTrash]. The server refuses the other canonical folders because
+	// sent, drafts and spam are verdicts the provider reaches.
+	Folder string `json:"folder"`
+}
+
+// UniboxMoveResult echoes what [UniboxService.MoveToFolder] filed.
+type UniboxMoveResult struct {
+	EmailIDs  []string `json:"email_ids"`
+	ThreadIDs []string `json:"thread_ids,omitempty"`
+	Folder    string   `json:"folder"`
+}
+
+// MoveToFolder files messages and conversations into the inbox, the archive or
+// the trash (Move to inbox, Archive and Delete in the dashboard), for the whole
+// workspace. The store changes first; the move is then relayed to each mailbox
+// whose [Email.RelayFolderMoves] is on, so the provider may lag briefly. The
+// body names the destination, not a delta, so repeating the call is safe.
+// Requires the write_unibox scope.
+func (s *UniboxService) MoveToFolder(ctx context.Context, params *UniboxMoveParams, opts ...RequestOption) (*UniboxMoveResult, *Response, error) {
+	return send[UniboxMoveResult](ctx, s.client.patch, "unibox/folder", params, opts)
 }
 
 // MarkFolderSeen marks every message in one canonical folder (a Folder*
