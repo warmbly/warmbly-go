@@ -58,9 +58,9 @@ func TestSelfhostSyncRouting(t *testing.T) {
 	}{
 		// Pool link: public handshake.
 		{"poolLink.StartCode", func() error {
-			_, _, e := c.PoolLink.StartCode(ctx, &PoolLinkStartParams{InstanceName: "box", InstanceURL: "https://box.example", InstanceVersion: "1.2.3"})
+			_, _, e := c.PoolLink.StartCode(ctx, &PoolLinkStartParams{RemoteOrganizationID: "org_1", InstanceName: "box", InstanceURL: "https://box.example", InstanceVersion: "1.2.3"})
 			return e
-		}, "POST", "/v1/pool-link/codes", `{"instance_name":"box","instance_url":"https://box.example","instance_version":"1.2.3"}`},
+		}, "POST", "/v1/pool-link/codes", `{"remote_organization_id":"org_1","instance_name":"box","instance_url":"https://box.example","instance_version":"1.2.3"}`},
 		{"poolLink.Poll", func() error { _, _, e := c.PoolLink.Poll(ctx, "dev_1"); return e },
 			"POST", "/v1/pool-link/poll", `{"device_code":"dev_1"}`},
 
@@ -190,7 +190,7 @@ func TestPoolLinkStartAndPollDecode(t *testing.T) {
 		"verification_url": "https://app.warmbly.com/connect?code=ABCD-EFGH",
 		"expires_in": 900, "interval": 3
 	}`, nil)
-	grant, resp, err := c.PoolLink.StartCode(context.Background(), &PoolLinkStartParams{InstanceName: "box"})
+	grant, resp, err := c.PoolLink.StartCode(context.Background(), &PoolLinkStartParams{RemoteOrganizationID: "org_1", InstanceName: "box"})
 	if err != nil {
 		t.Fatalf("StartCode: %v", err)
 	}

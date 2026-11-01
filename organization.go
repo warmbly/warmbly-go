@@ -96,6 +96,10 @@ type User struct {
 
 	ReferralSource        *string    `json:"referral_source,omitempty"`
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+	// ProductTourCompletedAt is when the dashboard's product tour was finished
+	// or skipped; nil means it has not been. See
+	// [AuthService.CompleteProductTour].
+	ProductTourCompletedAt *time.Time `json:"product_tour_completed_at,omitempty"`
 
 	MaxOrganizations int  `json:"max_organizations,omitempty"`
 	FreeTrialUsed    bool `json:"free_trial_used,omitempty"`
@@ -108,6 +112,9 @@ type User struct {
 	// bitmask behind it. Both are only populated on the caller's own profile.
 	AdminPermissions uint64 `json:"admin_permissions,omitempty"`
 	IsAdmin          bool   `json:"is_admin,omitempty"`
+	// SessionMFAVerified reports whether the session making the request
+	// presented a second factor. Only populated on the caller's own profile.
+	SessionMFAVerified bool `json:"session_mfa_verified,omitempty"`
 
 	// DeletionScheduledFor is set while the account is pending a hard delete.
 	DeletionScheduledAt  *time.Time `json:"deletion_scheduled_at,omitempty"`
@@ -128,6 +135,10 @@ func (u *User) PendingDeletion() bool { return u.DeletionScheduledFor != nil }
 
 // Organization is a workspace.
 type Organization struct {
+	// Category is "standard" for a customer workspace; other values (for
+	// example "test") mark internal workspaces. Treat unknown values as
+	// standard.
+	Category    string    `json:"category,omitempty"`
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Slug        *string   `json:"slug,omitempty"`
@@ -159,6 +170,11 @@ type Organization struct {
 	// AssistantSharedHistory makes AI assistant conversations visible to every
 	// member with the use-AI permission rather than only their author.
 	AssistantSharedHistory bool `json:"assistant_shared_history"`
+
+	// Timezone is the workspace's IANA zone: the default a new campaign's
+	// schedule is created in, and the clock a mailbox with no timezone of its
+	// own keeps its warmup and working hours in. Empty means not set.
+	Timezone string `json:"timezone"`
 
 	Owner *User `json:"owner,omitempty"`
 }
@@ -269,6 +285,14 @@ type Member struct {
 	// Permissions is the effective grant across every assigned role. Test it
 	// with [Member.Can].
 	Permissions uint16 `json:"permissions"`
+	// AccessScope is which resources the roles apply to: [AccessScopeWorkspace]
+	// or [AccessScopeRestricted]. Treat an unknown value as restricted.
+	AccessScope string `json:"access_scope"`
+	// Access lists the grants of a restricted member. It is filled only where
+	// the server loads them (for example the result of
+	// [OrganizationService.SetMemberAccess]); read
+	// [OrganizationService.MemberAccess] otherwise.
+	Access *MemberAccess `json:"access,omitempty"`
 
 	InvitedBy  *string    `json:"invited_by,omitempty"`
 	InvitedAt  time.Time  `json:"invited_at"`
@@ -340,6 +364,13 @@ type Invitation struct {
 	InvitedBy      string       `json:"invited_by"`
 	ExpiresAt      time.Time    `json:"expires_at"`
 	CreatedAt      time.Time    `json:"created_at"`
+	// Access is the resource scope the invitee will land with; nil means the
+	// entire workspace.
+	Access *MemberAccess `json:"access,omitempty"`
+	// Lapsed is the wire field "expired": set on invitations listed for
+	// sending again, which grant nothing. It is separate from the
+	// [Invitation.Expired] method, which compares ExpiresAt to the clock.
+	Lapsed bool `json:"expired,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
@@ -370,6 +401,9 @@ type InvitationPreview struct {
 // OrganizationCreateParams creates a workspace.
 type OrganizationCreateParams struct {
 	Name string `json:"name"`
+	// Timezone is the workspace's IANA zone, for example "Europe/Berlin".
+	// Optional.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // OrganizationUpdateParams updates the current workspace. Nil fields are left
@@ -387,6 +421,10 @@ type OrganizationUpdateParams struct {
 
 	InboxAgentEnabled      *bool `json:"inbox_agent_enabled,omitempty"`
 	AssistantSharedHistory *bool `json:"assistant_shared_history,omitempty"`
+
+	// Timezone is the workspace's IANA zone. An empty string clears it.
+	// Changing it re-times work already scheduled under the old zone.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // InviteMemberParams invites someone by email into one or more roles.
@@ -396,6 +434,9 @@ type InviteMemberParams struct {
 	RoleIDs []string `json:"role_ids,omitempty"`
 	// RoleID is a single-role shorthand for RoleIDs.
 	RoleID *string `json:"role_id,omitempty"`
+	// Access restricts the invitee from the moment they join. Nil is the
+	// entire workspace.
+	Access *MemberAccessParams `json:"access,omitempty"`
 }
 
 // UpdateMemberParams replaces a member's assigned roles.

@@ -44,6 +44,21 @@ type Session struct {
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// DeviceToken is set when [ConfirmParams.RememberDevice] was asked for on
+	// a confirmed login code. Keep it and send it as [LoginParams.DeviceToken]
+	// on the next password sign-in from this client so the emailed code is
+	// skipped. Treat it like a credential.
+	DeviceToken string `json:"device_token,omitempty"`
+
+	// LinkRequired is true when a browser or native provider sign-in resolved
+	// to an existing password account. The token fields are then empty:
+	// finish with [AuthService.LinkSSO] using PendingToken and that account's
+	// password. LinkEmail and LinkProvider say which address and provider to
+	// display.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -65,6 +80,26 @@ type LoginParams struct {
 	// on a closed deployment fails with "registration_invite_only" or
 	// "registration_closed".
 	Invite string `json:"invite,omitempty"`
+
+	// DeviceToken is the remembered-browser token an earlier
+	// [AuthService.LoginConfirm] returned in [Session.DeviceToken]. Login
+	// only: a known device skips the emailed code.
+	DeviceToken string `json:"device_token,omitempty"`
+	// Acquisition records where a signup came from. It is stored once on the
+	// new workspace and only read by [AuthService.Register].
+	Acquisition *Acquisition `json:"acquisition,omitempty"`
+}
+
+// Acquisition is where a visitor came from, taken from the signup URL's query
+// string. Every field is optional and the server normalizes what it keeps.
+type Acquisition struct {
+	LandingPath  string `json:"landing_path,omitempty"`
+	ReferrerHost string `json:"referrer_host,omitempty"`
+	UTMSource    string `json:"utm_source,omitempty"`
+	UTMMedium    string `json:"utm_medium,omitempty"`
+	UTMCampaign  string `json:"utm_campaign,omitempty"`
+	UTMTerm      string `json:"utm_term,omitempty"`
+	UTMContent   string `json:"utm_content,omitempty"`
 }
 
 // AuthStep is the outcome of the first step of a sign-in or signup. Either
@@ -95,10 +130,16 @@ type AuthStep struct {
 	TwoFARequired bool   `json:"two_fa_required,omitempty"`
 	PendingToken  string `json:"pending_token,omitempty"`
 	ExpiresIn     int    `json:"expires_in,omitempty"`
+
+	// PasswordChangeRequired is true when the password was an issued initial
+	// one that must be replaced before the account can sign in. PendingToken
+	// is then the single-use handle for [AuthService.CompleteInitialPassword]
+	// and ExpiresIn how long it stays valid.
+	PasswordChangeRequired bool `json:"password_change_required,omitempty"`
 }
 
-// Done reports whether the flow finished in this step, with either a session
-// or a 2FA challenge to complete.
+// Done reports whether the flow finished in this step, with a session, a 2FA
+// challenge or an initial-password challenge to complete.
 func (a *AuthStep) Done() bool { return !a.CodeRequired }
 
 // ConfirmParams completes a two-step flow with the emailed code.
@@ -107,6 +148,10 @@ type ConfirmParams struct {
 	Session   string `json:"session"`
 	Code      string `json:"code"`
 	Turnstile string `json:"turnstile,omitempty"`
+	// RememberDevice asks for a [Session.DeviceToken] with the session, so the
+	// next password sign-in from this client skips the emailed code. Login
+	// only.
+	RememberDevice bool `json:"remember_device,omitempty"`
 }
 
 // UserSession is one active session on the account.
@@ -124,7 +169,10 @@ type UserSession struct {
 
 	// AuthProvider is how the session was created, for example "password",
 	// "passkey", "apple" or "google".
-	AuthProvider string    `json:"auth_provider"`
+	AuthProvider string `json:"auth_provider"`
+	// MFAVerified reports whether a second factor (authenticator code,
+	// recovery code or passkey) established the session.
+	MFAVerified  bool      `json:"mfa_verified"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActiveAt time.Time `json:"last_active_at"`
 }
@@ -237,6 +285,9 @@ type AuthConfig struct {
 	// Captcha reports whether a Turnstile token is verified. When false do not
 	// collect one: an air-gapped install cannot reach the challenge service.
 	Captcha bool `json:"captcha"`
+	// AppAttest reports whether a native app may prove itself with Apple App
+	// Attest instead of the captcha. Browser and server clients can ignore it.
+	AppAttest bool `json:"app_attest"`
 	// PasswordLogin is false when the deployment authenticates only through
 	// SSO or passkeys; [AuthService.Login] and [AuthService.Register] are then
 	// refused.
@@ -283,6 +334,27 @@ type AuthConfig struct {
 	// layout is whatever the operator chose.
 	WebsocketURL string `json:"websocket_url,omitempty"`
 	AppURL       string `json:"app_url,omitempty"`
+	// APIURL is this API's own public base as the server sees it, for
+	// building copyable examples.
+	APIURL string `json:"api_url,omitempty"`
+	// GmailOAuthConnect reports whether a new Gmail mailbox may be connected
+	// with Google sign-in. False means the connect flow uses an app password;
+	// mailboxes already on Google sign-in are unaffected.
+	GmailOAuthConnect bool `json:"gmail_oauth_connect"`
+	// Brand is what this deployment calls itself. Every field is empty on a
+	// self-hosted instance that configured none.
+	Brand AuthBrand `json:"brand"`
+}
+
+// AuthBrand is the public half of a deployment's branding: what a sign-in
+// screen or shared page may show.
+type AuthBrand struct {
+	Name         string `json:"name"`
+	WebsiteURL   string `json:"website_url,omitempty"`
+	WebsiteLabel string `json:"website_label,omitempty"`
+	TermsURL     string `json:"terms_url,omitempty"`
+	PrivacyURL   string `json:"privacy_url,omitempty"`
+	SupportEmail string `json:"support_email,omitempty"`
 }
 
 // InstanceInfo is which Warmbly a self-hosted instance runs and whether a
@@ -411,6 +483,11 @@ type CLIAuthRequest struct {
 	CLIVersion string   `json:"cli_version"`
 	Scopes     uint64   `json:"scopes"`
 	ScopeNames []string `json:"scope_names"`
+	// GrantedScopes and GrantedScopeNames are what approving into the
+	// workspace named by [AuthService.CLIAuthRequestFor] would mint, capped to
+	// the caller's role there. They are nil when no workspace was named.
+	GrantedScopes     *uint64  `json:"granted_scopes,omitempty"`
+	GrantedScopeNames []string `json:"granted_scope_names,omitempty"`
 	// Status is one of the CLIAuth* constants.
 	Status string `json:"status"`
 	// OrganizationID is the workspace the key was minted in, once approved.
@@ -449,6 +526,13 @@ const (
 	// NotifDomainAuth fires when a sending domain starts failing SPF or
 	// DMARC: the warning before the send gate applies.
 	NotifDomainAuth = "health_domain_auth"
+	// NotifPlacementFinished fires when an inbox placement test completes.
+	NotifPlacementFinished = "placement_finished"
+	// NotifPlacementAlert fires when a placement test finds mail landing in
+	// spam.
+	NotifPlacementAlert = "placement_alert"
+	// NotifInboxActionRequired fires when mailbox mail needs someone to act.
+	NotifInboxActionRequired = "inbox_action_required"
 )
 
 // ChannelPrefs are the delivery toggles for one notification category.
@@ -481,6 +565,15 @@ type NotificationPreferences struct {
 	// act.
 	CampaignPaused CategoryPref `json:"campaign_paused"`
 	DomainAuth     CategoryPref `json:"health_domain_auth"`
+
+	// PlacementFinished and PlacementAlert are the inbox placement test pair;
+	// InboxActionRequired is mailbox mail that needs someone to act.
+	//
+	// Send them back unchanged when updating: the server replaces the whole
+	// configuration, so a category left at its zero value is switched off.
+	PlacementFinished   CategoryPref `json:"placement_finished"`
+	PlacementAlert      CategoryPref `json:"placement_alert"`
+	InboxActionRequired CategoryPref `json:"inbox_action_required"`
 
 	// EmailDigestMinutes bundles pending notification emails into one send.
 	// It must fall within [NotificationEmailDelivery.MinMinutes] and
@@ -876,6 +969,11 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, opts ...RequestOption) (
 }
 
 // ChangePassword sets a new password, which requires the current one.
+//
+// The server ends every session on the account when the password changes and
+// answers with a replacement token pair for the calling device. This method
+// discards that pair, so the caller is signed out; use
+// [AuthService.ChangePasswordSession] to keep the replacement session.
 func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Response, error) {
 	body := struct {
 		CurrentPassword string `json:"current_password"`
