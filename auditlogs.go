@@ -62,9 +62,19 @@ const (
 	AuditEntityCampaign     = "campaign"
 	AuditEntityContact      = "contact"
 	AuditEntityEmailAccount = "email_account"
-	AuditEntityAPIKey       = "api_key"
-	AuditEntityWebhook      = "webhook"
-	AuditEntityTemplate     = "template"
+	// Mailbox sources: bulk imports, whole-domain admin grants and connected
+	// vendor accounts, plus the domain redirects served for sending domains.
+	AuditEntityMailboxImport  = "mailbox_import"
+	AuditEntityMailboxGrant   = "mailbox_grant"
+	AuditEntityMailboxVendor  = "mailbox_vendor"
+	AuditEntityDomainRedirect = "domain_redirect"
+	AuditEntityAPIKey         = "api_key"
+	AuditEntityWebhook        = "webhook"
+	AuditEntityTemplate       = "template"
+	// AuditEntityCampaignLead is one contact inside one campaign: the entity id
+	// is the contact and the metadata names the campaign. It is written when a
+	// member pauses or resumes that lead's flow, or changes who it copies.
+	AuditEntityCampaignLead = "campaign_lead"
 	// AuditEntitySequence is a step within a campaign's sequence. The wire
 	// value is "step".
 	AuditEntitySequence     = "step"
@@ -107,8 +117,11 @@ const (
 	AuditEntityOrgRisk = "org_risk"
 
 	// AI.
-	AuditEntityAISession      = "ai_session"
-	AuditEntityAISkill        = "ai_skill"
+	AuditEntityAISession = "ai_session"
+	AuditEntityAISkill   = "ai_skill"
+	// AuditEntityAIToolPolicy is the workspace's "always allow" policy for one
+	// assistant tool, set or revoked.
+	AuditEntityAIToolPolicy   = "ai_tool_policy"
 	AuditEntityMCPServer      = "mcp_server"
 	AuditEntityAdvisorFinding = "advisor_finding"
 
@@ -118,6 +131,21 @@ const (
 	AuditEntityReferralCredit = "referral_credit"
 	AuditEntityCreditPurchase = "credit_purchase"
 	AuditEntityCreditGrant    = "credit_grant"
+
+	// Inbox placement: a test or batch started or canceled, and a campaign's
+	// scheduled test set up, changed or removed.
+	AuditEntityPlacementTest    = "placement_test"
+	AuditEntityPlacementBatch   = "placement_batch"
+	AuditEntityPlacementMonitor = "placement_monitor"
+
+	// Images in the workspace's library for email bodies.
+	AuditEntityEmailImage = "email_image"
+
+	// OAuth apps the workspace owns: the app itself, its community directory
+	// listing, and a member's authorization of an app that an admin revoked.
+	AuditEntityOAuthApplication   = "oauth_application"
+	AuditEntityAppListing         = "app_listing"
+	AuditEntityOAuthAuthorization = "oauth_authorization"
 
 	// Workspace settings and the archives used to move a workspace between
 	// instances.

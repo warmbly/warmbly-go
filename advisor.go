@@ -248,7 +248,7 @@ func (p *AdvisorListParams) values() url.Values {
 	setNonEmpty(q, "category", p.Category)
 	setNonEmpty(q, "entity_type", p.EntityType)
 	setNonEmpty(q, "entity_id", p.EntityID)
-	setCSV(q, "status", p.Statuses)
+	setRepeated(q, "status", p.Statuses)
 	setPositive(q, "limit", p.Limit)
 	return q
 }

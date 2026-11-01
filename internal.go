@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -117,11 +118,30 @@ func setTime(q url.Values, key string, value *time.Time) {
 	}
 }
 
-func setCSV(q url.Values, key string, values []string) {
+// setRepeated adds one query parameter per value. The server refuses a
+// repeated parameter with duplicate_query_parameter except on the few routes
+// that read a list that way (advisor recommendations' status and the analytics
+// dashboard's campaign_ids and folder_ids), so use it only for those and send
+// every other list with [setCSV].
+func setRepeated(q url.Values, key string, values []string) {
 	for _, v := range values {
 		if v != "" {
 			q.Add(key, v)
 		}
+	}
+}
+
+// setCSV sets a list parameter as one comma-separated value, which is how
+// the API takes a list wherever it takes one.
+func setCSV(q url.Values, key string, values []string) {
+	var kept []string
+	for _, v := range values {
+		if v != "" {
+			kept = append(kept, v)
+		}
+	}
+	if len(kept) > 0 {
+		q.Set(key, strings.Join(kept, ","))
 	}
 }
 

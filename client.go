@@ -340,6 +340,10 @@ type RateLimit struct {
 	Remaining int
 	// Policy is the raw policy string, e.g. "60;w=60".
 	Policy string
+	// Reset is when the current window ends, from X-RateLimit-Reset (Unix
+	// seconds). Only the category limiter sends it; it is the zero time
+	// otherwise.
+	Reset time.Time
 	// RetryAfter is how long to wait before retrying, when provided.
 	RetryAfter time.Duration
 }
@@ -520,6 +524,11 @@ func parseRateLimit(h http.Header) RateLimit {
 		rl.Remaining, _ = strconv.Atoi(v)
 	}
 	rl.Policy = h.Get("X-RateLimit-Policy")
+	if v := h.Get("X-RateLimit-Reset"); v != "" {
+		if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs > 0 {
+			rl.Reset = time.Unix(secs, 0)
+		}
+	}
 	if v := h.Get("Retry-After"); v != "" {
 		if secs, err := strconv.Atoi(v); err == nil {
 			rl.RetryAfter = time.Duration(secs) * time.Second
