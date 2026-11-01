@@ -24,8 +24,10 @@ const (
 	MatchDomain = "domain"
 	// MatchTLD matches a top-level domain.
 	MatchTLD = "tld"
-	// MatchProvider matches a mail provider classification, for example
-	// "gmail" or "outlook".
+	// MatchProvider matches a logical provider bucket resolved from the
+	// address's domain: "google", "microsoft", "yahoo", "apple", "proton",
+	// "zoho" or "custom" (a domain that matches none of the others). To
+	// target a custom domain, match it with [MatchDomain] instead.
 	MatchProvider = "provider"
 )
 
@@ -52,7 +54,10 @@ type WarmupRoutingRule struct {
 }
 
 // WarmupRoutingRuleParams creates or replaces a routing rule. The API replaces
-// the rule wholesale on update, so send the complete desired state.
+// the rule wholesale on update, so send the complete desired state. Name is
+// required, a match type other than [MatchAny] needs its value, and Weight may
+// not be negative. Enabled left nil is stored as false (the rule is created
+// disabled, or an updated rule is switched off), so set it explicitly.
 type WarmupRoutingRuleParams struct {
 	Name     string `json:"name"`
 	Priority int    `json:"priority,omitempty"`
