@@ -125,13 +125,34 @@ func TestExtractSeq(t *testing.T) {
 }
 
 func TestSocketURLCarriesCredentialAndVersion(t *testing.T) {
-	c := New("wmbly_key", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
-	got := c.socketURL()
-	for _, want := range []string{"token=wmbly_key", "vsn=" + protocolVersion} {
-		if !strings.Contains(got, want) {
-			t.Errorf("socketURL() = %q, want it to contain %q", got, want)
+	t.Run("long-lived credentials stay out of the URL", func(t *testing.T) {
+		for _, token := range []string{"wmbly_key", "wmat_oauth"} {
+			c := New(token, "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
+			got := c.socketURL()
+			if strings.Contains(got, token) || strings.Contains(got, "token=") {
+				t.Errorf("socketURL() = %q, want no credential in it", got)
+			}
+			if want := "vsn=" + protocolVersion; !strings.Contains(got, want) {
+				t.Errorf("socketURL() = %q, want it to contain %q", got, want)
+			}
+			if h := c.dialHeader().Get("X-Warmbly-Token"); h != token {
+				t.Errorf("X-Warmbly-Token = %q, want %q", h, token)
+			}
 		}
-	}
+	})
+
+	t.Run("a connection token also rides the query", func(t *testing.T) {
+		c := New("eyJhbGciOi.jwt", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
+		got := c.socketURL()
+		for _, want := range []string{"token=eyJhbGciOi.jwt", "vsn=" + protocolVersion} {
+			if !strings.Contains(got, want) {
+				t.Errorf("socketURL() = %q, want it to contain %q", got, want)
+			}
+		}
+		if h := c.dialHeader().Get("X-Warmbly-Token"); h != "eyJhbGciOi.jwt" {
+			t.Errorf("X-Warmbly-Token = %q", h)
+		}
+	})
 }
 
 func TestTopicHelpers(t *testing.T) {
@@ -619,12 +640,16 @@ type phxServer struct {
 	// upgradeStatus, when non-zero, refuses the upgrade with that HTTP status
 	// instead of completing the handshake.
 	upgradeStatus int
+	// upgradeBody is the JSON body sent with a refused upgrade.
+	upgradeBody string
 	// onJoin answers a phx_join. attempt counts this topic's joins on this
 	// server, starting at 1.
 	onJoin func(attempt int, topic string) (status, response string)
 
 	mu         sync.Mutex
 	shakes     int
+	lastHeader http.Header
+	lastQuery  string
 	joinCounts map[string]int
 	joinBodies map[string]string
 	live       []net.Conn
@@ -685,12 +710,15 @@ func (s *phxServer) serve(conn net.Conn) {
 	}
 	s.mu.Lock()
 	s.shakes++
+	s.lastHeader = req.Header.Clone()
+	s.lastQuery = req.URL.RawQuery
 	status := s.upgradeStatus
+	body := s.upgradeBody
 	s.mu.Unlock()
 
 	if status != 0 {
-		fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-			status, http.StatusText(status))
+		fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+			status, http.StatusText(status), len(body), body)
 		return
 	}
 

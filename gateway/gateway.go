@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -59,8 +60,8 @@ const stableSession = 30 * time.Second
 const maxJoinRetryDelay = 2 * time.Minute
 
 // Codes carried in [JoinError.Code]. The gateway uses the same set for a
-// refused socket handshake and for a refused channel join, though only the join
-// path delivers them in a machine-readable body today.
+// refused socket handshake, which answers HTTP 403 with a {code, reason} body,
+// and for a refused channel join.
 const (
 	// JoinCodeUnauthenticated means no credential was presented at all.
 	JoinCodeUnauthenticated = 4003
@@ -122,12 +123,15 @@ var ErrUnauthorized = errors.New("gateway: credential rejected")
 // ErrForbidden is returned by [Client.Open] when the credential is valid but
 // may not join the workspace.
 //
+// A refused handshake normally arrives as a [*JoinError] carrying the
+// gateway's code and reason; this bare sentinel is what a 403 with no readable
+// body (a proxy in front of the gateway, or an older gateway) becomes.
+//
 // The client stops on it during the first connection, when it almost always
 // means a permission problem. Once a session has joined successfully, a later
-// refused handshake is far more likely to be the handshake budget or the
-// concurrent-connection cap — which look identical from the client, because the
-// gateway refuses a handshake with a plain HTTP 403 and no machine-readable
-// body — so the client backs off and retries instead of giving up.
+// body-less refusal is far more likely to be the handshake budget or the
+// concurrent-connection cap, which look identical from the client without a
+// body, so the client backs off and retries instead of giving up.
 var ErrForbidden = errors.New("gateway: not permitted to join this workspace")
 
 // JoinError is a refused join, or a refused socket handshake.
@@ -397,8 +401,11 @@ func WithResumeFrom(seq int) Option {
 }
 
 // New creates a gateway client for one workspace, authenticated with token: an
-// API key holding the realtime-subscribe scope, or a session access token. It
-// does not connect; call [Client.Open].
+// API key holding the realtime-subscribe scope, an OAuth access token whose
+// grant includes it, or a short-lived connection token minted for a signed-in
+// session. A connection token opens one socket only, so a client holding one
+// cannot reconnect after a drop and must be given a fresh one. It does not
+// connect; call [Client.Open].
 func New(token, orgID string, opts ...Option) *Client {
 	c := &Client{
 		token:      token,
@@ -630,7 +637,7 @@ func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), c.dialHeader())
 	if derr != nil {
 		// The socket refuses the upgrade at the HTTP layer when the credential
 		// is bad, so a dial failure can be terminal rather than transient.
@@ -797,15 +804,23 @@ func (c *Client) handleRefusal(ctx context.Context, conn *wsconn.Conn, book *joi
 }
 
 // handshakeError classifies a refused websocket upgrade. The gateway answers a
-// connect-level refusal with an HTTP status and no machine-readable body — the
-// reason never reaches the client — so this can only separate "bad credential"
-// from "not permitted", and returns nil for anything else so the caller reports
-// the transport error instead.
+// connect-level refusal with HTTP 403 and a JSON body {code, reason} (plus
+// retry_after_ms when rate limited), which becomes a [JoinError] so the cause
+// is available to the caller. A refusal without a readable body, from a
+// gateway or proxy that does not send one, is classified by status alone as
+// [ErrUnauthorized] or [ErrForbidden]. Anything else returns nil so the caller
+// reports the transport error instead.
 func handshakeError(resp *http.Response) error {
 	if resp == nil {
 		return nil
 	}
-	// wsconn has already closed the body on a failed handshake.
+	if resp.Body != nil {
+		if body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10)); err == nil {
+			if je := parseHandshakeRefusal(body); je != nil {
+				return je
+			}
+		}
+	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
@@ -815,14 +830,57 @@ func handshakeError(resp *http.Response) error {
 	return nil
 }
 
-// socketURL builds the dial URL, carrying the credential and wire version.
+// parseHandshakeRefusal decodes a refused upgrade's JSON body, or returns nil
+// when it is not the gateway's {code, reason} shape.
+func parseHandshakeRefusal(body []byte) *JoinError {
+	var refusal struct {
+		Code         int    `json:"code"`
+		Reason       string `json:"reason"`
+		RetryAfterMS int    `json:"retry_after_ms"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &refusal) != nil || refusal.Code == 0 {
+		return nil
+	}
+	return &JoinError{
+		Code:       refusal.Code,
+		Reason:     refusal.Reason,
+		RetryAfter: time.Duration(refusal.RetryAfterMS) * time.Millisecond,
+	}
+}
+
+// credentialHeader is the handshake header an API key or OAuth access token
+// travels in. The gateway refuses those credentials in the URL, where proxies
+// and access logs record them.
+const credentialHeader = "X-Warmbly-Token"
+
+// longLivedCredential reports whether token is an API key or OAuth access
+// token, as opposed to a short-lived connection token.
+func longLivedCredential(token string) bool {
+	return strings.HasPrefix(token, "wmbly_") || strings.HasPrefix(token, "wmat_")
+}
+
+// dialHeader carries the credential in the handshake header. It is accepted for
+// every credential type, so it is always sent.
+func (c *Client) dialHeader() http.Header {
+	h := make(http.Header)
+	h.Set(credentialHeader, c.token)
+	return h
+}
+
+// socketURL builds the dial URL and the wire version. An API key or OAuth token
+// is never put in it: the gateway refuses a long-lived credential in the query
+// string. Any other token (a short-lived connection token) is also repeated as
+// the "token" parameter, which is where a gateway that predates the header
+// looks for it.
 func (c *Client) socketURL() string {
 	u, err := url.Parse(c.url)
 	if err != nil {
 		return c.url
 	}
 	q := u.Query()
-	q.Set("token", c.token)
+	if !longLivedCredential(c.token) {
+		q.Set("token", c.token)
+	}
 	q.Set("vsn", protocolVersion)
 	u.RawQuery = q.Encode()
 	return u.String()

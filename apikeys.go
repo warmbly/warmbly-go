@@ -100,6 +100,12 @@ const (
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
 		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+
+	// PermAppGrantable is every scope a third-party OAuth app may be granted.
+	// It is [PermFullAccess] without [PermAPIKeys]: managing API keys stays
+	// with people, and an app token that calls a key-management route is
+	// refused.
+	PermAppGrantable = PermFullAccess &^ PermAPIKeys
 )
 
 // API key lifecycle states returned in [APIKey.Status].

@@ -8,6 +8,7 @@ package wsconn
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -47,6 +48,13 @@ const (
 
 // guid is the RFC 6455 magic value used to compute Sec-WebSocket-Accept.
 const guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+// maxRefusalBody bounds how much of a refused handshake's body is kept, and
+// refusalBodyTimeout how long reading it may take.
+const (
+	maxRefusalBody     = 4 << 10
+	refusalBodyTimeout = 2 * time.Second
+)
 
 // defaultMaxMessage caps the size of a reassembled message to guard memory.
 const defaultMaxMessage = 8 << 20 // 8 MiB
@@ -159,7 +167,12 @@ func Dial(ctx context.Context, urlStr string, header http.Header) (*Conn, *http.
 	if resp.StatusCode != http.StatusSwitchingProtocols ||
 		!strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
 		!headerContainsToken(resp.Header, "Connection", "upgrade") {
+		// Keep a bounded copy of the refusal body readable: servers explain a
+		// refused upgrade there, and the caller owns resp.Body from here.
+		_ = conn.SetReadDeadline(time.Now().Add(refusalBodyTimeout))
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, maxRefusalBody))
 		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(excerpt))
 		conn.Close()
 		return nil, resp, fmt.Errorf("wsconn: handshake failed: status %d", resp.StatusCode)
 	}

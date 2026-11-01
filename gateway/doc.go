@@ -5,8 +5,13 @@
 //
 // # Connecting
 //
-// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, or with a
-// session access token. Register handlers first, then open the connection:
+// Authenticate with an API key holding the REALTIME_SUBSCRIBE scope, or with an
+// OAuth access token whose grant includes the realtime scope. Both travel in
+// the X-Warmbly-Token handshake header, never the URL: the gateway refuses a
+// key or token in the query string with code 4003. A short-lived connection
+// token minted for a browser session is also accepted, but it opens one socket
+// only, so it cannot survive a reconnect. Register handlers first, then open
+// the connection:
 //
 //	client := gateway.New(apiKey, orgID,
 //		gateway.WithIntents(gateway.IntentCampaign, gateway.IntentEmail))
@@ -52,4 +57,28 @@
 // The gateway enforces the same permissions as the REST API. A credential
 // without unibox access receives no inbox events, whatever intents it declares;
 // intents only ever narrow the stream further.
+//
+// A key or token reaches only the workspace it was created in, and there only
+// the event families its read scopes cover, never more than its holder's own
+// member permissions:
+//
+//	READ_EMAILS     mailbox, warmup and mailbox import events, the account topic
+//	READ_CAMPAIGNS  campaign activity, task progress, send, open, click and reply pulses
+//	READ_CONTACTS   contact, page hit, form and research events
+//	READ_UNIBOX     inbox events and AI reply drafts
+//	READ_ANALYTICS  placement tests and direct email events
+//
+// Team, billing and settings events never reach a key or token. A member
+// restricted to selected resources, and any key acting for one, receives only
+// events that name a mailbox or campaign they were granted; the rest are
+// dropped, including events that name no resource. Authorization is re-checked
+// about every 30 seconds, so a revoked grant stops delivery within that window
+// rather than instantly.
+//
+// # Refusals
+//
+// A refused join or handshake surfaces as a [*JoinError] carrying the server's
+// numeric code and reason. Branch on [JoinError.Code], and use
+// [JoinError.Permanent] to tell a refusal that retrying cannot fix from one
+// that it can. Joining another workspace's topic is refused as not_a_member.
 package gateway
