@@ -77,6 +77,27 @@ type Email struct {
 	// [MailboxStatusInactive] or [MailboxStatusRevoked].
 	Status string `json:"status"`
 
+	// SendAsEmail is the verified provider alias the mailbox sends from; empty
+	// means the mailbox's own address. [EmailService.SendIdentity] lists the
+	// aliases the provider allows.
+	SendAsEmail string `json:"send_as_email"`
+	// MailHost is who hosts the mailbox, for example "google_workspace" or
+	// "microsoft365"; empty until known. The set is open.
+	MailHost string `json:"mail_host"`
+	// AuthMethod is how the mailbox signs in: "password", "app_password",
+	// "oauth" or "delegated" (through an administrator grant). The set is open.
+	AuthMethod string `json:"auth_method"`
+	// DomainGrantID is the administrator grant a delegated mailbox connects
+	// through; see [EmailService.GetGrant].
+	DomainGrantID *string `json:"domain_grant_id,omitempty"`
+	// VendorConnectionID and Vendor name the inbox vendor account a mailbox was
+	// imported from; see [EmailService.ListVendors].
+	VendorConnectionID *string `json:"vendor_connection_id,omitempty"`
+	Vendor             string  `json:"vendor,omitempty"`
+	// AvatarURL is the mailbox's own profile photo, empty when its provider
+	// has none.
+	AvatarURL string `json:"avatar_url"`
+
 	// LastSyncedAt is when the mailbox was last polled for inbound mail; nil
 	// until the first sync has run. [EmailService.SyncStatus] has the detail.
 	LastSyncedAt *time.Time `json:"last_synced_at"`
@@ -88,6 +109,16 @@ type Email struct {
 	// daily limit, the warmup ramp, sending behavior and the workspace's daily
 	// send limit all still apply and the smallest wins.
 	CampaignLimit int `json:"campaign_limit"`
+	// TestMode is how the mailbox takes part in warmup tests: "legacy",
+	// "diagnostic" or "off". Nil behaves as "legacy". The set is open.
+	TestMode *string `json:"test_mode"`
+	// TestSendEnabled and TestReceiveEnabled apply in "diagnostic" mode.
+	TestSendEnabled    bool `json:"test_send_enabled"`
+	TestReceiveEnabled bool `json:"test_receive_enabled"`
+	// SharedDailyLimit and RollingRecipientLimit are optional caps shared
+	// across the sending domain; nil means no cap.
+	SharedDailyLimit      *int `json:"shared_daily_limit"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit"`
 	// MinWaitTime is the minimum gap, in seconds, between two sends (default
 	// 600). Jitter is added on top. While sending behavior is enabled the
 	// behavior's gap range replaces it.
@@ -107,6 +138,11 @@ type Email struct {
 	TrackingDomain           string     `json:"tracking_domain"`
 	TrackingDomainVerified   bool       `json:"tracking_domain_verified"`
 	TrackingDomainVerifiedAt *time.Time `json:"tracking_domain_verified_at"`
+
+	// TrackDirectMail turns open and click tracking on for this mailbox's
+	// hand-written unibox sends. Off by default; see
+	// [EmailService.SetDirectTracking].
+	TrackDirectMail bool `json:"track_direct_mail"`
 
 	// AuthState summarizes SPF/DKIM/DMARC for the sending domain, as refreshed
 	// by the background sweep: [AuthStatePassing], [AuthStateFailing] or
@@ -145,11 +181,23 @@ type Email struct {
 	WarmupEndTime   string `json:"warmup_end_time"`
 	// WarmupDays is a bitmask of the weekdays warmup runs on.
 	WarmupDays int `json:"warmup_days"`
+	// WarmupPlacement is where warmup mail is filed in the mailbox's own mail
+	// client: "folder", "inbox" or "archive". WarmupFolder names the folder
+	// for "folder" (empty uses the instance default).
+	WarmupPlacement string `json:"warmup_placement"`
+	WarmupFolder    string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail stays in the mailbox; 0 uses
+	// the instance setting.
+	WarmupRetentionDays int `json:"warmup_retention_days"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behavior and
 	// business-hours window are evaluated in. Empty means not configured, so
 	// only the campaign's own window applies.
 	Timezone string `json:"timezone"`
+
+	// RelayFolderMoves makes Archive, Delete and Move to inbox in the unibox
+	// move the message in the mailbox too. On by default.
+	RelayFolderMoves bool `json:"relay_folder_moves"`
 
 	// Tags holds the ids of the tags applied to this mailbox.
 	Tags []string `json:"tags"`
@@ -253,6 +301,10 @@ type EmailUpdateParams struct {
 	SignatureSync  *bool   `json:"signature_sync,omitempty"`
 	SignatureCode  *bool   `json:"signature_code,omitempty"`
 
+	// SendAsEmail picks the verified provider alias the mailbox sends from;
+	// an empty string goes back to the mailbox's own address.
+	SendAsEmail *string `json:"send_as_email,omitempty"`
+
 	// Status is [MailboxStatusActive], [MailboxStatusInactive] or
 	// [MailboxStatusRevoked]. Setting a mailbox inactive stops its syncing and
 	// sending within seconds while keeping its settings, history and worker
@@ -265,6 +317,16 @@ type EmailUpdateParams struct {
 	// MinWaitTime is the minimum gap between sends, in seconds.
 	MinWaitTime *int    `json:"min_wait_time,omitempty"`
 	ReplyTo     *string `json:"reply_to,omitempty"`
+
+	// TestMode is "legacy", "diagnostic" or "off"; TestSendEnabled and
+	// TestReceiveEnabled apply in "diagnostic" mode.
+	TestMode           *string `json:"test_mode,omitempty"`
+	TestSendEnabled    *bool   `json:"test_send_enabled,omitempty"`
+	TestReceiveEnabled *bool   `json:"test_receive_enabled,omitempty"`
+	// SharedDailyLimit and RollingRecipientLimit cap sends across the sending
+	// domain.
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
 
 	// Timezone is the mailbox's own IANA zone, such as "America/Denver". Send
 	// an empty string to clear it, which leaves only the campaign's own window
@@ -289,6 +351,18 @@ type EmailUpdateParams struct {
 	WarmupStartTime *string `json:"warmup_start_time,omitempty"`
 	WarmupEndTime   *string `json:"warmup_end_time,omitempty"`
 	WarmupDays      *int    `json:"warmup_days,omitempty"`
+
+	// WarmupPlacement is "folder", "inbox" or "archive"; WarmupFolder names the
+	// destination for "folder" and goes back to the instance default when set
+	// to an empty string. WarmupRetentionDays is how long warmup mail is kept;
+	// 0 uses the instance setting.
+	WarmupPlacement     *string `json:"warmup_placement,omitempty"`
+	WarmupFolder        *string `json:"warmup_folder,omitempty"`
+	WarmupRetentionDays *int    `json:"warmup_retention_days,omitempty"`
+
+	// RelayFolderMoves turns the unibox's Archive, Delete and Move to inbox
+	// relay to the mailbox on or off.
+	RelayFolderMoves *bool `json:"relay_folder_moves,omitempty"`
 
 	// Tags replaces the mailbox's tag ids wholesale when non-nil.
 	Tags []string `json:"tags,omitempty"`
@@ -346,6 +420,9 @@ const (
 	// TrackingStatusWrongTarget: the record exists but points at another
 	// host; [TrackingDomainStatus.Observed] says which.
 	TrackingStatusWrongTarget = "wrong_target"
+	// TrackingStatusProofMissing: the CNAME is right but the ownership TXT
+	// record ([TrackingDomainStatus.TXTName]) has not been published yet.
+	TrackingStatusProofMissing = "proof_missing"
 	// TrackingStatusLookupError: DNS could not answer. A transient failure
 	// never revokes an already verified domain.
 	TrackingStatusLookupError = "lookup_error"
@@ -369,6 +446,10 @@ type TrackingDomainStatus struct {
 	// CNAMETarget is the value to put in the CNAME record: this install's
 	// tracking host. Empty when the deployment has no tracking host.
 	CNAMETarget string `json:"cname_target"`
+	// TXTName and TXTValue are the ownership record a new verification needs
+	// beside the CNAME; empty when none is required.
+	TXTName  string `json:"txt_name,omitempty"`
+	TXTValue string `json:"txt_value,omitempty"`
 	// Status is one of the TrackingStatus* constants.
 	Status string `json:"status"`
 	// Message explains Status in one sentence and is safe to show as-is.
@@ -485,6 +566,14 @@ type MailboxCredentials struct {
 	// submission relay on 2525. A server expecting STARTTLS looks unreachable
 	// to a client attempting implicit TLS, and vice versa.
 	Security string `json:"security,omitempty"`
+	// TLSUnverified trusts this server on its pinned certificate instead of a
+	// certificate authority. Set it only after the owner confirmed the
+	// fingerprint reported by [EmailService.CheckCertificates], and send that
+	// fingerprint in TLSPin.
+	TLSUnverified bool `json:"tls_unverified,omitempty"`
+	// TLSPin is the confirmed SHA-256 of the server certificate's public key
+	// as 64 lowercase hex characters, read only when TLSUnverified is set.
+	TLSPin string `json:"tls_pin,omitempty"`
 }
 
 // SMTPIMAPParams connects a mailbox by its own SMTP and IMAP credentials, for
@@ -686,6 +775,9 @@ type MailboxSyncPolicy struct {
 	// OrgDailyMessages caps new plus backfilled messages stored across the
 	// whole organization per UTC day.
 	OrgDailyMessages int `json:"org_daily_messages"`
+	// SkipFolders names the folders the sync leaves alone; each also covers
+	// its subfolders. IMAP only. Change it with [EmailService.UpdateSyncFolders].
+	SkipFolders []string `json:"skip_folders,omitempty"`
 }
 
 // MailboxSyncFolderCursor is the resumable position inside one folder of a
@@ -705,6 +797,19 @@ type MailboxSyncCursor struct {
 	PageToken string `json:"page_token,omitempty"`
 	// Folders is the per-folder position for IMAP and Microsoft Graph.
 	Folders map[string]MailboxSyncFolderCursor `json:"folders,omitempty"`
+	// GoogleRecovery is set while a Gmail history gap is being reconciled.
+	// It is opaque operational detail.
+	GoogleRecovery *MailboxSyncGoogleRecovery `json:"google_recovery,omitempty"`
+}
+
+// MailboxSyncGoogleRecovery holds a Gmail history baseline until additions and
+// stored-message state are reconciled. It is opaque operational detail.
+type MailboxSyncGoogleRecovery struct {
+	HistoryID    uint64    `json:"history_id"`
+	Since        time.Time `json:"since"`
+	PageToken    string    `json:"page_token,omitempty"`
+	MessagesDone bool      `json:"messages_done"`
+	StoredAfter  string    `json:"stored_after,omitempty"`
 }
 
 // MailboxSyncState is what the platform knows about a mailbox's sync: backfill
@@ -732,6 +837,12 @@ type MailboxSyncState struct {
 	// server but not yet stored. It drops back to zero once they are admitted.
 	Deferred int `json:"deferred"`
 
+	// FoldersSkippedCap and FoldersSkippedConflict count what the last folder
+	// listing could not follow: more folders than the sync covers, and folder
+	// names the server listed more than once. They clear when the cause does.
+	FoldersSkippedCap      int `json:"folders_skipped_cap,omitempty"`
+	FoldersSkippedConflict int `json:"folders_skipped_conflict,omitempty"`
+
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 }
 
@@ -746,6 +857,21 @@ type MailboxSync struct {
 	// State is nil until the worker has reported once.
 	State  *MailboxSyncState `json:"state"`
 	Policy MailboxSyncPolicy `json:"policy"`
+	// SkipFolders is the stored skip list, the same value Policy carries;
+	// [EmailService.UpdateSyncFolders] writes it.
+	SkipFolders []string `json:"skip_folders"`
+	// Folders is what the worker last listed on the server, INBOX first. It is
+	// empty for Gmail and Outlook, which have no IMAP folder list.
+	Folders []MailboxSyncFolder `json:"folders"`
+}
+
+// MailboxSyncFolder is one folder the sync has seen on the server.
+type MailboxSyncFolder struct {
+	// Name is the value to use in a skip list.
+	Name string `json:"name"`
+	// Folder is the canonical folder it files under (a Folder* constant), so a
+	// client can tell the special folders that cannot be skipped.
+	Folder string `json:"folder"`
 }
 
 // Weekday bits for [SendingBehavior.Weekdays]. The mask is Monday-indexed

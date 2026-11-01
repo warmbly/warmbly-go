@@ -262,6 +262,9 @@ type ConnectionConfigParams struct {
 type OAuthStartResult struct {
 	URL   string `json:"url"`
 	State string `json:"state"`
+	// AdminConsentURL is set by a Microsoft mailbox start only. It lets an
+	// administrator approve sign-in for the whole organization.
+	AdminConsentURL string `json:"admin_consent_url,omitempty"`
 }
 
 // Catalog returns every connectable provider.
