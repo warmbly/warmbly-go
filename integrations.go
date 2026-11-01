@@ -31,6 +31,12 @@ const (
 	ProviderCalendly     = "calendly"
 	ProviderCalCom       = "cal_com"
 	ProviderGoogleSheets = "google_sheets"
+	// ProviderApollo is the Apollo.io people database, connected by API key.
+	// See [IntegrationService.ApolloOverview].
+	ProviderApollo = "apollo"
+	// ProviderClay receives rows from a Clay table and can send events back
+	// to one. See [IntegrationService.ClaySettings].
+	ProviderClay = "clay"
 	// ProviderMillionVerifier is a pay-as-you-go address verifier connected
 	// by API key. While it has credits it replaces the built-in check for
 	// every contact you import; when they run out the built-in check takes
@@ -38,6 +44,9 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier, connected by API key
+	// and used the same way as [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -90,6 +99,10 @@ type IntegrationCatalogEntry struct {
 	Configured bool `json:"configured"`
 	// Capability is the provider's raw capability descriptor, when it has one.
 	Capability json.RawMessage `json:"capability,omitempty"`
+	// Rank is the provider's popularity on this deployment, 1 being the most
+	// used. Workspaces with a live connection count, ties are broken by
+	// catalog order.
+	Rank int `json:"rank"`
 }
 
 // IntegrationConnection is one connected third-party account.
@@ -383,7 +396,9 @@ func (s *IntegrationService) Runs(ctx context.Context, id string, opts ...Reques
 }
 
 // WebhookSecret returns the signing material an inbound provider needs. Treat
-// the secret as a credential.
+// the secret as a credential. It needs [PermIntegrations] and the server asks
+// a session caller to have signed in recently, so it can answer with an error
+// until the user re-authenticates.
 func (s *IntegrationService) WebhookSecret(ctx context.Context, id string, opts ...RequestOption) (*ConnectionWebhookSecret, *Response, error) {
 	return fetch[ConnectionWebhookSecret](ctx, s.client, "integrations/connections/"+url.PathEscape(id)+"/webhook-secret", opts)
 }
@@ -412,14 +427,38 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 
 // --- OAuth connect flow (session-only) ---
 
+// Salesforce login servers accepted by [OAuthStartParams.Environment].
+const (
+	SalesforceProduction = "production"
+	SalesforceSandbox    = "sandbox"
+)
+
+// OAuthStartParams begins the consent flow for an OAuth provider.
+type OAuthStartParams struct {
+	// Provider is one of the Provider* constants.
+	Provider string `json:"provider"`
+	// Label names the resulting connection.
+	Label string `json:"label,omitempty"`
+	// Environment is [SalesforceProduction] or [SalesforceSandbox] and picks
+	// the Salesforce login server. Other providers ignore it.
+	Environment string `json:"environment,omitempty"`
+	// Domain is a Salesforce My Domain host to log in at. Other providers
+	// ignore it.
+	Domain string `json:"domain,omitempty"`
+}
+
 // StartOAuth begins the consent flow for an OAuth provider and returns the URL
 // to send the user to. The label, if given, names the resulting connection.
+// Use [IntegrationService.StartOAuthWith] to choose a Salesforce login server.
 func (s *IntegrationService) StartOAuth(ctx context.Context, provider, label string, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
-	body := struct {
-		Provider string `json:"provider"`
-		Label    string `json:"label,omitempty"`
-	}{Provider: provider, Label: label}
-	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", body, opts)
+	return s.StartOAuthWith(ctx, &OAuthStartParams{Provider: provider, Label: label}, opts...)
+}
+
+// StartOAuthWith is [IntegrationService.StartOAuth] with the provider options
+// a plain provider and label cannot carry, such as the Salesforce sandbox.
+// This route is session-only.
+func (s *IntegrationService) StartOAuthWith(ctx context.Context, params *OAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", params, opts)
 }
 
 // FinishOAuth exchanges the authorization code the provider redirected back
