@@ -182,7 +182,7 @@ func TestMailboxSyncRouting(t *testing.T) {
 		{"RefreshSendIdentity signature", func() error { _, _, e := c.Emails.RefreshSendIdentity(ctx, "em_1", true); return e }, "POST", "/v1/emails/em_1/identity/refresh", "", `{"import_signature":true}`},
 		{"SwitchToAppPassword", func() error { _, _, e := c.Emails.SwitchToAppPassword(ctx, "em_1", "abcd efgh"); return e }, "POST", "/v1/emails/onboarding/app-password/em_1", "", `{"app_password":"abcd efgh"}`},
 		{"StartOAuthWithParams", func() error {
-			_, _, e := c.Emails.StartOAuthWithParams(ctx, &OAuthStartParams{Provider: ProviderOutlook, LoginHint: "a@acme.io", Return: "web"})
+			_, _, e := c.Emails.StartOAuthWithParams(ctx, &MailboxOAuthStartParams{Provider: ProviderOutlook, LoginHint: "a@acme.io", Return: "web"})
 			return e
 		}, "POST", "/v1/emails/onboarding/oauth/start", "", `{"provider":"outlook","login_hint":"a@acme.io","return":"web"}`},
 

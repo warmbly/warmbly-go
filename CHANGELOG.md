@@ -3,6 +3,95 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Gateway: API keys and OAuth tokens now travel in the `X-Warmbly-Token`
+  handshake header and no longer in the URL, which the gateway refuses. A
+  refused handshake now returns a `*JoinError` carrying the server's code and
+  reason instead of a bare `ErrForbidden` or `ErrUnauthorized`; `errors.Is`
+  against those sentinels still matches for the permanent refusals, but a
+  direct `err ==` comparison does not.
+- `PoolLinkStartParams` gained `RemoteOrganizationID`, which the server now
+  requires when starting a pool link. The start body always carries it.
+- `AnalyticsService.Accounts` reads the first page only (documented); use
+  `ListAccounts` for large fleets.
+- `Assistant.Approve` now looks up the pending tool call itself, since the
+  server requires `tool_call_id`, and returns `ErrNoPendingApproval` when
+  nothing is pending.
+- List parameters are sent as one comma-separated value, as the server rejects
+  repeated query keys outside a short allowlist.
+
+### Added
+
+- `client.Placement` (inbox placement tests, batches, sender breakdown,
+  coverage, seed inboxes) and `CampaignService.PlacementMonitor`,
+  `SetPlacementMonitor`, `DeletePlacementMonitor`.
+- `CampaignService.SendPlan` and per-lead `LeadHold`, `PauseLead`,
+  `ResumeLead`, `LeadCC`, `SetLeadCC`, `SuggestLeadCC`.
+- `AnalyticsService.Direct`, `InboxTagging`, `WarmupPlacement`, `DashboardFor`,
+  `CampaignBetween`, `ListAccounts`; `APIKeyService.DeletePermanently`.
+- Mailbox imports (`Emails.PreviewImport`, `CreateImport`, `ListImports`,
+  `GetImport`, `ImportRows`, `FixImportRow`, `RetryImport`, `CancelImport`,
+  `DismissImport`, `DownloadImportFailures`), administrator grants
+  (`GrantConfig`, `ListGrants`, Google and Microsoft start and finish,
+  `CheckGrant`, `GrantUsers`, `ConnectGrantUsers`, ...), sending domains
+  (`ListDomains`, `BulkSetupDomains`, tracking, redirect and vendor
+  forwarding), inbox vendors, and per-mailbox `SetDirectTracking`,
+  `UpdateSyncFolders`, `Certificates`, `SendIdentity` and related. Most are
+  session-only.
+- `Emails.ListImages`, `UploadImage`, `DeleteImage`; background contact imports
+  (`Contacts.CreateImport` ... `DownloadImportFailures`); `Templates.Analyze`;
+  `Unibox.MoveToFolder`.
+- Salesforce (overview, settings, metadata, pickers, import sources, activity,
+  sync-now, `Contacts.Salesforce`), Apollo (key, lists, import sources,
+  enrichments), Clay settings, Slack panel methods, the community directory,
+  `SetSigningKey`, `RotateInboundURL` and `StartOAuthWith`.
+- CRM provider mode: settings, metadata, owners, sync health with retry and
+  discard, backfill, provider contacts, provider lists with preview and import,
+  `BulkUpdateTasks`, `BulkDeleteTasks`.
+- Auth: `Reauth` and its passkey, SSO and native variants, `LinkedIdentities`,
+  `UnlinkIdentity`, `RegenerateRecoveryCodes`, `ChangePasswordSession`,
+  `SendPasswordLink`, `CompleteProductTour`, `CompleteInitialPassword`,
+  `LinkSSO`, `ResetPasswordSession`, saved list layouts, remembered devices.
+- `Organization.MemberAccess`, `SetMemberAccess`, `SuggestedSenders`; OAuth app
+  `SetLogo`, `RemoveLogo`, directory listing, `WorkspaceAuthorizations`;
+  assistant `ToolPolicies`, `RevokeToolPolicy`, `ApproveToolCall`; private plan
+  offers; `PoolLink.Offer`, `Checkout`; cloud-link `SetMailboxParticipation`,
+  `EnrollMailboxAs`, `DisconnectLegacy`.
+- Gateway events `WARMUP_PLACEMENT`, `PLACEMENT_TEST_UPDATED`,
+  `DIRECT_EMAIL_OPENED`, `DIRECT_EMAIL_CLICKED`, `MAILBOX_IMPORT_PROGRESS`,
+  `CONTACT_IMPORT_PROGRESS` and `CRM_SYNCED` with typed payloads, and the
+  `IntentPlacement`, `IntentImport`, `IntentCRM`, `IntentDirectEmail` intents.
+  Open and click events carry `client_type`, `device_hidden`, `os`, `browser`.
+- About 250 `ErrCode*` constants for the documented error codes,
+  `Error.Reason`, 13 audit entity types, webhook payload types for engagement,
+  reply and warmup-placement events, `PermAppGrantable`, and
+  `RateLimit.Reset`.
+- New response and request fields across campaigns, steps, estimates,
+  dashboards, analytics, warmup, mailboxes, contacts, templates, unibox,
+  organizations, subscriptions, OAuth apps, pool link and cloud link.
+
+### Fixed
+
+- `OutreachSettings` dropped `inbox_tagging` and the newer reply-intent fields
+  on a read-then-update round trip.
+- Notification preferences dropped the placement and inbox-action categories
+  on update.
+- `OAuthAppService.UploadLogo` sent the wrong multipart field name.
+- `CRMService.ListPipelines` decoded an envelope the API does not send.
+- `SyncStatus` and `TemplateIssue` now keep fields the server returns.
+- The `OAuthAppDisabled` value replaces `OAuthAppInactive`, which never matched
+  the server.
+
+### Deprecated
+
+- `Campaign.Kind`, the `CampaignKind*` constants, `CampaignListParams.Kind`,
+  `CampaignCreateParams.Kind`, `CampaignsOverview.OneTime` (one-time campaigns
+  are retired), `OAuthAppInactive`, `WarmupDomainPlacement.Domain` and
+  `WarmupHealth.SpamScore`.
+
 ## [0.3.1] - 2026-09-07
 
 Picks up the API changes that landed while 0.3.0 was being prepared. Additive,

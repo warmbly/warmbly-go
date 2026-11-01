@@ -16,20 +16,7 @@ import (
 // 404.
 
 // Error codes carried in [Error.Code] by vendor operations.
-const (
-	// ErrCodeMailboxVendorUnknown means the vendor id is not in the catalog.
-	ErrCodeMailboxVendorUnknown = "mailbox_vendor_unknown"
-	// ErrCodeMailboxVendorInvalidFields means a required credential field is
-	// missing or malformed.
-	ErrCodeMailboxVendorInvalidFields = "mailbox_vendor_invalid_fields"
-	// ErrCodeMailboxVendorUnauthorized means the vendor refused the API key.
-	ErrCodeMailboxVendorUnauthorized = "mailbox_vendor_unauthorized"
-	// ErrCodeMailboxVendorRateLimited means the vendor is rate limiting the
-	// account; retry later.
-	ErrCodeMailboxVendorRateLimited = "mailbox_vendor_rate_limited"
-	// ErrCodeMailboxVendorUnavailable means the vendor did not answer.
-	ErrCodeMailboxVendorUnavailable = "mailbox_vendor_unavailable"
-)
+const ()
 
 // VendorField is one credential a vendor asks for when connecting.
 type VendorField struct {

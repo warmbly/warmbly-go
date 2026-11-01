@@ -17,24 +17,7 @@ import (
 // Instances without the feature answer 404.
 
 // Error codes carried in [Error.Code] by grant operations.
-const (
-	// ErrCodeMailboxGrantNotConfigured means this instance has no Google
-	// service account or Microsoft app for admin connections.
-	ErrCodeMailboxGrantNotConfigured = "mailbox_grant_not_configured"
-	// ErrCodeGoogleDelegationUnauthorized means Google refused the
-	// domain-wide delegation; add the client ID and scopes from
-	// [GrantConfig] in the Google Admin console.
-	ErrCodeGoogleDelegationUnauthorized = "google_delegation_unauthorized"
-	// ErrCodeMicrosoftConsentMissing means a Microsoft administrator has not
-	// approved Warmbly for the organization yet.
-	ErrCodeMicrosoftConsentMissing = "microsoft_consent_missing"
-	// ErrCodeMailboxGrantStateInvalid means the sign-in state is unknown,
-	// expired or already used.
-	ErrCodeMailboxGrantStateInvalid = "mailbox_grant_state_invalid"
-	// ErrCodeMailboxGrantProofMissing means the DNS TXT record proving the
-	// domain was not found.
-	ErrCodeMailboxGrantProofMissing = "mailbox_grant_proof_missing"
-)
+const ()
 
 // Grant providers in [DomainGrant.Provider].
 const (

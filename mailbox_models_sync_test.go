@@ -422,7 +422,7 @@ func TestMailboxSettingsDecode(t *testing.T) {
 	}
 
 	c = emailFixtureClient(t, http.StatusOK, `{"url": "https://login.microsoftonline.com/x", "state": "s", "admin_consent_url": "https://login.microsoftonline.com/admin"}`, &got)
-	start, _, err := c.Emails.StartOAuthWithParams(context.Background(), &OAuthStartParams{Provider: ProviderOutlook})
+	start, _, err := c.Emails.StartOAuthWithParams(context.Background(), &MailboxOAuthStartParams{Provider: ProviderOutlook})
 	if err != nil || start.AdminConsentURL == "" {
 		t.Errorf("StartOAuthWithParams = %+v %v", start, err)
 	}

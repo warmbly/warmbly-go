@@ -16,26 +16,7 @@ import (
 // workspace answers 404 with the code "sending_domain_not_in_workspace".
 
 // Error codes carried in [Error.Code] by sending-domain operations.
-const (
-	// ErrCodeSendingDomainNotInWorkspace means the workspace has no mailbox on
-	// the domain.
-	ErrCodeSendingDomainNotInWorkspace = "sending_domain_not_in_workspace"
-	// ErrCodeSendingDomainSharedProvider means the domain is a shared mail
-	// provider such as gmail.com, which no workspace can redirect or track.
-	ErrCodeSendingDomainSharedProvider = "sending_domain_shared_provider"
-	// ErrCodeTrackingHostNotConfigured means open and click tracking is not set
-	// up on this instance.
-	ErrCodeTrackingHostNotConfigured = "tracking_host_not_configured"
-	// ErrCodeDomainRedirectInvalidTarget means the redirect destination is not
-	// an acceptable URL.
-	ErrCodeDomainRedirectInvalidTarget = "domain_redirect_invalid_target"
-	// ErrCodeDomainRedirectTaken means another workspace holds the domain's
-	// redirect.
-	ErrCodeDomainRedirectTaken = "domain_redirect_taken"
-	// ErrCodeReauthRequired means the call needs a recent sign-in. Confirm the
-	// password (see [AuthService]) and repeat it.
-	ErrCodeReauthRequired = "reauth_required"
-)
+const ()
 
 // DNSRecord is one record the customer adds at their DNS provider, and whether
 // it is in place.

@@ -193,8 +193,8 @@ func (s *EmailService) SwitchToAppPassword(ctx context.Context, id, appPassword 
 	return send[Email](ctx, s.client.post, "emails/onboarding/app-password/"+url.PathEscape(id), body, opts)
 }
 
-// OAuthStartParams are the options of [EmailService.StartOAuthWithParams].
-type OAuthStartParams struct {
+// MailboxOAuthStartParams are the options of [EmailService.StartOAuthWithParams].
+type MailboxOAuthStartParams struct {
 	// Provider is [ProviderGmail] or [ProviderOutlook].
 	Provider string `json:"provider"`
 	// LoginHint preselects the mailbox in the provider's account picker.
@@ -208,6 +208,6 @@ type OAuthStartParams struct {
 // return mode. A Microsoft start also fills [OAuthStartResult.AdminConsentURL],
 // which lets an administrator approve sign-in for the whole organization. It
 // is session-only.
-func (s *EmailService) StartOAuthWithParams(ctx context.Context, params *OAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
+func (s *EmailService) StartOAuthWithParams(ctx context.Context, params *MailboxOAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
 	return send[OAuthStartResult](ctx, s.client.post, "emails/onboarding/oauth/start", params, opts)
 }
