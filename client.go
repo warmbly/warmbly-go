@@ -725,6 +725,8 @@ type FileUpload struct {
 
 // postMultipart uploads a file (plus any extra form fields) as
 // multipart/form-data. The whole body is buffered so retries can replay it.
+//
+//nolint:unparam // the field name is a parameter for forward use
 func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file *FileUpload, fields map[string]string, out any, opts ...RequestOption) (*Response, error) {
 	if file == nil || file.Content == nil {
 		return nil, errors.New("warmbly: a file is required for this upload")

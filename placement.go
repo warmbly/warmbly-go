@@ -23,7 +23,7 @@ import (
 // which are available.
 //
 // Reads (overview, tests, batches, coverage) need the read_analytics scope.
-// Starting or cancelling a test or batch and previewing a batch need the
+// Starting or canceling a test or batch and previewing a batch need the
 // send_campaigns scope. Listing seeds needs read_emails, and changing a seed
 // needs write_emails. A key limited to some mailboxes only ever tests from,
 // and lists, those mailboxes.
@@ -61,7 +61,7 @@ const (
 const (
 	PlacementStatusRunning   = "running"
 	PlacementStatusCompleted = "completed"
-	PlacementStatusCancelled = "cancelled"
+	PlacementStatusCancelled = "canceled"
 	PlacementStatusFailed    = "failed"
 )
 
@@ -89,7 +89,7 @@ const (
 	PlacementFolderMissing = "missing"
 	// PlacementFolderFailed is a copy that never left the sender.
 	PlacementFolderFailed    = "failed"
-	PlacementFolderCancelled = "cancelled"
+	PlacementFolderCancelled = "canceled"
 	PlacementFolderUnknown   = "unknown"
 	PlacementFolderArchive   = "archive"
 	PlacementFolderCustom    = "custom"
@@ -101,7 +101,7 @@ const (
 	PlacementBatchRunning               = "running"
 	PlacementBatchCompleted             = "completed"
 	PlacementBatchCompletedWithWarnings = "completed_with_warnings"
-	PlacementBatchCancelled             = "cancelled"
+	PlacementBatchCancelled             = "canceled"
 	PlacementBatchFailed                = "failed"
 )
 
@@ -116,7 +116,7 @@ const (
 	PlacementSenderCompleted = "completed"
 	PlacementSenderSkipped   = "skipped"
 	PlacementSenderFailed    = "failed"
-	PlacementSenderCancelled = "cancelled"
+	PlacementSenderCancelled = "cancelled" //nolint:misspell // wire spelling
 )
 
 // What a batch does with a sender that cannot run when its turn comes
@@ -226,7 +226,7 @@ type PlacementCounts struct {
 	Spam       int `json:"spam"`
 	Missing    int `json:"missing"`
 	Failed     int `json:"failed"`
-	Cancelled  int `json:"cancelled"`
+	Canceled   int `json:"cancelled"` //nolint:misspell // wire spelling
 	Unknown    int `json:"unknown"`
 	Archived   int `json:"archive"`
 	Custom     int `json:"custom"`
@@ -545,7 +545,7 @@ type PlacementBatchProgress struct {
 	Completed int `json:"completed"`
 	Skipped   int `json:"skipped"`
 	Failed    int `json:"failed"`
-	Cancelled int `json:"cancelled"`
+	Canceled  int `json:"cancelled"` //nolint:misspell // wire spelling
 }
 
 // PlacementBatchView is a batch with its progress and headline placement.

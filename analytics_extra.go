@@ -290,7 +290,7 @@ type InboxTagResult struct {
 	Model       string          `json:"model"`
 	InputTokens int             `json:"input_tokens"`
 	// Actions is what the workspace's switches let this verdict do: "hold",
-	// "stop", "task" or "suppress". Empty for a verdict that only labelled.
+	// "stop", "task" or "suppress". Empty for a verdict that only labeled.
 	Actions []string `json:"actions"`
 	// ReturnDate is the out-of-office return date the model was asked to
 	// confirm (YYYY-MM-DD); nil when it was not asked.
