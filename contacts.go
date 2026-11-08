@@ -876,8 +876,8 @@ type ContactVerificationOverview struct {
 
 // How firm a [ContactNextAction]'s timing is, in [ContactNextAction.State].
 const (
-	// NextActionDue carries ScheduledAt, the slot the scheduler would give the
-	// step on its next pass. Leads ahead in the queue can still push it later.
+	// NextActionDue carries ScheduledAt, the campaign's next wakeup. Leads
+	// ahead in the queue can still push the step later.
 	NextActionDue = "due"
 	// NextActionWaiting carries NotBefore and a Constraint.
 	NextActionWaiting = "waiting"
@@ -898,8 +898,10 @@ type ContactNextAction struct {
 	Subject   string  `json:"subject,omitempty"`
 	// State is one of the NextAction* constants.
 	State string `json:"state"`
-	// ScheduledAt is set only when due; NotBefore is the earliest the hard
-	// constraints allow; Constraint names the gate in user-facing words.
+	// ScheduledAt is set only when due, and is when the campaign's chain next
+	// wakes up and works its queue (a stored wakeup, stable across reads).
+	// NotBefore is the earliest the hard constraints allow; Constraint names
+	// the gate in user-facing words.
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 	NotBefore   *time.Time `json:"not_before,omitempty"`
 	Constraint  string     `json:"constraint,omitempty"`
@@ -912,6 +914,8 @@ type ContactCampaignStep struct {
 	Kind     string `json:"kind"`
 	Position int    `json:"position"`
 	Subject  string `json:"subject,omitempty"`
+	// SenderEmail is the mailbox that sent this step, empty until it is sent.
+	SenderEmail string `json:"sender_email,omitempty"`
 
 	SentAt    *time.Time `json:"sent_at,omitempty"`
 	OpenedAt  *time.Time `json:"opened_at,omitempty"`
@@ -934,6 +938,12 @@ type ContactCampaignState struct {
 	CampaignStatus string `json:"campaign_status"`
 	// LeadStatus is one of the LeadStatus* constants.
 	LeadStatus string `json:"lead_status"`
+	// SenderID and SenderEmail are the mailbox that sent this lead's latest
+	// step, which every follow-up keeps unless FollowUpSender rotates them.
+	// Empty until the first email went out.
+	SenderID       *string        `json:"sender_id,omitempty"`
+	SenderEmail    string         `json:"sender_email,omitempty"`
+	FollowUpSender FollowUpSender `json:"follow_up_sender"`
 	// FailureReason is the worker's reason for the last failed send.
 	FailureReason string `json:"failure_reason,omitempty"`
 
@@ -945,6 +955,13 @@ type ContactCampaignState struct {
 	CurrentStep  *ContactCampaignStep `json:"current_step,omitempty"`
 	LastAction   string               `json:"last_action,omitempty"`
 	LastActionAt *time.Time           `json:"last_action_at,omitempty"`
+
+	// Hold is the per-lead pause, present only while it is live. See
+	// [CampaignService.LeadHold].
+	Hold *LeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this
+	// campaign. See [CampaignService.LeadCC].
+	CC []CampaignLeadCC `json:"cc"`
 
 	// Next is nil once the flow has ended for the contact; EndedReason says
 	// why.

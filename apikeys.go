@@ -372,6 +372,15 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
 }
 
+// Delete permanently removes an API key that can no longer authenticate: one
+// that is revoked or past its expiry. Removing it takes it out of the list,
+// while its usage history is gone with it. A key that is still active is a 409;
+// [APIKeyService.Revoke] it first. An OAuth token cannot delete keys. Needs the
+// api_keys scope.
+func (s *APIKeyService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id)+"/permanent", opts...)
+}
+
 // RevokeSelf revokes the key this client is authenticated with. It is the one
 // key route that needs no scope: a credential must always be able to end
 // itself, which is what a CLI logout promises. The reason is stored on the key

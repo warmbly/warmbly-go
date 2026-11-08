@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -17,8 +18,15 @@ type OAuthAppService service
 
 // OAuth application states returned in [OAuthApp.Status].
 const (
-	OAuthAppActive   = "active"
-	OAuthAppInactive = "inactive"
+	OAuthAppActive = "active"
+	// OAuthAppDisabled is what the server reports for an app its owner has
+	// turned off.
+	OAuthAppDisabled = "disabled"
+	// OAuthAppInactive is the old name of [OAuthAppDisabled] and carries the
+	// same value.
+	//
+	// Deprecated: use [OAuthAppDisabled].
+	OAuthAppInactive = OAuthAppDisabled
 )
 
 // OAuthApp is a registered OAuth 2.1 application. The client secret is never
@@ -56,7 +64,8 @@ type OAuthApp struct {
 	// event the grant's scopes allow.
 	WebhookEvents []string `json:"webhook_events,omitempty"`
 
-	// Status is [OAuthAppActive] or [OAuthAppInactive].
+	// Status is [OAuthAppActive] or [OAuthAppDisabled]. An app can also be
+	// suspended by an operator (see SuspendedAt), whatever its status.
 	Status string `json:"status"`
 	// IsPublic marks a client that authenticates with PKCE and no secret, such
 	// as a native app or an MCP client. PKCE is mandatory for these.
@@ -196,11 +205,114 @@ func (s *OAuthAppService) UploadLogo(ctx context.Context, file *FileUpload, opts
 	var out struct {
 		LogoURL string `json:"logo_url"`
 	}
-	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "logo", file, nil, &out, opts...)
+	resp, err := s.client.postMultipart(ctx, "oauth/application-logo", "file", file, nil, &out, opts...)
 	if err != nil {
 		return "", resp, err
 	}
 	return out.LogoURL, resp, nil
+}
+
+// SetLogo uploads an image (PNG or JPEG, at least 128 pixels on each side, up
+// to 2 MB; it is re-encoded) as the app's logo and returns the updated app.
+// The previous image is deleted once nothing points at it. A suspended app is
+// refused. Needs the api_keys scope, and is not available to an OAuth token.
+func (s *OAuthAppService) SetLogo(ctx context.Context, id string, file *FileUpload, opts ...RequestOption) (*OAuthApp, *Response, error) {
+	out := new(OAuthApp)
+	resp, err := s.client.postMultipart(ctx, "oauth/applications/"+url.PathEscape(id)+"/logo", "file", file, nil, out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
+}
+
+// RemoveLogo clears the app's logo and returns the updated app. Needs the
+// api_keys scope.
+func (s *OAuthAppService) RemoveLogo(ctx context.Context, id string, opts ...RequestOption) (*OAuthApp, *Response, error) {
+	out := new(OAuthApp)
+	resp, err := s.client.call(ctx, http.MethodDelete, "oauth/applications/"+url.PathEscape(id)+"/logo", nil, out, opts)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
+}
+
+// Statuses of an [AppListing] ([AppListing.Status]). New statuses may appear.
+const (
+	// AppListingPublished is reachable by its link, and listed in discovery
+	// once enough workspaces use it.
+	AppListingPublished = "published"
+	// AppListingFeatured was picked by an operator and is always listed.
+	AppListingFeatured = "featured"
+	// AppListingHidden was taken down by an operator and is reachable nowhere.
+	AppListingHidden = "hidden"
+)
+
+// AppListing is one OAuth app's page in the community directory.
+type AppListing struct {
+	ApplicationID  string `json:"application_id"`
+	OrganizationID string `json:"organization_id"`
+	// Slug is the listing's URL name.
+	Slug        string `json:"slug"`
+	Tagline     string `json:"tagline"`
+	Description string `json:"description"`
+	// Category is one of the integration catalog categories, or "ai" or
+	// "other".
+	Category   string `json:"category"`
+	InstallURL string `json:"install_url"`
+	SupportURL string `json:"support_url"`
+	PrivacyURL string `json:"privacy_url"`
+	// Status is one of the AppListing* constants.
+	Status      string     `json:"status"`
+	StatusNote  string     `json:"status_note,omitempty"`
+	StatusAt    *time.Time `json:"status_at,omitempty"`
+	SubmittedAt time.Time  `json:"submitted_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// AppListingParams is the developer's publish or edit payload. It replaces
+// the listing, so send the complete desired state.
+type AppListingParams struct {
+	Slug        string `json:"slug"`
+	Tagline     string `json:"tagline"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	InstallURL  string `json:"install_url"`
+	SupportURL  string `json:"support_url"`
+	PrivacyURL  string `json:"privacy_url"`
+}
+
+// Listing returns the app's community directory listing, or nil when it is
+// not published. Needs the api_keys scope.
+func (s *OAuthAppService) Listing(ctx context.Context, id string, opts ...RequestOption) (*AppListing, *Response, error) {
+	var out struct {
+		Listing *AppListing `json:"listing"`
+	}
+	resp, err := s.client.get(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Listing, resp, nil
+}
+
+// PutListing publishes the app in the community directory or edits its
+// listing. The body is the whole listing, so a retry lands on the same one.
+// Needs the api_keys scope and a credential that belongs to a member.
+func (s *OAuthAppService) PutListing(ctx context.Context, id string, params *AppListingParams, opts ...RequestOption) (*AppListing, *Response, error) {
+	var out struct {
+		Listing *AppListing `json:"listing"`
+	}
+	resp, err := s.client.put(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", params, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Listing, resp, nil
+}
+
+// DeleteListing unpublishes the app from the community directory. Needs the
+// api_keys scope.
+func (s *OAuthAppService) DeleteListing(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "oauth/applications/"+url.PathEscape(id)+"/listing", opts...)
 }
 
 // WebhookSecret returns the signing secret for the app-level webhook
