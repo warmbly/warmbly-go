@@ -71,6 +71,14 @@ type TemplateIssue struct {
 	// Code is the stable identifier for the rule that fired.
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Field is "subject" or "body" when the issue lives in exactly one of
+	// them, and empty when it spans both or concerns the send as a whole.
+	Field string `json:"field,omitempty"`
+	// Spans are the exact fragments that triggered the issue, in reading
+	// order. Empty when there is nothing to point at.
+	Spans []TemplateSpan `json:"spans,omitempty"`
+	// Suggestion is the concrete fix, in one line.
+	Suggestion string `json:"suggestion,omitempty"`
 }
 
 // TemplateScoreParams is the copy to score. Pass whichever parts exist.
