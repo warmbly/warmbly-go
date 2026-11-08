@@ -43,6 +43,10 @@ type Error struct {
 	Message string `json:"message"`
 	// Code is a stable, machine-readable error code.
 	Code string `json:"code"`
+	// Reason is an optional finer key a few codes carry when the same code has
+	// more than one next step. Treat an unknown or empty Reason as the plain
+	// Code.
+	Reason string `json:"reason,omitempty"`
 	// RequestID identifies the request server-side and should be included in
 	// any support correspondence.
 	RequestID string `json:"request_id"`
@@ -221,6 +225,113 @@ const (
 	// sign-in was given. The handoff is deliberately non-transferable: a
 	// forwarded sign-in link cannot sign the recipient in.
 	ErrCodeSSOWrongBrowser = "sso_wrong_browser"
+)
+
+// Further stable codes, grouped by where they surface. Codes that belong to a
+// single resource family (CRM sync, mailbox vendors, placement internals, pool
+// and cloud links, lead providers) are documented on the service that returns
+// them; branch on [Error.HasCode] with the literal there. Treat any code not
+// listed as opaque: the server adds them over time.
+const (
+	// ErrCodeDuplicateQueryParameter and ErrCodeDuplicateHeader are 400s for a
+	// query parameter, or one of Authorization, X-Warmbly-Token,
+	// Idempotency-Key and Origin, sent more than once.
+	ErrCodeDuplicateQueryParameter = "duplicate_query_parameter"
+	ErrCodeDuplicateHeader         = "duplicate_header"
+	// ErrCodeInvalidFilter, ErrCodeInvalidSortBy, ErrCodeInvalidSetting,
+	// ErrCodeInvalidTemplate and ErrCodeInvalidRecipient are 400s for a
+	// filter, sort, setting, step template or recipient the server cannot
+	// read. The message names the field.
+	ErrCodeInvalidFilter    = "invalid_filter"
+	ErrCodeInvalidSortBy    = "invalid_sort_by"
+	ErrCodeInvalidSetting   = "invalid_setting"
+	ErrCodeInvalidTemplate  = "invalid_template"
+	ErrCodeInvalidRecipient = "invalid_recipient"
+	// ErrCodeRecipientSuppressed is the 400 from a send to an address on the
+	// workspace suppression list, directly or through its domain.
+	ErrCodeRecipientSuppressed = "recipient_suppressed"
+	// ErrCodeEmptyStepBody is the 400 from starting a campaign with an email
+	// step that has no body.
+	ErrCodeEmptyStepBody = "empty_step_body"
+	// ErrCodeTooManyContacts, ErrCodeTooManyTasks and ErrCodeSelectionTooLarge
+	// are 400s for a bulk request over its id, exclusion or selection limit.
+	// Split the work into batches or narrow the filter.
+	ErrCodeTooManyContacts   = "too_many_contacts"
+	ErrCodeTooManyTasks      = "too_many_tasks"
+	ErrCodeSelectionTooLarge = "selection_too_large"
+
+	// Image upload refusals (400): the file is checked by its contents.
+	ErrCodeImageUnreadable         = "image_unreadable"
+	ErrCodeImageFormatNotAllowed   = "image_format_not_allowed"
+	ErrCodeImageTooLarge           = "image_too_large"
+	ErrCodeImageDimensionsTooLarge = "image_dimensions_too_large"
+	ErrCodeImageTooSmall           = "image_too_small"
+
+	// ErrCodePasswordBreached is the 400 for a password found in a public
+	// breach list.
+	ErrCodePasswordBreached = "password_breached"
+	// ErrCodePasswordReused is the 400 for choosing the issued initial
+	// password as the new one.
+	ErrCodePasswordReused = "password_reused"
+	// ErrCodePasswordChangeRequired is the 403 for a sign-in that must first
+	// replace an issued initial password.
+	ErrCodePasswordChangeRequired = "password_change_required"
+	// ErrCodeLastSignInMethod is the 409 for removing the only way into an
+	// account.
+	ErrCodeLastSignInMethod = "last_sign_in_method"
+	// ErrCodePasswordLoginDisabled is the 403 on a server that turned
+	// password sign-in off.
+	ErrCodePasswordLoginDisabled = "password_login_disabled"
+
+	// ErrCodeReauthRequired is the 403 for an action that needs a recent proof
+	// of identity. Confirm with the reauth endpoint, then retry.
+	ErrCodeReauthRequired = "reauth_required"
+	// ErrCodeMemberAccessRestricted is the 403 when the caller's
+	// selected-resource scope does not cover the route.
+	ErrCodeMemberAccessRestricted = "member_access_restricted"
+	// ErrCodeAPIKeyPermissionsExceedCaller is the 403 for creating or editing
+	// an API key with more power than its creator has.
+	ErrCodeAPIKeyPermissionsExceedCaller = "api_key_permissions_exceed_caller"
+	// ErrCodeAPIKeyHolderLeft is the 401 for a key whose creator is no longer
+	// a member of the workspace.
+	ErrCodeAPIKeyHolderLeft = "api_key_holder_left"
+	// ErrCodeAPIKeyMailboxLimited is the 403 for a mailbox-limited key calling
+	// a surface that acts across the whole workspace.
+	ErrCodeAPIKeyMailboxLimited = "api_key_mailbox_limited"
+
+	// ErrCodePaymentMethodRequired is the 409 for a top-up with no saved card.
+	ErrCodePaymentMethodRequired = "payment_method_required"
+	// ErrCodeRechargeTooSmall is the 422 for an auto-reload amount that would
+	// not lift the balance past its threshold.
+	ErrCodeRechargeTooSmall = "recharge_too_small"
+	// ErrCodePlacementQuotaExceeded and ErrCodePlacementNotEntitled are 402s:
+	// no free placement tests left this month, or a plan without them.
+	ErrCodePlacementQuotaExceeded = "placement_quota_exceeded"
+	ErrCodePlacementNotEntitled   = "placement_not_entitled"
+	// ErrCodePlacementTooManyRunning and ErrCodePlacementTooManyBatches are
+	// 429s for too many tests or batches running at once.
+	ErrCodePlacementTooManyRunning = "placement_too_many_running"
+	ErrCodePlacementTooManyBatches = "placement_too_many_batches"
+)
+
+// Send-admission diagnostics. These appear in campaign activity and task
+// failure metadata, not as HTTP response codes.
+const (
+	// SendCodeCampaignDailyLimitReached: the campaign hit its UTC-day maximum
+	// for this sending mailbox.
+	SendCodeCampaignDailyLimitReached = "CAMPAIGN_DAILY_LIMIT_REACHED"
+	// SendCodeMailboxSendingPlanDenied: the mailbox's sending plan is
+	// unavailable, outside working hours or its quota is spent. The scheduler
+	// retries when capacity opens.
+	SendCodeMailboxSendingPlanDenied = "MAILBOX_SENDING_PLAN_DENIED"
+	// SendCodeManualSendLimitReached: a unibox send would exceed the
+	// mailbox's fair-use allowance.
+	SendCodeManualSendLimitReached = "MANUAL_SEND_LIMIT_REACHED"
+	// SendCodeRecipientSuppressed: a recipient is on the suppression list.
+	SendCodeRecipientSuppressed = "RECIPIENT_SUPPRESSED"
+	// SendCodeSendAdmissionDenied: another send-authority, recipient or
+	// capacity check denied admission.
+	SendCodeSendAdmissionDenied = "SEND_ADMISSION_DENIED"
 )
 
 // Sentinel errors for matching API failures with errors.Is. They carry only a

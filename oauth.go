@@ -38,7 +38,10 @@ type OAuthApp struct {
 	// to. They are matched exactly, not by prefix.
 	RedirectURIs []string `json:"redirect_uris"`
 	// Scopes is the permission bitmask the app may request, built from the
-	// Perm* constants.
+	// Perm* constants. Any scope except [PermAPIKeys] (see
+	// [PermAppGrantable]). A token carries the intersection of these, the
+	// scopes the authorize request asked for, and the scopes the approving
+	// member's role covers, re-checked on every request.
 	Scopes uint64 `json:"scopes"`
 
 	// AllowedWebhookDomains constrains the host of any webhook endpoint the
@@ -61,6 +64,12 @@ type OAuthApp struct {
 	// DynamicallyRegistered is true for clients that self-registered through
 	// the RFC 7591 endpoint.
 	DynamicallyRegistered bool `json:"dynamically_registered"`
+	// SuspendedAt is set when the instance's operators suspended the app. A
+	// suspended app cannot sign anyone in, its tokens stop working and its
+	// webhook deliveries stop; only an operator can lift it.
+	SuspendedAt *time.Time `json:"suspended_at,omitempty"`
+	// SuspendedReason says why, when SuspendedAt is set.
+	SuspendedReason string `json:"suspended_reason,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

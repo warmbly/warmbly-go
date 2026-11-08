@@ -8,6 +8,7 @@ package wsconn
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -159,7 +160,11 @@ func Dial(ctx context.Context, urlStr string, header http.Header) (*Conn, *http.
 	if resp.StatusCode != http.StatusSwitchingProtocols ||
 		!strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
 		!headerContainsToken(resp.Header, "Connection", "upgrade") {
+		// Keep a small copy of the refusal body: the gateway explains a
+		// refused handshake in JSON.
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(buf))
 		conn.Close()
 		return nil, resp, fmt.Errorf("wsconn: handshake failed: status %d", resp.StatusCode)
 	}

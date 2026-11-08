@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -59,8 +60,8 @@ const stableSession = 30 * time.Second
 const maxJoinRetryDelay = 2 * time.Minute
 
 // Codes carried in [JoinError.Code]. The gateway uses the same set for a
-// refused socket handshake and for a refused channel join, though only the join
-// path delivers them in a machine-readable body today.
+// refused socket handshake and for a refused channel join. A refused handshake
+// is an HTTP 403 whose JSON body carries {code, reason}.
 const (
 	// JoinCodeUnauthenticated means no credential was presented at all.
 	JoinCodeUnauthenticated = 4003
@@ -113,6 +114,12 @@ const (
 	JoinReasonInvalidCampaignID  = "invalid_campaign_id"
 	JoinReasonInvalidAccountID   = "invalid_account_id"
 	JoinReasonInvalidOperationID = "invalid_operation_id"
+	// JoinReasonJWTRequired, JoinReasonAdminMFARequired and
+	// JoinReasonNotAnAdmin are the refusals of the platform admin feed, which
+	// is not open to developers.
+	JoinReasonJWTRequired      = "jwt_required"
+	JoinReasonAdminMFARequired = "admin_mfa_required"
+	JoinReasonNotAnAdmin       = "not_an_admin"
 )
 
 // ErrUnauthorized is returned by [Client.Open] when the credential is rejected.
@@ -630,7 +637,7 @@ func (c *Client) runOnce(ctx context.Context) (joined bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), nil)
+	conn, resp, derr := wsconn.Dial(connCtx, c.socketURL(), c.handshakeHeader())
 	if derr != nil {
 		// The socket refuses the upgrade at the HTTP layer when the credential
 		// is bad, so a dial failure can be terminal rather than transient.
@@ -797,15 +804,27 @@ func (c *Client) handleRefusal(ctx context.Context, conn *wsconn.Conn, book *joi
 }
 
 // handshakeError classifies a refused websocket upgrade. The gateway answers a
-// connect-level refusal with an HTTP status and no machine-readable body — the
-// reason never reaches the client — so this can only separate "bad credential"
-// from "not permitted", and returns nil for anything else so the caller reports
-// the transport error instead.
+// connect-level refusal with an HTTP 403 and a JSON body {code, reason}, which
+// this decodes into a [JoinError]. When the body is absent (a proxy in the way,
+// an older server) it can only separate "bad credential" from "not permitted"
+// by status, and returns nil for anything else so the caller reports the
+// transport error instead.
 func handshakeError(resp *http.Response) error {
 	if resp == nil {
 		return nil
 	}
-	// wsconn has already closed the body on a failed handshake.
+	// The gateway explains a connect-level refusal with {code, reason}
+	// (plus retry_after_ms when rate limited); wsconn leaves the body readable.
+	if resp.Body != nil {
+		if raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096)); len(raw) > 0 {
+			var probe struct {
+				Code int `json:"code"`
+			}
+			if json.Unmarshal(raw, &probe) == nil && probe.Code != 0 {
+				return newJoinError("", raw)
+			}
+		}
+	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
@@ -815,14 +834,33 @@ func handshakeError(resp *http.Response) error {
 	return nil
 }
 
-// socketURL builds the dial URL, carrying the credential and wire version.
+// headerCredential reports whether the credential is an API key (wmbly_) or an
+// OAuth access token (wmat_). The gateway refuses those in the URL with code
+// 4003 and wants them in the X-Warmbly-Token handshake header; only a
+// short-lived connection JWT belongs in the query string.
+func (c *Client) headerCredential() bool {
+	return strings.HasPrefix(c.token, "wmbly_") || strings.HasPrefix(c.token, "wmat_")
+}
+
+// handshakeHeader returns the extra headers for the WebSocket upgrade.
+func (c *Client) handshakeHeader() http.Header {
+	if !c.headerCredential() {
+		return nil
+	}
+	return http.Header{"X-Warmbly-Token": []string{c.token}}
+}
+
+// socketURL builds the dial URL, carrying the wire version and, for a
+// connection JWT, the credential.
 func (c *Client) socketURL() string {
 	u, err := url.Parse(c.url)
 	if err != nil {
 		return c.url
 	}
 	q := u.Query()
-	q.Set("token", c.token)
+	if !c.headerCredential() {
+		q.Set("token", c.token)
+	}
 	q.Set("vsn", protocolVersion)
 	u.RawQuery = q.Encode()
 	return u.String()
