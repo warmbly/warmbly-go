@@ -86,6 +86,10 @@ type Client struct {
 	Automations *AutomationService
 	// LeadSync manages Google Sheets to contacts sync.
 	LeadSync *LeadSyncService
+	// Leads is the lead finder: map search, enrichment and lead-to-contact.
+	Leads *LeadService
+	// EmailImages manages the image library for email bodies.
+	EmailImages *EmailImageService
 
 	// Generation writes and rewrites copy with AI.
 	Generation *GenerationService
@@ -198,6 +202,8 @@ func New(opts ...Option) (*Client, error) {
 	c.Integrations = (*IntegrationService)(&c.common)
 	c.Automations = (*AutomationService)(&c.common)
 	c.LeadSync = (*LeadSyncService)(&c.common)
+	c.Leads = (*LeadService)(&c.common)
+	c.EmailImages = (*EmailImageService)(&c.common)
 
 	c.Generation = (*GenerationService)(&c.common)
 	c.Skills = (*SkillService)(&c.common)
