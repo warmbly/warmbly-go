@@ -540,6 +540,8 @@ type ContactNote struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 	// User is the note's author, joined in on read.
 	User *User `json:"user,omitempty"`
+	// External is set when the note lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // Contact activity types returned in [ContactActivity.ActivityType].
@@ -1083,6 +1085,17 @@ type ContactImportPreview struct {
 	// proposes [ImportTargetVerificationStatus] itself when a column's header
 	// or values look like another service's results.
 	SuggestedMapping []ImportColumnMapping `json:"suggested_mapping"`
+	// InferredColumns are the indexes of columns whose suggestion came from
+	// the AI judgment rather than the header or the values, worth a second
+	// look.
+	InferredColumns []int `json:"inferred_columns,omitempty"`
+	// ColumnStats describes every column over the whole file rather than the
+	// sample, so a mapper can show how full a column is. It is set on
+	// background imports ([ContactService.CreateImport]) only.
+	ColumnStats []ContactImportColumnStats `json:"column_stats,omitempty"`
+	// MappingSource is one of the ImportMappingSource* constants: where
+	// SuggestedMapping came from. Empty on a synchronous preview.
+	MappingSource string `json:"mapping_source,omitempty"`
 }
 
 // ContactImportParams is the configuration committed alongside the file.
@@ -1102,6 +1115,10 @@ type ContactImportParams struct {
 	// SegmentIDs pins every row into these segments as a manual include
 	// override: imported, updated and skipped-but-matched contacts alike.
 	SegmentIDs []string `json:"segment_ids,omitempty"`
+	// SkipActiveInOtherCampaigns keeps an existing contact out of CampaignIDs
+	// while their sequence is still running in another campaign. The row
+	// itself is imported as usual.
+	SkipActiveInOtherCampaigns bool `json:"skip_active_in_other_campaigns,omitempty"`
 	// SubscribedDefault is what new contacts inherit when no subscribed column
 	// was mapped. It defaults to true server-side.
 	SubscribedDefault *bool `json:"subscribed_default,omitempty"`
@@ -1151,6 +1168,10 @@ type ContactImportResult struct {
 	// totals.
 	Errors          []ImportRowError `json:"errors,omitempty"`
 	ErrorsTruncated bool             `json:"errors_truncated,omitempty"`
+	// SegmentsPinned is nil when the import had no segment targets. With
+	// targets it is true when every membership write landed and false when
+	// one did not, with the reason among the notes.
+	SegmentsPinned *bool `json:"segments_pinned,omitempty"`
 	// Quality is the file's address-level assessment.
 	Quality *ContactImportQuality `json:"quality,omitempty"`
 }

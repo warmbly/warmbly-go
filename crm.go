@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -26,6 +27,8 @@ type Pipeline struct {
 	Stages    []PipelineStage `json:"stages,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	// External is set when the pipeline is managed in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // PipelineStage is one column of a pipeline.
@@ -39,6 +42,11 @@ type PipelineStage struct {
 	DealCount int       `json:"deal_count,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Closed, Won and Probability come from a connected CRM's stage metadata.
+	// They are absent on stages of Warmbly's own CRM.
+	Closed      bool     `json:"closed,omitempty"`
+	Won         bool     `json:"won,omitempty"`
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // PipelineCreateParams creates a pipeline, optionally with its initial stages.
@@ -103,6 +111,8 @@ type Deal struct {
 	Contact      *Contact       `json:"contact,omitempty"`
 	Stage        *PipelineStage `json:"stage,omitempty"`
 	CampaignName *string        `json:"campaign_name,omitempty"`
+	// External is set when the deal lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // DealCreateParams creates a deal. PipelineID, StageID and Name are required.
@@ -278,6 +288,8 @@ type CRMTask struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// External is set when the task lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // CRMTaskCreateParams creates a task. Title is required.
@@ -529,4 +541,61 @@ func (s *CRMService) UpdateTask(ctx context.Context, id string, params *CRMTaskU
 // DeleteTask removes a CRM task.
 func (s *CRMService) DeleteTask(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "crm/tasks/"+url.PathEscape(id), opts...)
+}
+
+// --- bulk task actions ---
+
+// CRMTaskSelection names the tasks a bulk action applies to: either an
+// explicit id list (Tasks), or every task a search matches (All plus Filters)
+// minus the ones unticked afterwards (Exclude). A selection that names both
+// uses the filter. A selection past 50,000 tasks is refused; narrow the
+// filter.
+type CRMTaskSelection struct {
+	// Tasks are the task ids to act on.
+	Tasks []string `json:"tasks,omitempty"`
+	// All switches the selection from Tasks to Filters.
+	All bool `json:"all,omitempty"`
+	// Filters is the same filter [CRMService.SearchTasks] takes, so the set
+	// resolved is exactly the set a list showed. Its id facets (AssignedTo,
+	// ContactID, DealID) must be valid ids, or the request is a 400.
+	Filters *TaskSearchParams `json:"filters,omitempty"`
+	// Exclude drops ids from the resolved set. Ignored unless All is set.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// CRMTaskBulkUpdateParams is a selection plus the fields to write on every
+// task in it. At least one of Status and Priority is required.
+type CRMTaskBulkUpdateParams struct {
+	CRMTaskSelection
+	// Status is one of the TaskStatus* constants.
+	Status *string `json:"status,omitempty"`
+	// Priority is one of the TaskPriority* constants.
+	Priority *string `json:"priority,omitempty"`
+}
+
+// CRMTaskBulkResult reports how many tasks a bulk action touched.
+type CRMTaskBulkResult struct {
+	Affected int64 `json:"affected"`
+}
+
+// BulkUpdateTasks writes one status or priority onto a whole selection of
+// tasks and returns how many it changed. Completing tasks records the
+// completion activity on their contacts, as the single-task update does.
+//
+// Requires the WRITE_CRM scope.
+func (s *CRMService) BulkUpdateTasks(ctx context.Context, params *CRMTaskBulkUpdateParams, opts ...RequestOption) (*CRMTaskBulkResult, *Response, error) {
+	return send[CRMTaskBulkResult](ctx, s.client.patch, "crm/tasks", params, opts)
+}
+
+// BulkDeleteTasks deletes a whole selection of tasks and returns how many it
+// removed.
+//
+// Requires the WRITE_CRM scope.
+func (s *CRMService) BulkDeleteTasks(ctx context.Context, selection *CRMTaskSelection, opts ...RequestOption) (*CRMTaskBulkResult, *Response, error) {
+	out := new(CRMTaskBulkResult)
+	resp, err := s.client.call(ctx, http.MethodDelete, "crm/tasks", selection, out, opts)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
 }

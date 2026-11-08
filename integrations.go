@@ -38,6 +38,19 @@ const (
 	// a mistyped key fails [IntegrationService.Connect] rather than silently
 	// leaving every contact on the built-in check.
 	ProviderMillionVerifier = "millionverifier"
+	// ProviderCleanMyList is a second address verifier, connected by API key
+	// and used the same way as [ProviderMillionVerifier].
+	ProviderCleanMyList = "cleanmylist"
+	// ProviderApollo is connected by API key (config.api_key). Manage it with
+	// [ApolloService].
+	ProviderApollo = "apollo"
+	// ProviderClay needs no credentials and gets an inbound URL for a Clay
+	// table to post rows to. Manage it with [ClayService].
+	ProviderClay = "clay"
+	// Place providers for the lead finder. Each connection holds your own key.
+	ProviderGooglePlaces = "google_places"
+	ProviderFoursquare   = "foursquare"
+	ProviderOutscraper   = "outscraper"
 )
 
 // Connection states returned in [IntegrationConnection.Status].
@@ -88,6 +101,9 @@ type IntegrationCatalogEntry struct {
 	// provider, so an unconfigured one can be greyed out rather than failing
 	// at connect time.
 	Configured bool `json:"configured"`
+	// Rank is the provider's popularity on this instance, 1 being the most
+	// used: workspaces with a live connection, ties broken by catalog order.
+	Rank int `json:"rank"`
 	// Capability is the provider's raw capability descriptor, when it has one.
 	Capability json.RawMessage `json:"capability,omitempty"`
 }
@@ -399,7 +415,8 @@ func (s *IntegrationService) Test(ctx context.Context, id string, opts ...Reques
 }
 
 // Push sends the given contacts to the provider now, rather than waiting for
-// an event to fire.
+// an event to fire. To push everything a search matches, use
+// [IntegrationService.PushSelection].
 func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []string, opts ...RequestOption) (*PushResult, *Response, error) {
 	body := struct {
 		ContactIDs []string `json:"contact_ids"`
@@ -407,16 +424,99 @@ func (s *IntegrationService) Push(ctx context.Context, id string, contactIDs []s
 	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", body, opts)
 }
 
+// IntegrationContactSelection names the contacts a bulk integration action
+// applies to: either an explicit id list (Contacts), or every contact a search
+// matches (All plus Filters) minus the rows unticked afterwards (Exclude).
+type IntegrationContactSelection struct {
+	// Contacts are the contact ids to act on.
+	Contacts []string `json:"contacts,omitempty"`
+	// All switches the selection from Contacts to Filters.
+	All bool `json:"all,omitempty"`
+	// Filters is the same filter [ContactService.Search] takes, so the set
+	// resolved is exactly the set a list showed.
+	Filters *ContactSearchParams `json:"filters,omitempty"`
+	// Exclude drops ids from the resolved set. Ignored unless All is set.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// PushSelection is [IntegrationService.Push] over a selection, so a "select
+// all matching" filter can be pushed without listing every id. Pushes are
+// synchronous against the provider's API, so a selection of more than 500
+// contacts is refused with code "too_many_contacts".
+//
+// Requires the INTEGRATIONS scope.
+func (s *IntegrationService) PushSelection(ctx context.Context, id string, selection *IntegrationContactSelection, opts ...RequestOption) (*PushResult, *Response, error) {
+	return send[PushResult](ctx, s.client.post, "integrations/connections/"+url.PathEscape(id)+"/push", selection, opts)
+}
+
+// RotateInboundURL mints a new inbound URL for a Calendly, Cal.com or Clay
+// connection and returns it. The previous URL stops working immediately, so
+// update the sender before relying on it. The URL embeds a secret: treat it as
+// a credential.
+//
+// Requires the INTEGRATIONS scope.
+func (s *IntegrationService) RotateInboundURL(ctx context.Context, id string, opts ...RequestOption) (string, *Response, error) {
+	var out struct {
+		InboundWebhookURL string `json:"inbound_webhook_url"`
+	}
+	resp, err := s.client.post(ctx, "integrations/connections/"+url.PathEscape(id)+"/rotate-inbound-url", nil, &out, opts...)
+	if err != nil {
+		return "", resp, err
+	}
+	return out.InboundWebhookURL, resp, nil
+}
+
+// SetSigningKey sets the key a Calendly or Cal.com connection's deliveries
+// must be signed with (8 to 512 characters), so the URL secret alone no longer
+// authenticates them. An empty key goes back to the URL secret alone.
+//
+// Requires the INTEGRATIONS scope.
+func (s *IntegrationService) SetSigningKey(ctx context.Context, id, signingKey string, opts ...RequestOption) (*IntegrationConnection, *Response, error) {
+	body := struct {
+		SigningKey string `json:"signing_key"`
+	}{SigningKey: signingKey}
+	var out struct {
+		Connection *IntegrationConnection `json:"connection"`
+	}
+	resp, err := s.client.put(ctx, "integrations/connections/"+url.PathEscape(id)+"/signing-key", body, &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out.Connection, resp, nil
+}
+
 // --- OAuth connect flow (session-only) ---
 
 // StartOAuth begins the consent flow for an OAuth provider and returns the URL
 // to send the user to. The label, if given, names the resulting connection.
 func (s *IntegrationService) StartOAuth(ctx context.Context, provider, label string, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
-	body := struct {
-		Provider string `json:"provider"`
-		Label    string `json:"label,omitempty"`
-	}{Provider: provider, Label: label}
-	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", body, opts)
+	return s.StartOAuthWith(ctx, &OAuthStartParams{Provider: provider, Label: label}, opts...)
+}
+
+// Salesforce login environments for [OAuthStartParams.Environment].
+const (
+	SalesforceEnvironmentProduction = "production"
+	SalesforceEnvironmentSandbox    = "sandbox"
+)
+
+// OAuthStartParams begins the consent flow for an OAuth provider.
+type OAuthStartParams struct {
+	// Provider is a Provider* constant.
+	Provider string `json:"provider"`
+	// Label names the resulting connection.
+	Label string `json:"label,omitempty"`
+	// Environment picks the Salesforce login server, one of the
+	// SalesforceEnvironment* constants. Ignored for other providers.
+	Environment string `json:"environment,omitempty"`
+	// Domain is a Salesforce My Domain host to log in at. Ignored for other
+	// providers.
+	Domain string `json:"domain,omitempty"`
+}
+
+// StartOAuthWith is [IntegrationService.StartOAuth] with the provider options
+// some providers need, such as the Salesforce login environment.
+func (s *IntegrationService) StartOAuthWith(ctx context.Context, params *OAuthStartParams, opts ...RequestOption) (*OAuthStartResult, *Response, error) {
+	return send[OAuthStartResult](ctx, s.client.post, "integrations/oauth/start", params, opts)
 }
 
 // FinishOAuth exchanges the authorization code the provider redirected back
@@ -581,4 +681,57 @@ func (s *IntegrationService) Bookings(ctx context.Context, opts ...RequestOption
 		return nil, resp, err
 	}
 	return out.Bookings, resp, nil
+}
+
+// --- community directory ---
+
+// CommunityApp is an OAuth app published to the community directory, as a
+// workspace browsing it sees it. It never carries credentials, redirects or
+// webhook settings.
+type CommunityApp struct {
+	ApplicationID string `json:"application_id"`
+	// Slug is the app's link: [IntegrationService.CommunityApp] opens it.
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Tagline     string `json:"tagline"`
+	Description string `json:"description"`
+	// Category is a catalog category, or "ai" or "other".
+	Category   string `json:"category"`
+	LogoURL    string `json:"logo_url"`
+	WebsiteURL string `json:"website_url"`
+	InstallURL string `json:"install_url"`
+	SupportURL string `json:"support_url"`
+	PrivacyURL string `json:"privacy_url"`
+	Developer  string `json:"developer"`
+	// Scopes is the permission bitmask the app asks for, and Permissions
+	// spells it out.
+	Scopes      uint64       `json:"scopes"`
+	Permissions []Permission `json:"permissions"`
+	// Status is "published" or "featured".
+	Status string `json:"status"`
+	// Listed is set when the app shows in discovery, because it is featured
+	// or widely used. A published app is reachable by its link either way.
+	Listed bool `json:"listed"`
+	// Installs counts the workspaces using the app, and Installed reports
+	// whether yours does.
+	Installs    int       `json:"installs"`
+	Installed   bool      `json:"installed"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
+// Community lists the apps shown in discovery, featured first and then most
+// installed. The page limit is 1 to 200 and defaults to 100.
+//
+// Requires the INTEGRATIONS scope.
+func (s *IntegrationService) Community(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[CommunityApp], error) {
+	q := make(url.Values)
+	params.apply(q)
+	return listJSON[CommunityApp](ctx, s.client, "integrations/community", q, opts...)
+}
+
+// CommunityApp opens a published app by its slug, listed in discovery or not.
+//
+// Requires the INTEGRATIONS scope.
+func (s *IntegrationService) CommunityApp(ctx context.Context, slug string, opts ...RequestOption) (*CommunityApp, *Response, error) {
+	return fetch[CommunityApp](ctx, s.client, "integrations/community/"+url.PathEscape(slug), opts)
 }
