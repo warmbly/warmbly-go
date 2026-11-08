@@ -47,16 +47,6 @@ const (
 	CampaignStatusStopped             = "stopped"
 )
 
-// Campaign kinds returned in [Campaign.Kind]. The kind is fixed at creation.
-const (
-	// CampaignKindSequence is the multi-step default.
-	CampaignKindSequence = "sequence"
-	// CampaignKindOneTime is a single message with no follow-ups. It is a
-	// normal campaign underneath (same pool, caps, suppression and analytics)
-	// but accepts at most one email step and refuses further ones.
-	CampaignKindOneTime = "one_time"
-)
-
 // Sender-selection strategies for [Campaign.SenderStrategy].
 const (
 	// SenderStrategyTags resolves the sending pool from the mailbox tags in
@@ -65,6 +55,21 @@ const (
 	// SenderStrategyExplicit uses the pool managed through
 	// [CampaignService.Senders].
 	SenderStrategyExplicit = "explicit"
+)
+
+// FollowUpSender says which mailbox a lead's follow-ups leave from. The set
+// may grow, so compare against the constants and tolerate other values.
+type FollowUpSender string
+
+const (
+	// FollowUpSameMailbox keeps every step on the address that sent the first.
+	FollowUpSameMailbox FollowUpSender = "same"
+	// FollowUpSameDomain rotates each step among mailboxes on the domain the
+	// lead already hears from.
+	FollowUpSameDomain FollowUpSender = "same_domain"
+	// FollowUpRotate places each step through the campaign's rotation like a
+	// first email.
+	FollowUpRotate FollowUpSender = "rotate"
 )
 
 // ESP-matching modes for [Campaign.ESPMatchMode], which bias sends towards a
@@ -132,11 +137,11 @@ type Campaign struct {
 	Description string `json:"description"`
 	// Status is one of the CampaignStatus* constants.
 	Status string `json:"status"`
-	// Kind is [CampaignKindSequence] or [CampaignKindOneTime].
-	Kind string `json:"kind"`
 
 	// StopOnReply halts a contact's sequence as soon as they reply.
 	StopOnReply bool `json:"stop_on_reply"`
+	// StopOnMeeting halts a contact's sequence once they book a meeting.
+	StopOnMeeting bool `json:"stop_on_meeting"`
 	// OpenTracking enables open tracking via a tracking pixel.
 	OpenTracking bool `json:"open_tracking"`
 	// LinkTracking enables click tracking by rewriting links.
@@ -164,8 +169,12 @@ type Campaign struct {
 	// a nil StartDate means "start now" and a nil EndDate means open-ended.
 	StartDate *time.Time `json:"start_date"`
 	EndDate   *time.Time `json:"end_date"`
-	// Timezone is the IANA timezone the schedule is interpreted in.
+	// Timezone is the IANA timezone the schedule is interpreted in. Empty
+	// means the campaign follows the workspace timezone.
 	Timezone string `json:"timezone"`
+	// EffectiveTimezone is the zone actually in use: Timezone when set, else
+	// the workspace's.
+	EffectiveTimezone string `json:"effective_timezone"`
 	// Days is a legacy weekday bitmask (bit 0 is Monday), superseded by
 	// ScheduleWindows.
 	Days uint8 `json:"days"`
@@ -194,6 +203,9 @@ type Campaign struct {
 	// Senders is the explicit pool. It is loaded on demand rather than on every
 	// read; use [CampaignService.Senders] to fetch it.
 	Senders []CampaignSender `json:"senders,omitempty"`
+	// FollowUpSender is which mailbox a lead's follow-ups leave from: one of
+	// the FollowUp* constants. Unknown values decode unchanged.
+	FollowUpSender FollowUpSender `json:"follow_up_sender"`
 
 	// RampEnabled gradually increases daily volume for the campaign. The ramp
 	// only ever lowers volume: it is applied as a minimum against each
@@ -211,6 +223,9 @@ type Campaign struct {
 	// MaxNewLeadsPerDay throttles newly enrolled contacts; 0 means unlimited.
 	MaxNewLeadsPerDay  int  `json:"max_new_leads_per_day"`
 	PrioritizeNewLeads bool `json:"prioritize_new_leads"`
+	// EntryDelayMinutes holds a contact's first email back this long after
+	// they entered the campaign; 0 sends it as soon as it is due.
+	EntryDelayMinutes int `json:"entry_delay_minutes"`
 
 	// Continuous keeps the campaign active when it runs out of leads: instead
 	// of completing it waits, with IdleSince set, and sends the sequence to
@@ -306,6 +321,9 @@ type Step struct {
 
 	// WaitAfter is the delay in minutes before the next step runs.
 	WaitAfter int `json:"wait_after"`
+	// ThreadReply sends the step as a reply in the conversation the contact's
+	// first email opened instead of starting a new one. Default true.
+	ThreadReply bool `json:"thread_reply"`
 	// Position is the step's zero-based index in the sequence. It orders the
 	// canvas and picks the entry step; it never advances a contact by itself.
 	Position int `json:"position"`
@@ -342,6 +360,9 @@ type StepUpdateParams struct {
 	BodySync  *bool   `json:"body_sync,omitempty"`
 	BodyCode  *bool   `json:"body_code,omitempty"`
 	WaitAfter *int    `json:"wait_after,omitempty"`
+	// ThreadReply toggles sending the step as a reply in the contact's
+	// existing conversation.
+	ThreadReply *bool `json:"thread_reply,omitempty"`
 
 	// Conditions replaces the step's outgoing connections when non-nil. Send
 	// an empty object to remove them all, after which the contact's flow ends
@@ -349,7 +370,6 @@ type StepUpdateParams struct {
 	Conditions json.RawMessage `json:"conditions,omitempty"`
 
 	// Kind and Action switch the node between an email and an action or wait.
-	// A one-time campaign refuses a second email step.
 	Kind   *string         `json:"kind,omitempty"`
 	Action json.RawMessage `json:"action,omitempty"`
 }
@@ -375,15 +395,13 @@ type CampaignLogEntry struct {
 }
 
 // CampaignsOverview backs the campaigns browser: status-bucket counts across
-// the organization plus per-folder totals. Paused sums every paused_* variant;
-// OneTime counts campaigns of [CampaignKindOneTime] whatever their status.
+// the organization plus per-folder totals. Paused sums every paused_* variant.
 type CampaignsOverview struct {
 	Total     int64                 `json:"total"`
 	Active    int64                 `json:"active"`
 	Paused    int64                 `json:"paused"`
 	Draft     int64                 `json:"draft"`
 	Completed int64                 `json:"completed"`
-	OneTime   int64                 `json:"one_time"`
 	Folders   []CampaignFolderCount `json:"folders"`
 }
 
@@ -412,6 +430,15 @@ type CampaignEstimateParams struct {
 	Timezone *string `json:"timezone,omitempty"`
 	// StartDate is when sending begins. Omit for now.
 	StartDate *time.Time `json:"start_date,omitempty"`
+	// StartTime and EndTime are the daily sending window ("HH:MM"). Omitted
+	// means the scheduler's default window.
+	StartTime *string `json:"start_time,omitempty"`
+	EndTime   *string `json:"end_time,omitempty"`
+	// StepWaits is each follow-up's wait_after in days, in order. Empty is a
+	// single email. At most 30.
+	StepWaits []int `json:"step_waits,omitempty"`
+	// CampaignID projects a saved campaign, filling anything not sent from it.
+	CampaignID *string `json:"campaign_id,omitempty"`
 }
 
 // CampaignEstimateResult is the projection from [CampaignService.Estimate]. It
@@ -430,6 +457,121 @@ type CampaignEstimateResult struct {
 	// take longer than two years.
 	SendingDays       *int       `json:"sending_days"`
 	EstimatedFinishAt *time.Time `json:"estimated_finish_at"`
+
+	// Steps is how many emails each contact receives; TotalSends is
+	// recipients times steps, assuming nobody replies or unsubscribes.
+	Steps      int `json:"steps"`
+	TotalSends int `json:"total_sends"`
+	// FirstTouchFinishAt is the day the last contact gets their first email.
+	FirstTouchFinishAt *time.Time `json:"first_touch_finish_at"`
+	// SteadyCapacity is the pool's sending-day capacity once every mailbox
+	// has graduated from warmup; FullCapacityAt is the first day it gets
+	// there, nil when it already has or never does inside the horizon.
+	SteadyCapacity int        `json:"steady_capacity"`
+	FullCapacityAt *time.Time `json:"full_capacity_at"`
+	// Ramping counts mailboxes still climbing their warmup graduation
+	// ceiling; Held counts mailboxes that contribute nothing today.
+	Ramping int `json:"ramping"`
+	Held    int `json:"held"`
+	// Warmup is the warmup mail the pool keeps sending alongside.
+	Warmup CampaignEstimateWarmup `json:"warmup"`
+	// OtherCampaignsPerDay is what the pool already sends for other campaigns
+	// on an average recent day; it shares their caps.
+	OtherCampaignsPerDay int `json:"other_campaigns_per_day"`
+	// Bottleneck is the clamp that costs the most sends on the first sending
+	// day (a CampaignEstimateBottleneck* value), empty when the mailboxes'
+	// own caps are the limit.
+	Bottleneck string `json:"bottleneck"`
+	// Timeline is the projection day by day, at most 120 days.
+	Timeline []CampaignEstimateDay `json:"timeline"`
+	// Senders is the pool mailbox by mailbox, at most 200.
+	Senders []CampaignEstimateSender `json:"senders"`
+	// Scenarios are changes that would finish sooner, each simulated the same
+	// way.
+	Scenarios []CampaignEstimateScenario `json:"scenarios"`
+}
+
+// Bottleneck values of a campaign estimate, in [CampaignEstimateResult.Bottleneck].
+const (
+	CampaignEstimateBottleneckCampaignLimit   = "campaign_limit"
+	CampaignEstimateBottleneckGraduation      = "warmup_graduation"
+	CampaignEstimateBottleneckSpacing         = "spacing"
+	CampaignEstimateBottleneckOtherCampaigns  = "other_campaigns"
+	CampaignEstimateBottleneckHealth          = "health"
+	CampaignEstimateBottleneckHeld            = "held"
+	CampaignEstimateBottleneckWorkspaceRisk   = "workspace_risk"
+	CampaignEstimateBottleneckOrgDailyLimit   = "org_daily_limit"
+	CampaignEstimateBottleneckSendingBehavior = "sending_behavior"
+)
+
+// Sender states of a campaign estimate, in [CampaignEstimateSender.State].
+const (
+	CampaignEstimateSenderReady      = "ready"
+	CampaignEstimateSenderRamping    = "ramping"
+	CampaignEstimateSenderThrottled  = "throttled"
+	CampaignEstimateSenderHealthHold = "health_hold"
+	CampaignEstimateSenderDomainAuth = "domain_auth"
+	CampaignEstimateSenderResting    = "resting"
+	CampaignEstimateSenderNoWorker   = "no_worker"
+	CampaignEstimateSenderRecovery   = "send_recovery"
+	CampaignEstimateSenderCooldown   = "send_cooldown"
+	CampaignEstimateSenderAdmission  = "send_authority"
+)
+
+// Scenario kinds of a campaign estimate, in [CampaignEstimateScenario.Kind].
+const (
+	CampaignEstimateScenarioReplies       = "replies"
+	CampaignEstimateScenarioMoreMailboxes = "more_mailboxes"
+	CampaignEstimateScenarioEveryDay      = "every_day"
+)
+
+// CampaignEstimateScenario is one change and the finish it would bring. Value
+// is the change's own figure: the reply percent assumed, the mailboxes added,
+// or the sending days a week.
+type CampaignEstimateScenario struct {
+	Kind     string     `json:"kind"`
+	Value    int        `json:"value"`
+	FinishAt *time.Time `json:"finish_at"`
+}
+
+// CampaignEstimateWarmup is the warmup traffic running beside the campaign.
+// A mailbox backing a live campaign warms at a reduced volume, and every
+// warmup email takes a slot on the same spacing clock as a campaign send.
+type CampaignEstimateWarmup struct {
+	Mailboxes int `json:"mailboxes"`
+	PerDay    int `json:"per_day"`
+	// PerDayWithout is what the same mailboxes warm at with no live campaign.
+	PerDayWithout int `json:"per_day_without"`
+	// ReplyRate is the least chance a pool partner with reply share left
+	// answers this warmup on arrival while the campaign runs.
+	ReplyRate int `json:"reply_rate"`
+}
+
+// CampaignEstimateDay is one calendar day of the projection.
+type CampaignEstimateDay struct {
+	// Date is YYYY-MM-DD.
+	Date        string `json:"date"`
+	SendingDay  bool   `json:"sending_day"`
+	Capacity    int    `json:"capacity"`
+	Sends       int    `json:"sends"`
+	FirstEmails int    `json:"first_emails"`
+	FollowUps   int    `json:"follow_ups"`
+	Warmup      int    `json:"warmup"`
+}
+
+// CampaignEstimateSender is one mailbox's part in the projection.
+type CampaignEstimateSender struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Provider string `json:"provider"`
+	// State is one of the CampaignEstimateSender* constants.
+	State        string `json:"state"`
+	FirstDayCap  int    `json:"first_day_cap"`
+	SteadyCap    int    `json:"steady_cap"`
+	WarmupPerDay int    `json:"warmup_per_day"`
+	// WarmupWithout is the mailbox's warmup volume with no live campaign.
+	WarmupWithout int        `json:"warmup_without"`
+	FullCapAt     *time.Time `json:"full_cap_at"`
 }
 
 // CampaignDuplicateParams is the optional body of [CampaignService.Duplicate].
@@ -732,12 +874,9 @@ type TemplatePreviewAttachment struct {
 type CampaignCreateParams struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	// Kind is [CampaignKindSequence] (the default) or [CampaignKindOneTime].
-	// It is fixed at creation. A one-time email accepts at most one entry in
-	// Steps.
-	Kind *string `json:"kind,omitempty"`
 
 	StopOnReply       *bool `json:"stop_on_reply,omitempty"`
+	StopOnMeeting     *bool `json:"stop_on_meeting,omitempty"`
 	OpenTracking      *bool `json:"open_tracking,omitempty"`
 	LinkTracking      *bool `json:"link_tracking,omitempty"`
 	TextOnly          *bool `json:"text_only,omitempty"`
@@ -763,8 +902,10 @@ type CampaignCreateParams struct {
 	EmailTagIDs []string `json:"email_tag_ids,omitempty"`
 	FolderIDs   []string `json:"folder_ids,omitempty"`
 
-	SenderStrategy *string               `json:"sender_strategy,omitempty"`
-	RotationMode   *string               `json:"rotation_mode,omitempty"`
+	SenderStrategy *string `json:"sender_strategy,omitempty"`
+	RotationMode   *string `json:"rotation_mode,omitempty"`
+	// FollowUpSender is one of the FollowUp* constants.
+	FollowUpSender *string               `json:"follow_up_sender,omitempty"`
 	Senders        []CampaignSenderInput `json:"senders,omitempty"`
 
 	RampEnabled   *bool `json:"ramp_enabled,omitempty"`
@@ -775,6 +916,8 @@ type CampaignCreateParams struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	// EntryDelayMinutes holds the first email back after a contact enters.
+	EntryDelayMinutes *int `json:"entry_delay_minutes,omitempty"`
 	// Continuous keeps the campaign active and waiting when it runs out of
 	// leads; see [Campaign.Continuous].
 	Continuous     *bool   `json:"continuous,omitempty"`
@@ -806,6 +949,9 @@ type StepInput struct {
 	BodySync  *bool  `json:"body_sync,omitempty"`
 	BodyCode  *bool  `json:"body_code,omitempty"`
 	WaitAfter *int   `json:"wait_after,omitempty"`
+	// ThreadReply defaults to true: a step written here is a follow-up and
+	// replies in the conversation the first email started.
+	ThreadReply *bool `json:"thread_reply,omitempty"`
 }
 
 // CampaignUpdateParams updates a campaign. Nil fields are left unchanged, so a
@@ -822,6 +968,7 @@ type CampaignUpdateParams struct {
 	Status      *string `json:"status,omitempty"`
 
 	StopOnReply       *bool `json:"stop_on_reply,omitempty"`
+	StopOnMeeting     *bool `json:"stop_on_meeting,omitempty"`
 	OpenTracking      *bool `json:"open_tracking,omitempty"`
 	LinkTracking      *bool `json:"link_tracking,omitempty"`
 	TextOnly          *bool `json:"text_only,omitempty"`
@@ -859,6 +1006,8 @@ type CampaignUpdateParams struct {
 
 	SenderStrategy *string `json:"sender_strategy,omitempty"`
 	RotationMode   *string `json:"rotation_mode,omitempty"`
+	// FollowUpSender is one of the FollowUp* constants.
+	FollowUpSender *string `json:"follow_up_sender,omitempty"`
 
 	RampEnabled   *bool `json:"ramp_enabled,omitempty"`
 	RampStart     *int  `json:"ramp_start,omitempty"`
@@ -868,6 +1017,8 @@ type CampaignUpdateParams struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	// EntryDelayMinutes holds the first email back after a contact enters.
+	EntryDelayMinutes *int `json:"entry_delay_minutes,omitempty"`
 	// Continuous keeps the campaign active and waiting when it runs out of
 	// leads; see [Campaign.Continuous]. Turning it off has the campaign finish
 	// once every lead is done.
@@ -935,9 +1086,6 @@ type CampaignListParams struct {
 	// [CampaignStatusPaused] (matches every paused_* variant) or
 	// [CampaignStatusCompleted]. Any other value is a 400.
 	Status string
-	// Kind is [CampaignKindSequence] or [CampaignKindOneTime]. Any other value
-	// is a 400.
-	Kind string
 }
 
 func (p *CampaignListParams) values() url.Values {
@@ -949,7 +1097,6 @@ func (p *CampaignListParams) values() url.Values {
 	setNonEmpty(q, "q", p.Query)
 	setNonEmpty(q, "folder", p.Folder)
 	setNonEmpty(q, "status", p.Status)
-	setNonEmpty(q, "kind", p.Kind)
 	return q
 }
 

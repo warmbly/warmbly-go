@@ -52,9 +52,9 @@ func TestCampaignSyncRouting(t *testing.T) {
 		wantNoBody bool
 	}{
 		{"campaigns.List filters", func() error {
-			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused, Kind: CampaignKindOneTime})
+			_, e := c.Campaigns.List(ctx, &CampaignListParams{Status: CampaignStatusPaused})
 			return e
-		}, "GET", "/v1/campaigns", "kind=one_time&status=paused", "", false},
+		}, "GET", "/v1/campaigns", "status=paused", "", false},
 		{"campaigns.Estimate", func() error {
 			_, _, e := c.Campaigns.Estimate(ctx, &CampaignEstimateParams{
 				SegmentIDs: []string{"seg_1"}, DailyLimit: Int(40), StartDate: &start,
@@ -118,10 +118,10 @@ func TestCampaignSyncRouting(t *testing.T) {
 			})
 			return e
 		}, "PATCH", "/v1/campaigns/camp_1", "", `"unsubscribe_mode":"link","continuous":true,"utm_tracking":true,"guardrail_enabled":true,"guardrail_bounce_rate_max":5`, false},
-		{"campaigns.Create kind", func() error {
-			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{Name: "Launch", Kind: String(CampaignKindOneTime), Continuous: Bool(false)})
+		{"campaigns.Create follow-up sender", func() error {
+			_, _, e := c.Campaigns.Create(ctx, &CampaignCreateParams{Name: "Launch", StopOnMeeting: Bool(true), FollowUpSender: String(string(FollowUpSameDomain)), EntryDelayMinutes: Int(15), Continuous: Bool(false)})
 			return e
-		}, "POST", "/v1/campaigns", "", `{"name":"Launch","kind":"one_time","continuous":false}`, false},
+		}, "POST", "/v1/campaigns", "", `{"name":"Launch","stop_on_meeting":true,"follow_up_sender":"same_domain","entry_delay_minutes":15,"continuous":false}`, false},
 		{"outreach.Update", func() error {
 			_, e := c.Outreach.Update(ctx, &OutreachSettings{Unsubscribe: UnsubscribeSettings{Mode: UnsubscribeModeText}})
 			return e
@@ -206,8 +206,8 @@ func TestCampaignDecodeSyncFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(fixture), &c); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if c.Kind != CampaignKindSequence || c.UnsubscribeMode != UnsubscribeModeInherit {
-		t.Errorf("kind/unsubscribe_mode = %q/%q", c.Kind, c.UnsubscribeMode)
+	if c.UnsubscribeMode != UnsubscribeModeInherit {
+		t.Errorf("unsubscribe_mode = %q", c.UnsubscribeMode)
 	}
 	if !c.Continuous || c.IdleSince == nil || c.IdleSince.Day() != 1 {
 		t.Errorf("continuous/idle_since = %v/%v", c.Continuous, c.IdleSince)
@@ -422,12 +422,12 @@ func TestTestEmailResultDecode(t *testing.T) {
 	}
 }
 
-func TestCampaignsOverviewOneTimeDecode(t *testing.T) {
+func TestCampaignsOverviewDecode(t *testing.T) {
 	var o CampaignsOverview
-	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"one_time":2,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
+	if err := json.Unmarshal([]byte(`{"total":12,"active":3,"paused":2,"draft":4,"completed":3,"folders":[{"folder_id":"f1","total":5}]}`), &o); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if o.OneTime != 2 || len(o.Folders) != 1 {
+	if o.Completed != 3 || len(o.Folders) != 1 {
 		t.Errorf("overview = %+v", o)
 	}
 }
