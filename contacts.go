@@ -540,6 +540,8 @@ type ContactNote struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 	// User is the note's author, joined in on read.
 	User *User `json:"user,omitempty"`
+	// External is set when the note lives in a connected CRM.
+	External *CRMExternalRef `json:"external,omitempty"`
 }
 
 // Contact activity types returned in [ContactActivity.ActivityType].
@@ -874,8 +876,8 @@ type ContactVerificationOverview struct {
 
 // How firm a [ContactNextAction]'s timing is, in [ContactNextAction.State].
 const (
-	// NextActionDue carries ScheduledAt, the slot the scheduler would give the
-	// step on its next pass. Leads ahead in the queue can still push it later.
+	// NextActionDue carries ScheduledAt, the campaign's next wakeup. Leads
+	// ahead in the queue can still push the step later.
 	NextActionDue = "due"
 	// NextActionWaiting carries NotBefore and a Constraint.
 	NextActionWaiting = "waiting"
@@ -896,8 +898,10 @@ type ContactNextAction struct {
 	Subject   string  `json:"subject,omitempty"`
 	// State is one of the NextAction* constants.
 	State string `json:"state"`
-	// ScheduledAt is set only when due; NotBefore is the earliest the hard
-	// constraints allow; Constraint names the gate in user-facing words.
+	// ScheduledAt is set only when due, and is when the campaign's chain next
+	// wakes up and works its queue (a stored wakeup, stable across reads).
+	// NotBefore is the earliest the hard constraints allow; Constraint names
+	// the gate in user-facing words.
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 	NotBefore   *time.Time `json:"not_before,omitempty"`
 	Constraint  string     `json:"constraint,omitempty"`
@@ -910,6 +914,8 @@ type ContactCampaignStep struct {
 	Kind     string `json:"kind"`
 	Position int    `json:"position"`
 	Subject  string `json:"subject,omitempty"`
+	// SenderEmail is the mailbox that sent this step, empty until it is sent.
+	SenderEmail string `json:"sender_email,omitempty"`
 
 	SentAt    *time.Time `json:"sent_at,omitempty"`
 	OpenedAt  *time.Time `json:"opened_at,omitempty"`
@@ -932,6 +938,12 @@ type ContactCampaignState struct {
 	CampaignStatus string `json:"campaign_status"`
 	// LeadStatus is one of the LeadStatus* constants.
 	LeadStatus string `json:"lead_status"`
+	// SenderID and SenderEmail are the mailbox that sent this lead's latest
+	// step, which every follow-up keeps unless FollowUpSender rotates them.
+	// Empty until the first email went out.
+	SenderID       *string        `json:"sender_id,omitempty"`
+	SenderEmail    string         `json:"sender_email,omitempty"`
+	FollowUpSender FollowUpSender `json:"follow_up_sender"`
 	// FailureReason is the worker's reason for the last failed send.
 	FailureReason string `json:"failure_reason,omitempty"`
 
@@ -943,6 +955,13 @@ type ContactCampaignState struct {
 	CurrentStep  *ContactCampaignStep `json:"current_step,omitempty"`
 	LastAction   string               `json:"last_action,omitempty"`
 	LastActionAt *time.Time           `json:"last_action_at,omitempty"`
+
+	// Hold is the per-lead pause, present only while it is live. See
+	// [CampaignService.LeadHold].
+	Hold *LeadHold `json:"hold,omitempty"`
+	// CC is the contacts copied on every email to this lead in this
+	// campaign. See [CampaignService.LeadCC].
+	CC []CampaignLeadCC `json:"cc"`
 
 	// Next is nil once the flow has ended for the contact; EndedReason says
 	// why.
@@ -1083,6 +1102,17 @@ type ContactImportPreview struct {
 	// proposes [ImportTargetVerificationStatus] itself when a column's header
 	// or values look like another service's results.
 	SuggestedMapping []ImportColumnMapping `json:"suggested_mapping"`
+	// InferredColumns are the indexes of columns whose suggestion came from
+	// the AI judgment rather than the header or the values, worth a second
+	// look.
+	InferredColumns []int `json:"inferred_columns,omitempty"`
+	// ColumnStats describes every column over the whole file rather than the
+	// sample, so a mapper can show how full a column is. It is set on
+	// background imports ([ContactService.CreateImport]) only.
+	ColumnStats []ContactImportColumnStats `json:"column_stats,omitempty"`
+	// MappingSource is one of the ImportMappingSource* constants: where
+	// SuggestedMapping came from. Empty on a synchronous preview.
+	MappingSource string `json:"mapping_source,omitempty"`
 }
 
 // ContactImportParams is the configuration committed alongside the file.
@@ -1102,6 +1132,10 @@ type ContactImportParams struct {
 	// SegmentIDs pins every row into these segments as a manual include
 	// override: imported, updated and skipped-but-matched contacts alike.
 	SegmentIDs []string `json:"segment_ids,omitempty"`
+	// SkipActiveInOtherCampaigns keeps an existing contact out of CampaignIDs
+	// while their sequence is still running in another campaign. The row
+	// itself is imported as usual.
+	SkipActiveInOtherCampaigns bool `json:"skip_active_in_other_campaigns,omitempty"`
 	// SubscribedDefault is what new contacts inherit when no subscribed column
 	// was mapped. It defaults to true server-side.
 	SubscribedDefault *bool `json:"subscribed_default,omitempty"`
@@ -1151,6 +1185,10 @@ type ContactImportResult struct {
 	// totals.
 	Errors          []ImportRowError `json:"errors,omitempty"`
 	ErrorsTruncated bool             `json:"errors_truncated,omitempty"`
+	// SegmentsPinned is nil when the import had no segment targets. With
+	// targets it is true when every membership write landed and false when
+	// one did not, with the reason among the notes.
+	SegmentsPinned *bool `json:"segments_pinned,omitempty"`
 	// Quality is the file's address-level assessment.
 	Quality *ContactImportQuality `json:"quality,omitempty"`
 }

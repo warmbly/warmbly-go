@@ -27,13 +27,14 @@ const (
 	// [EventCampaignIdle].
 	IntentCampaign = "CAMPAIGN"
 	// IntentEmail covers the per-message pulse — sent, opened, clicked,
-	// replied, bounced — and inbox arrivals. It is the highest-volume family.
+	// replied, bounced, including the direct (non-campaign) opens and clicks
+	// — and inbox arrivals. It is the highest-volume family.
 	IntentEmail = "EMAIL"
 	// IntentContact covers contact creation, updates and deletion.
 	IntentContact = "CONTACT"
 	// IntentAccount covers mailbox connection, sync and health transitions.
 	IntentAccount = "ACCOUNT"
-	// IntentWarmup covers warmup health and placement changes.
+	// IntentWarmup covers warmup health, placement and activity changes.
 	IntentWarmup = "WARMUP"
 	// IntentBulk covers bulk import and export progress. Those events are
 	// user-scoped and never reach the workspace channel, so this only narrows
@@ -61,6 +62,14 @@ const (
 	// IntentForm covers hosted form submissions
 	// ([EventFormSubmissionCreated]).
 	IntentForm = "FORM"
+	// IntentPlacement covers inbox placement test updates
+	// ([EventPlacementTestUpdated]).
+	IntentPlacement = "PLACEMENT"
+	// IntentImport covers mailbox and contact import progress.
+	IntentImport = "IMPORT"
+	// IntentCRM covers CRM sync signals ([EventCRMSynced]). The trailing
+	// underscore keeps it from matching unrelated types.
+	IntentCRM = "CRM_"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
 )

@@ -44,6 +44,42 @@ type DashboardAnalytics struct {
 	TopCampaigns   []CampaignSummary   `json:"top_campaigns"`
 	AccountHealth  AccountHealthTotals `json:"account_health"`
 	DailyTrend     []DailyStat         `json:"daily_trend"`
+	// CapacityToday is what the workspace's mailboxes can send today under
+	// the scheduler's limits. Nil when it could not be computed, and for a
+	// caller limited to some campaigns or mailboxes.
+	CapacityToday *WorkspaceSendCapacity `json:"capacity_today,omitempty"`
+	// Scope echoes the campaign filter the campaign-derived sections were
+	// computed for; nil when they cover the whole workspace.
+	Scope *DashboardScope `json:"scope,omitempty"`
+}
+
+// WorkspaceSendCapacity is what a workspace's mailboxes can send today
+// between them, under the same limits a campaign's send plan applies.
+type WorkspaceSendCapacity struct {
+	// Capacity is today's cold sends across every mailbox that can send;
+	// Remaining is what is left of it after what has already gone out.
+	Capacity  int `json:"capacity"`
+	Remaining int `json:"remaining_today"`
+	// ConfiguredCeiling is the same mailboxes' own caps added up.
+	ConfiguredCeiling int `json:"configured_ceiling"`
+	// Mailboxes is how many mailboxes contribute; Held is how many are
+	// attached but cannot send today.
+	Mailboxes int `json:"mailboxes"`
+	Held      int `json:"held"`
+}
+
+// DashboardScope echoes a resolved dashboard filter: the campaigns and
+// folders that were asked for, and how many distinct campaigns they cover.
+type DashboardScope struct {
+	Campaigns     []DashboardScopeItem `json:"campaigns"`
+	Folders       []DashboardScopeItem `json:"folders"`
+	CampaignCount int                  `json:"campaign_count"`
+}
+
+// DashboardScopeItem names one campaign or folder in a [DashboardScope].
+type DashboardScopeItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // OverallStats are the headline counters for the dashboard window.
@@ -54,9 +90,9 @@ type OverallStats struct {
 	// human, and are excluded from OpenRate.
 	MachineOpens int64 `json:"machine_opens"`
 	TotalClicks  int64 `json:"total_clicks"`
-	// MachineClicks counts steps whose only clicks came from automated
-	// fetchers (security gateways walking the links). They are not part of
-	// TotalClicks, which only ever counts a person's click.
+	// MachineClicks counts the contacts whose only clicks on a step came
+	// from automated fetchers (security gateways walking the links). They are
+	// not part of TotalClicks, which only ever counts a person's click.
 	MachineClicks   int64   `json:"machine_clicks"`
 	TotalReplies    int64   `json:"total_replies"`
 	TotalBounces    int64   `json:"total_bounces"`
@@ -65,7 +101,8 @@ type OverallStats struct {
 	ReplyRate       float64 `json:"reply_rate"`
 	BounceRate      float64 `json:"bounce_rate"`
 	ActiveCampaigns int     `json:"active_campaigns"`
-	ActiveAccounts  int     `json:"active_accounts"`
+	// ActiveAccounts is workspace-wide; a campaign filter does not narrow it.
+	ActiveAccounts int `json:"active_accounts"`
 }
 
 // ActivityEvent is one recent engagement event on the dashboard feed.
@@ -79,6 +116,14 @@ type ActivityEvent struct {
 	Timestamp    time.Time `json:"timestamp"`
 	// Link is the URL that was clicked, on click events.
 	Link string `json:"link,omitempty"`
+	// Origin is the client, device and location of a person's open or click,
+	// when it was logged per event.
+	Origin *EngagementOrigin `json:"origin,omitempty"`
+	// SenderID and SenderEmail name the mailbox the step went out from, which
+	// a reply credits even when it landed in a shared reply inbox. Omitted
+	// for a caller limited to other mailboxes.
+	SenderID    *string `json:"sender_id,omitempty"`
+	SenderEmail string  `json:"sender_email,omitempty"`
 }
 
 // CampaignSummary is one campaign's headline engagement.
@@ -109,6 +154,9 @@ type DailyStat struct {
 	Opens   int64  `json:"opens"`
 	Clicks  int64  `json:"clicks"`
 	Replies int64  `json:"replies"`
+	// PositiveReplies is the subset of Replies the reply classifier judged
+	// positive.
+	PositiveReplies int64 `json:"positive_replies"`
 }
 
 // HourlyStat is one hour of engagement within a day.
@@ -147,6 +195,10 @@ type CampaignEngagement struct {
 	Clients []EngagementBucket `json:"clients"`
 	// Devices is keyed by device type, for example "desktop" or "mobile".
 	Devices []EngagementBucket `json:"devices"`
+	// Surfaces is keyed by device and app or webmail together: a device type,
+	// its "_app" form ("mobile_app", "desktop_app", "tablet_app"), "webmail",
+	// or "hidden" for a fetch by a mailbox provider's image proxy.
+	Surfaces []EngagementBucket `json:"surfaces"`
 }
 
 // EngagementBucket is one slice of an engagement breakdown: how many distinct
@@ -169,29 +221,68 @@ type CampaignAnalyticsTotals struct {
 	// UniqueOpens - MachineOpens.
 	MachineOpens int64 `json:"machine_opens"`
 	UniqueClicks int64 `json:"unique_clicks"`
-	// MachineClicks counts steps whose only clicks came from automated
-	// fetchers. They are not part of UniqueClicks, which only ever counts a
-	// person's click.
-	MachineClicks int64   `json:"machine_clicks"`
-	Replies       int64   `json:"replies"`
-	Bounces       int64   `json:"bounces"`
-	Unsubscribes  int64   `json:"unsubscribes"`
-	OpenRate      float64 `json:"open_rate"`
-	ClickRate     float64 `json:"click_rate"`
-	ReplyRate     float64 `json:"reply_rate"`
-	BounceRate    float64 `json:"bounce_rate"`
+	// MachineClicks counts the contacts whose only clicks on a step came from
+	// automated fetchers. They are not part of UniqueClicks, which only ever
+	// counts a person's click.
+	MachineClicks int64 `json:"machine_clicks"`
+	Replies       int64 `json:"replies"`
+	// PositiveReplies is the subset of Replies the reply classifier judged
+	// positive, one per answered step like Replies.
+	PositiveReplies int64 `json:"positive_replies"`
+	// InterestedLeads counts distinct contacts with a positive reply, so a
+	// lead who answered two steps positively counts once.
+	InterestedLeads int64 `json:"interested_leads"`
+	Bounces         int64 `json:"bounces"`
+	Unsubscribes    int64 `json:"unsubscribes"`
+	// ReplyBreakdown splits Replies by classification, plus the automated
+	// replies that never count as one.
+	ReplyBreakdown ReplyBreakdown `json:"reply_breakdown"`
+	OpenRate       float64        `json:"open_rate"`
+	ClickRate      float64        `json:"click_rate"`
+	ReplyRate      float64        `json:"reply_rate"`
+	// PositiveReplyRate is a percentage of EmailsSent.
+	PositiveReplyRate float64 `json:"positive_reply_rate"`
+	BounceRate        float64 `json:"bounce_rate"`
+}
+
+// ReplyBreakdown is a cohort's replies by classification. The human classes
+// plus Unclassified add up to the cohort's Replies; OutOfOffice and AutoReply
+// are the automated answers, which are not part of Replies.
+type ReplyBreakdown struct {
+	Positive     int64 `json:"positive"`
+	Neutral      int64 `json:"neutral"`
+	Negative     int64 `json:"negative"`
+	Unsubscribe  int64 `json:"unsubscribe"`
+	Unclassified int64 `json:"unclassified"`
+	OutOfOffice  int64 `json:"out_of_office"`
+	AutoReply    int64 `json:"auto_reply"`
 }
 
 // StepAnalytics is one sequence step's engagement.
 type StepAnalytics struct {
-	StepID     string `json:"step_id"`
-	Name       string `json:"name"`
-	Position   int    `json:"position"`
-	EmailsSent int64  `json:"emails_sent"`
-	Opens      int64  `json:"opens"`
-	Clicks     int64  `json:"clicks"`
-	Replies    int64  `json:"replies"`
-	Bounces    int64  `json:"bounces"`
+	StepID string `json:"step_id"`
+	Name   string `json:"name"`
+	// Position is 1-based among the campaign's email steps, in canvas order.
+	Position   int   `json:"position"`
+	EmailsSent int64 `json:"emails_sent"`
+	Opens      int64 `json:"opens"`
+	// MachineOpens is the subset of Opens from automated fetchers. Human
+	// opens are Opens - MachineOpens.
+	MachineOpens int64 `json:"machine_opens"`
+	Clicks       int64 `json:"clicks"`
+	// MachineClicks counts this step's contacts whose only clicks were
+	// automated; they are not part of Clicks.
+	MachineClicks   int64 `json:"machine_clicks"`
+	Replies         int64 `json:"replies"`
+	PositiveReplies int64 `json:"positive_replies"`
+	Bounces         int64 `json:"bounces"`
+	// The rates are percentages of this step's own EmailsSent, so steps that
+	// reached different numbers of contacts still compare.
+	OpenRate          float64 `json:"open_rate"`
+	ClickRate         float64 `json:"click_rate"`
+	ReplyRate         float64 `json:"reply_rate"`
+	PositiveReplyRate float64 `json:"positive_reply_rate"`
+	BounceRate        float64 `json:"bounce_rate"`
 }
 
 // CampaignComparison compares several campaigns over one window.
@@ -212,11 +303,16 @@ type WarmupAnalytics struct {
 
 // WarmupSummary is the rollup for a warmup window.
 type WarmupSummary struct {
-	TotalSent    int64   `json:"total_sent"`
-	TotalReplied int64   `json:"total_replied"`
-	AverageDaily float64 `json:"average_daily"`
-	ReplyRate    float64 `json:"reply_rate"`
-	// TargetProgress is how far the ramp has come, from 0 to 1.
+	TotalSent    int64 `json:"total_sent"`
+	TotalReplied int64 `json:"total_replied"`
+	// TotalReceived is verified warmup mail that arrived from partners in the
+	// range: the other half of the exchange, so a mailbox that sends and is
+	// never written to shows in the numbers.
+	TotalReceived int64   `json:"total_received"`
+	AverageDaily  float64 `json:"average_daily"`
+	ReplyRate     float64 `json:"reply_rate"`
+	// TargetProgress is actual sends divided by planned target volume over
+	// the active days.
 	TargetProgress float64 `json:"target_progress"`
 	DaysActive     int     `json:"days_active"`
 }
@@ -226,7 +322,12 @@ type WarmupDailyStat struct {
 	Date          string `json:"date"`
 	EmailsSent    int64  `json:"emails_sent"`
 	EmailsReplied int64  `json:"emails_replied"`
-	TargetVolume  int64  `json:"target_volume"`
+	// EmailsReceived is verified warmup mail that arrived that day.
+	EmailsReceived int64 `json:"emails_received"`
+	TargetVolume   int64 `json:"target_volume"`
+	// Active is whether the mailbox had a warmup plan that day. A day with
+	// arrivals but no plan still lists, but does not count as a day active.
+	Active bool `json:"active"`
 }
 
 // Deliverability health bands returned in [DeliverabilityDashboard.Band] and in
@@ -366,6 +467,10 @@ type AccountStatus struct {
 	// WarmupHealth is the mailbox's standing in the warmup pool. It is folded
 	// into Health.Score and nil when the mailbox is not in a pool.
 	WarmupHealth *WarmupHealth `json:"warmup_health,omitempty"`
+	// Placement is where the mailbox's warmup mail landed over the trailing
+	// week; it also caps Health.Score. Nil when nothing was delivered in the
+	// window.
+	Placement *WarmupPlacementRate `json:"warmup_placement,omitempty"`
 	// InCampaign reports whether the mailbox is attached to a running campaign.
 	// When true a low-volume health-check warmup keeps running even if warmup
 	// is paused or off.
@@ -376,6 +481,33 @@ type AccountStatus struct {
 	// ColdRamp is present only while the warmup-to-cold graduation ceiling
 	// holds today's cold allowance below the mailbox's own campaign limit.
 	ColdRamp *ColdRamp `json:"cold_ramp,omitempty"`
+	// SendRecoveryReason names a send safety hold ("authentication",
+	// "permanent", "domain_auth", "conflict" or "unknown"); empty when sending
+	// is not held.
+	SendRecoveryReason string `json:"send_recovery_reason,omitempty"`
+	// SendPause is a provider's pause on this mailbox's sending; nil while it
+	// sends normally.
+	SendPause *SendPause `json:"send_pause,omitempty"`
+}
+
+// SendPause is why a provider stopped a mailbox sending and when it starts
+// again.
+type SendPause struct {
+	// Reason is "rate_limited", "daily_limit", "sender_blocked" or "retry" for
+	// a timed pause, or "domain_auth", "permanent" or "authentication" for a
+	// hold; empty for a timed pause an earlier release recorded.
+	Reason string `json:"reason"`
+	Held   bool   `json:"held"`
+	// Until is when a timed pause ends.
+	Until *time.Time `json:"until,omitempty"`
+	// RetryAt is when Warmbly lets a held mailbox try one more send on its
+	// own.
+	RetryAt *time.Time `json:"retry_at,omitempty"`
+	// ProviderMessage is the refusal as the worker reported it.
+	ProviderMessage string `json:"provider_message,omitempty"`
+	// Resumable says POST /emails/:id/resume-sending can lift it; an
+	// "authentication" hold needs a reconnect instead.
+	Resumable bool `json:"resumable"`
 }
 
 // WarmupStatus is a mailbox's warmup ramp as the scheduler will act on it.
@@ -396,6 +528,35 @@ type WarmupStatus struct {
 	// the plain ramp is never an unexplained drop. Nil while the ramp is free
 	// to climb.
 	RampHold *WarmupRampHold `json:"ramp_hold,omitempty"`
+	// PartnerLimit is present while today's target is capped by how many
+	// partners the mailbox can still reach, so a target below the ramp is
+	// never unexplained.
+	PartnerLimit *WarmupPartnerLimit `json:"partner_limit,omitempty"`
+	// SendFailure is present while the newest warmup send failed and no later
+	// one was confirmed delivered.
+	SendFailure *WarmupSendFailure `json:"send_failure,omitempty"`
+	// NextSendAt is when the parked warmup wakeup fires; nil while nothing is
+	// queued.
+	NextSendAt *time.Time `json:"next_send_at,omitempty"`
+}
+
+// WarmupPartnerLimit explains a target held below the ramp because a mailbox
+// never writes to the same partner twice in a day.
+type WarmupPartnerLimit struct {
+	// Reachable is how many partners are available to it today, including any
+	// it already wrote to; those at their inbound limit are left out.
+	Reachable int `json:"reachable"`
+	// RampTarget is what the ramp alone would send today.
+	RampTarget int `json:"ramp_target"`
+}
+
+// WarmupSendFailure is why a warmup send failed: the server's answer when it
+// gave one.
+type WarmupSendFailure struct {
+	Message        string     `json:"message"`
+	At             time.Time  `json:"at"`
+	Kind           string     `json:"kind,omitempty"`
+	FirstFailureAt *time.Time `json:"first_failure_at,omitempty"`
 }
 
 // WarmupRampHold explains a frozen warmup ramp. It is present for the whole
@@ -413,15 +574,33 @@ type WarmupRampHold struct {
 
 // WarmupHealth is a mailbox's standing in the warmup pool.
 type WarmupHealth struct {
+	// PoolType is the pool the mailbox warms in: "premium" or "free".
+	PoolType string `json:"pool_type,omitempty"`
+	// Source is "cloud" when Warmbly Cloud warms the mailbox and reported
+	// this standing; empty for this instance's own pool.
+	Source string `json:"source,omitempty"`
 	// State is one of the Band* constants.
 	State string `json:"state"`
 	// Score runs 0 to 100, higher being healthier.
 	Score  float64 `json:"score"`
 	Reason string  `json:"reason,omitempty"`
-	// SpamScore is the last content spam score, 0 to 100, lower being safer.
+	// SpamScore is always 0: the accumulating score it once reported was
+	// retired. The key stays for compatibility; read Score and Reason.
+	//
+	// Deprecated: always zero.
 	SpamScore    int        `json:"spam_score"`
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
+	// PartnerMailboxes7d, PartnerDomains7d and PartnerOrganizations7d count
+	// the distinct partners confirmed warmup deliveries went to over seven
+	// days.
+	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
+	PartnerDomains7d       int `json:"partner_domains_7d"`
+	PartnerOrganizations7d int `json:"partner_organizations_7d"`
+	// Received7d and Senders7d are the receiving side over the same window:
+	// verified warmup arrivals and the distinct partners they came from.
+	Received7d int `json:"received_7d"`
+	Senders7d  int `json:"senders_7d"`
 }
 
 // The SendLifecycle* constants and [SendLifecycleState] are declared in
@@ -460,6 +639,9 @@ type AccountError struct {
 	// is something to do.
 	ActionRequired *string   `json:"action_required,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+	// Operation is the mailbox operation that failed: "sync", "send" or
+	// "unknown". Empty on older records.
+	Operation string `json:"operation,omitempty"`
 }
 
 // AccountDailyUsage is a mailbox's sending against today's caps. The warmup
@@ -571,9 +753,25 @@ func (s *AnalyticsService) Deliverability(ctx context.Context, from, to time.Tim
 	return fetch[DeliverabilityDashboard](ctx, s.client, withQuery("analytics/deliverability", q), opts)
 }
 
-// Accounts returns the operational status of every mailbox.
+// Accounts returns the operational status of every mailbox. The endpoint
+// pages (up to 1000 per page), so this follows the cursor until the inventory
+// is exhausted; use [AnalyticsService.AccountsPage] to read one page, or a
+// subset of mailboxes.
 func (s *AnalyticsService) Accounts(ctx context.Context, opts ...RequestOption) ([]AccountStatus, *Response, error) {
-	return fetchData[AccountStatus](ctx, s.client, "analytics/accounts", opts)
+	page, err := s.AccountsPage(ctx, nil, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := page.Response()
+	out := append([]AccountStatus{}, page.Data...)
+	for page.HasMore() {
+		if page, err = page.Next(ctx); err != nil {
+			return nil, resp, err
+		}
+		resp = page.Response()
+		out = append(out, page.Data...)
+	}
+	return out, resp, nil
 }
 
 // Account returns one mailbox's operational status, including its warmup

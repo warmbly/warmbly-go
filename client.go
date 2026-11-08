@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the SDK version, reported in the default User-Agent.
-const Version = "0.3.1"
+const Version = "0.4.0"
 
 const (
 	defaultBaseURL   = "https://api.warmbly.com/v1/"
@@ -60,6 +60,8 @@ type Client struct {
 	Contacts *ContactService
 	// Segments are saved contact audiences evaluated live.
 	Segments *SegmentService
+	// Placement runs inbox placement tests and batches against seed mailboxes.
+	Placement *PlacementService
 	// Suppressions is the workspace's do-not-contact list.
 	Suppressions *SuppressionService
 	// Forms are hosted lead-capture forms and their submissions.
@@ -82,10 +84,20 @@ type Client struct {
 
 	// Integrations manages third-party connections.
 	Integrations *IntegrationService
+	// Salesforce manages the native Salesforce sync of a connected org.
+	Salesforce *SalesforceService
+	// Apollo manages a connected Apollo account's lists, imports and enrichment.
+	Apollo *ApolloService
+	// Clay manages a connected Clay workspace's inbound defaults and table.
+	Clay *ClayService
 	// Automations manages event-triggered flows across those connections.
 	Automations *AutomationService
 	// LeadSync manages Google Sheets to contacts sync.
 	LeadSync *LeadSyncService
+	// Leads is the lead finder: map search, enrichment and lead-to-contact.
+	Leads *LeadService
+	// EmailImages manages the image library for email bodies.
+	EmailImages *EmailImageService
 
 	// Generation writes and rewrites copy with AI.
 	Generation *GenerationService
@@ -184,6 +196,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Campaigns = (*CampaignService)(&c.common)
 	c.Contacts = (*ContactService)(&c.common)
 	c.Segments = (*SegmentService)(&c.common)
+	c.Placement = (*PlacementService)(&c.common)
 	c.Suppressions = (*SuppressionService)(&c.common)
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
@@ -196,8 +209,13 @@ func New(opts ...Option) (*Client, error) {
 	c.Meetings = (*MeetingService)(&c.common)
 
 	c.Integrations = (*IntegrationService)(&c.common)
+	c.Salesforce = (*SalesforceService)(&c.common)
+	c.Apollo = (*ApolloService)(&c.common)
+	c.Clay = (*ClayService)(&c.common)
 	c.Automations = (*AutomationService)(&c.common)
 	c.LeadSync = (*LeadSyncService)(&c.common)
+	c.Leads = (*LeadService)(&c.common)
+	c.EmailImages = (*EmailImageService)(&c.common)
 
 	c.Generation = (*GenerationService)(&c.common)
 	c.Skills = (*SkillService)(&c.common)
@@ -707,6 +725,8 @@ type FileUpload struct {
 
 // postMultipart uploads a file (plus any extra form fields) as
 // multipart/form-data. The whole body is buffered so retries can replay it.
+//
+//nolint:unparam // the field name is a parameter for forward use
 func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file *FileUpload, fields map[string]string, out any, opts ...RequestOption) (*Response, error) {
 	if file == nil || file.Content == nil {
 		return nil, errors.New("warmbly: a file is required for this upload")

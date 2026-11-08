@@ -100,6 +100,12 @@ const (
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
 		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+
+	// PermAppGrantable is every scope a third-party OAuth app may request:
+	// everything except [PermAPIKeys], which stays with people and API keys.
+	// A key or grant also never exceeds what its holder's role covers; see
+	// [PermissionCatalog.Grantable].
+	PermAppGrantable = PermFullAccess &^ PermAPIKeys
 )
 
 // API key lifecycle states returned in [APIKey.Status].
@@ -231,6 +237,11 @@ type Permission struct {
 type PermissionCatalog struct {
 	Permissions []Permission      `json:"permissions"`
 	Presets     PermissionPresets `json:"presets"`
+	// Grantable is the mask the caller may put on a key: its role's reach, or
+	// the calling key's own permissions.
+	Grantable uint64 `json:"grantable"`
+	// AppScopes is the mask an OAuth app may request.
+	AppScopes uint64 `json:"app_scopes"`
 }
 
 // PermissionPresets are the server-side preset masks.
@@ -359,6 +370,15 @@ func (s *APIKeyService) Revoke(ctx context.Context, id, reason string, opts ...R
 	q := make(url.Values)
 	setNonEmpty(q, "reason", reason)
 	return s.client.delete(ctx, withQuery("api-keys/"+url.PathEscape(id), q), opts...)
+}
+
+// Delete permanently removes an API key that can no longer authenticate: one
+// that is revoked or past its expiry. Removing it takes it out of the list,
+// while its usage history is gone with it. A key that is still active is a 409;
+// [APIKeyService.Revoke] it first. An OAuth token cannot delete keys. Needs the
+// api_keys scope.
+func (s *APIKeyService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "api-keys/"+url.PathEscape(id)+"/permanent", opts...)
 }
 
 // RevokeSelf revokes the key this client is authenticated with. It is the one

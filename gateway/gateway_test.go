@@ -127,10 +127,71 @@ func TestExtractSeq(t *testing.T) {
 func TestSocketURLCarriesCredentialAndVersion(t *testing.T) {
 	c := New("wmbly_key", "org_1", WithURL("wss://realtime.example.com/socket/websocket"))
 	got := c.socketURL()
-	for _, want := range []string{"token=wmbly_key", "vsn=" + protocolVersion} {
-		if !strings.Contains(got, want) {
-			t.Errorf("socketURL() = %q, want it to contain %q", got, want)
-		}
+	if !strings.Contains(got, "vsn="+protocolVersion) {
+		t.Errorf("socketURL() = %q, want the wire version", got)
+	}
+	if strings.Contains(got, "wmbly_key") {
+		t.Errorf("socketURL() = %q leaks an API key into the URL", got)
+	}
+	if h := c.handshakeHeader().Get("X-Warmbly-Token"); h != "wmbly_key" {
+		t.Errorf("X-Warmbly-Token = %q, want the API key", h)
+	}
+
+	oauth := New("wmat_tok", "org_1")
+	if oauth.handshakeHeader().Get("X-Warmbly-Token") != "wmat_tok" || strings.Contains(oauth.socketURL(), "wmat_tok") {
+		t.Error("OAuth access token must travel in the header only")
+	}
+
+	jwt := New("eyJ.jwt.sig", "org_1")
+	if !strings.Contains(jwt.socketURL(), "token=eyJ.jwt.sig") || jwt.handshakeHeader() != nil {
+		t.Error("a connection JWT belongs in the query string")
+	}
+}
+
+func TestHandshakeErrorDecodesBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusForbidden,
+		Body:       io.NopCloser(strings.NewReader(`{"code":4004,"reason":"Token expired"}`)),
+	}
+	err := handshakeError(resp)
+	var je *JoinError
+	if !errors.As(err, &je) || je.Code != JoinCodeAuthFailed || je.Reason != "Token expired" {
+		t.Fatalf("handshakeError = %v, want JoinError 4004", err)
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Error("4004 should unwrap to ErrUnauthorized")
+	}
+	bare := &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(""))}
+	if !errors.Is(handshakeError(bare), ErrForbidden) {
+		t.Error("bodyless 403 should stay ErrForbidden")
+	}
+}
+
+func TestNewEventsDecode(t *testing.T) {
+	var pe PlacementTestEvent
+	e := Event{Type: EventPlacementTestUpdated, Raw: json.RawMessage(`{"event_type":"PLACEMENT_TEST_UPDATED","org_id":"o","test_id":"t","status":"running","campaign_id":"c","extra":1}`)}
+	if err := e.Into(&pe); err != nil || pe.TestID != "t" || pe.Status != "running" || pe.CampaignID != "c" {
+		t.Fatalf("placement = %+v, %v", pe, err)
+	}
+	var en EngagementEvent
+	e = Event{Type: EventDirectEmailOpened, Raw: json.RawMessage(`{"event_type":"DIRECT_EMAIL_OPENED","email_account_id":"a","client_type":"webmail","device_hidden":true,"os":"iOS","browser":"Safari"}`)}
+	if err := e.Into(&en); err != nil || en.EmailAccountID != "a" || !en.DeviceHidden || en.OS != "iOS" || en.ClientType != "webmail" {
+		t.Fatalf("engagement = %+v, %v", en, err)
+	}
+	var cr CRMSyncedEvent
+	e = Event{Type: EventCRMSynced, Raw: json.RawMessage(`{"objects":["deals","tasks"],"contact_id":"c"}`)}
+	if err := e.Into(&cr); err != nil || len(cr.Objects) != 2 || cr.ContactID != "c" {
+		t.Fatalf("crm = %+v, %v", cr, err)
+	}
+	var tp TaskProgressEvent
+	e = Event{Type: EventTaskProgress, Raw: json.RawMessage(`{"total_emails":12,"processed_count":3}`)}
+	if err := e.Into(&tp); err != nil || tp.TotalEmails != 12 {
+		t.Fatalf("task = %+v, %v", tp, err)
+	}
+	var b BillingEvent
+	e = Event{Type: EventBillingCreditsLow, Raw: json.RawMessage(`{"balance":5,"balance_usd":0.5,"threshold":10,"threshold_usd":1,"out":true}`)}
+	if err := e.Into(&b); err != nil || !b.Out || b.ThresholdUSD != 1 {
+		t.Fatalf("billing = %+v, %v", b, err)
 	}
 }
 

@@ -144,6 +144,11 @@ type WebhookEventDescriptor struct {
 	// Firehose marks high-volume events. They are opt-in only: an endpoint
 	// with an empty event filter does not receive them.
 	Firehose bool `json:"firehose"`
+	// Deprecated marks events the server never delivers. They stay valid in an
+	// endpoint's event filter so saved subscriptions keep saving, but nothing
+	// arrives for them and an empty filter does not include them; the
+	// Description names the replacement.
+	Deprecated bool `json:"deprecated"`
 }
 
 // WebhookEventName is a stable webhook event key. The constants below are the
@@ -158,15 +163,21 @@ const (
 	EventEmailAccountRemoved      WebhookEventName = "email_account.removed"
 	EventEmailAccountDisconnected WebhookEventName = "email_account.disconnected"
 	EventEmailAccountError        WebhookEventName = "email_account.error"
-	// EventEmailAccountSynced is a firehose event: one per completed sync
-	// pass, so subscribe to it explicitly or not at all.
-	EventEmailAccountSynced        WebhookEventName = "email_account.synced"
+	// EventEmailAccountSynced fires once, when a mailbox finishes importing
+	// its existing mail after it connects (backfill_status "complete"). It is
+	// no longer a firehose event.
+	EventEmailAccountSynced WebhookEventName = "email_account.synced"
+	// EventEmailAccountHealthChanged is deprecated and never delivered; use
+	// [EventWarmupHealthChanged], which carries the same transition.
 	EventEmailAccountHealthChanged WebhookEventName = "email_account.health_changed"
 
 	// Campaign send pipeline. Everything up to and including the click is a
 	// firehose event: one per message, excluded from the "all events" wildcard
 	// and delivered only to an endpoint that lists it explicitly.
-	EventCampaignEmailSent      WebhookEventName = "campaign.email_sent"
+	EventCampaignEmailSent WebhookEventName = "campaign.email_sent"
+	// EventCampaignEmailDelivered is deprecated and never delivered: Warmbly
+	// cannot observe the recipient's server accepting mail. Use
+	// [EventCampaignEmailSent] and [EventCampaignEmailBounced].
 	EventCampaignEmailDelivered WebhookEventName = "campaign.email_delivered"
 	EventCampaignEmailOpened    WebhookEventName = "campaign.email_opened"
 	EventCampaignEmailClicked   WebhookEventName = "campaign.email_clicked"
@@ -185,7 +196,8 @@ const (
 	// bounce or complaint rate enters the early-warning band, short of an
 	// auto-pause.
 	EventCampaignDeliverabilityWarning WebhookEventName = "campaign.deliverability_warning"
-	// EventCampaignAction fires from a notify action node in a sequence.
+	// EventCampaignAction is deprecated and never delivered: it is only the
+	// trigger of automations a campaign step runs. Use [EventAutomationRun].
 	EventCampaignAction WebhookEventName = "campaign.action"
 
 	// Warmup. EventWarmupEmailSent is a firehose event: one per warmup
@@ -205,10 +217,16 @@ const (
 	EventMeetingRescheduled WebhookEventName = "meeting.rescheduled"
 	EventMeetingCanceled    WebhookEventName = "meeting.canceled"
 
-	// Inbox mail. These are firehose events: subscribe explicitly.
+	// Inbox mail. EventInboxEmailReceived is a firehose event: subscribe
+	// explicitly. EventInboxEmailUpdated and EventInboxEmailDeleted are
+	// deprecated and never delivered; per-message inbox changes are not sent
+	// as webhooks.
 	EventInboxEmailReceived WebhookEventName = "inbox.email_received"
 	EventInboxEmailUpdated  WebhookEventName = "inbox.email_updated"
 	EventInboxEmailDeleted  WebhookEventName = "inbox.email_deleted"
+	// EventInboxReplyReceived fires once per message when a person (not an
+	// automatic reply) answers a campaign email or an email sent from the
+	// inbox.
 	EventInboxReplyReceived WebhookEventName = "inbox.reply_received"
 
 	// Contacts.
@@ -226,7 +244,7 @@ const (
 	// capture is what it is for. Payload: [FormSubmittedPayload].
 	EventFormSubmitted WebhookEventName = "form.submitted"
 
-	// Bulk import and export.
+	// Contact file imports (the bulk_operation.* events report imports only).
 	EventBulkOperationStarted   WebhookEventName = "bulk_operation.started"
 	EventBulkOperationCompleted WebhookEventName = "bulk_operation.completed"
 	EventBulkOperationFailed    WebhookEventName = "bulk_operation.failed"
@@ -235,7 +253,9 @@ const (
 	EventAutomationCreated WebhookEventName = "automation.created"
 	EventAutomationUpdated WebhookEventName = "automation.updated"
 	EventAutomationDeleted WebhookEventName = "automation.deleted"
-	EventAutomationRun     WebhookEventName = "automation.run"
+	// EventAutomationRun fires when an automation finishes a run. It is a
+	// firehose event and never starts an automation.
+	EventAutomationRun WebhookEventName = "automation.run"
 
 	// Templates.
 	EventTemplateCreated WebhookEventName = "template.created"
@@ -413,6 +433,89 @@ type FormSubmittedPayload struct {
 	// CampaignID is the campaign the form enrolls submitters into, when it
 	// does.
 	CampaignID string `json:"campaign_id,omitempty"`
+}
+
+// ReplyReceivedPayload is the data of [EventCampaignReplyReceived] and
+// [EventInboxReplyReceived] (the latter with Trigger "inbox_reply"). ContactID
+// and CampaignID are present only when the reply links to one. The AI fields
+// are present only when inbox tagging judged the message.
+type ReplyReceivedPayload struct {
+	ContactEmail string `json:"contact_email"`
+	// Intent and Confidence are the reply classifier's verdict.
+	Intent         string  `json:"intent,omitempty"`
+	Confidence     float64 `json:"confidence,omitempty"`
+	Subject        string  `json:"subject,omitempty"`
+	Snippet        string  `json:"snippet,omitempty"`
+	ActionTaken    string  `json:"action_taken,omitempty"`
+	ThreadID       string  `json:"thread_id,omitempty"`
+	EmailAccountID string  `json:"email_account_id,omitempty"`
+	ContactID      string  `json:"contact_id,omitempty"`
+	CampaignID     string  `json:"campaign_id,omitempty"`
+	Trigger        string  `json:"trigger,omitempty"`
+
+	AILabels           []string `json:"ai_labels,omitempty"`
+	AIIntentConfidence *float64 `json:"ai_intent_confidence,omitempty"`
+	// AIKind and AIIntent are empty strings when tagging was not confident
+	// enough to act on them, and nil when tagging never judged the message.
+	AIIntent      *string `json:"ai_intent,omitempty"`
+	AIKind        *string `json:"ai_kind,omitempty"`
+	AIRelevance   *int    `json:"ai_relevance,omitempty"`
+	AINeedsReview *bool   `json:"ai_needs_review,omitempty"`
+}
+
+// CampaignCompletedPayload is the data of [EventCampaignCompleted]. Reason is
+// "all_sent" when every lead finished the sequence, or "end_date" when the
+// campaign reached its end date.
+type CampaignCompletedPayload struct {
+	CampaignID   string `json:"campaign_id"`
+	CampaignName string `json:"campaign_name"`
+	Reason       string `json:"reason"`
+}
+
+// MailboxEventPayload is the data of the email_account.* events.
+type MailboxEventPayload struct {
+	EmailAccountID string `json:"email_account_id"`
+	Email          string `json:"email"`
+	Provider       string `json:"provider"`
+	// Reason is set on disconnected: "auth_error", "account_disabled" or
+	// "fair_use".
+	Reason    string `json:"reason,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	// Operation is set on error: "send", "sync" or "unknown".
+	Operation string `json:"operation,omitempty"`
+	// BackfillStatus is set on synced: "complete".
+	BackfillStatus string `json:"backfill_status,omitempty"`
+}
+
+// AutomationRunPayload is the data of [EventAutomationRun], a firehose event.
+// Status is "success", or "error" when a step failed with no error path.
+type AutomationRunPayload struct {
+	AutomationID   string `json:"automation_id"`
+	AutomationName string `json:"automation_name"`
+	RunID          string `json:"run_id"`
+	// TriggerEvent is the event that started the run, or "campaign.action"
+	// for a run a campaign step launched.
+	TriggerEvent string `json:"trigger_event"`
+	Status       string `json:"status"`
+	ContactID    string `json:"contact_id,omitempty"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	CampaignID   string `json:"campaign_id,omitempty"`
+}
+
+// BulkOperationPayload is the data of the bulk_operation.* events, which
+// report contact file imports. The counts are set on completed, Error on
+// failed.
+type BulkOperationPayload struct {
+	OperationID   string `json:"operation_id"`
+	OperationType string `json:"operation_type"`
+	EntityType    string `json:"entity_type"`
+	Filename      string `json:"filename"`
+	Total         int    `json:"total,omitempty"`
+	Imported      int    `json:"imported,omitempty"`
+	Updated       int    `json:"updated,omitempty"`
+	Skipped       int    `json:"skipped,omitempty"`
+	Failed        int    `json:"failed,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // WebhookChallengePayload is the [EventEndpointTest] body, delivered only to

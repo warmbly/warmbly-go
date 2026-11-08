@@ -3,6 +3,83 @@
 All notable changes to this project are documented in this file. Entries are
 grouped by release and version numbers use semantic versioning.
 
+## [Unreleased]
+
+## [0.4.0] - 2026-11-08
+
+Reconciles the SDK with the current v1 API: the lead finder, inbox placement,
+CRM mode with Salesforce, Apollo and Clay, background contact imports, the
+reauth family, and the newer realtime events. Three changes are breaking.
+
+### Changed
+
+- **Breaking:** the one-time campaign kind is gone. `Campaign.Kind`,
+  `CampaignCreateParams.Kind`, `CampaignListParams.Kind`,
+  `CampaignsOverview.OneTime` and the `CampaignKindSequence` and
+  `CampaignKindOneTime` constants are removed, because the server no longer
+  sends or reads them.
+- **Breaking:** `AuthService.ChangePassword` now returns
+  `(*Session, *Response, error)`. A password change ends every session and the
+  server answers with the token pair of a replacement session. Use
+  `ChangePasswordWith` to also set `RevokeAPICredentials`.
+- **Breaking (value):** the OAuth app status the server sends is `"disabled"`.
+  `OAuthAppDisabled` is added and `OAuthAppInactive` is a deprecated alias
+  with the same `"disabled"` value.
+- Gateway: API keys and OAuth access tokens are sent in the
+  `X-Warmbly-Token` handshake header, and only a short-lived connection JWT
+  goes in the query string. A refused handshake's `{code, reason}` body is
+  decoded into a `*JoinError`.
+- `AnalyticsService.Accounts` follows the cursor until the inventory is
+  exhausted; `AccountsPage` reads one page.
+- `WarmupHealth.SpamScore` is documented as always 0 and deprecated.
+
+### Fixed
+
+- `OAuthAppService.UploadLogo` sent the multipart part as `logo`; the server
+  reads `file`, so every upload failed.
+
+### Added
+
+- `Client.Leads` (`LeadService`): the lead finder, covering search, query
+  (cursor paginated), facets, points, enrichment, export, saved searches,
+  people and bulk edits. Finder statuses are `LeadFinderStatus*`.
+- `Client.Placement` (`PlacementService`): overview, coverage, tests, batches
+  and seeds for inbox placement.
+- `Client.Salesforce`, `Client.Apollo`, `Client.Clay`, and CRM mode on
+  `CRMService` (settings, metadata, owners, sync health and retry, backfill,
+  contact link and refresh, list import, bulk task update and delete).
+- `Client.EmailImages`, `TemplateService.Analyze`, `IntegrationService`
+  `RotateInboundURL`, `SetSigningKey`, `PushSelection`, `StartOAuthWith`,
+  `Community` and `CommunityApp`.
+- Background contact imports on `ContactService`: `CreateImport`,
+  `ListImports`, `GetImport`, `SaveImportDraft`, `AnalyzeImport`,
+  `StartImport`, `CancelImport`, `DownloadImportFailures`.
+- Mailboxes: `BulkDelete`, `BulkSetStatus`, `BulkWarmup`, `Identity`,
+  `RefreshIdentity`, `Certificates`, `ResumeSending`, `UpdateSyncSettings`,
+  `SetDirectTracking`, plus the new `Email` and `EmailUpdateParams` fields.
+- Campaigns: lead hold, pause and resume, lead CC and suggestions, `SendPlan`,
+  `WarmupPlacement`, placement monitor, and new campaign, step and estimate
+  fields.
+- Analytics: `DirectMail`, `InboxTagging`, `WarmupPlacement`,
+  `DashboardFiltered`, `CampaignRange`, `AccountsPage`.
+- Unibox `MoveFolder` and `UpsertThreadDraft`; `APIKeyService.Delete`
+  (permanent); OAuth app `SetLogo`, `RemoveLogo`, `Listing`, `PutListing`,
+  `DeleteListing`.
+- Auth: linked identities, password link, recovery-code regeneration, initial
+  password login, SSO link, reset-password session and the reauth family.
+- Gateway events `DIRECT_EMAIL_OPENED`, `DIRECT_EMAIL_CLICKED`,
+  `WARMUP_PLACEMENT`, `WARMUP_ACTIVITY`, `MAILBOX_IMPORT_PROGRESS`,
+  `CONTACT_IMPORT_PROGRESS`, `PLACEMENT_TEST_UPDATED` and `CRM_SYNCED`, the
+  intents `IntentPlacement`, `IntentImport` and `IntentCRM`, new join-refusal
+  reasons, and new engagement, task and billing event fields. Unknown event
+  types still decode.
+- `Error.Reason`, about 40 `ErrCode*` constants and the `SendCode*` send
+  admission diagnostics.
+- `PermAppGrantable`, `PermissionCatalog.Grantable` and `AppScopes`.
+- Eighteen audit entity types, new webhook payload types and
+  `WebhookEventDescriptor.Deprecated`, and `OAuthApp.SuspendedAt` and
+  `SuspendedReason`.
+
 ## [0.3.1] - 2026-09-07
 
 Picks up the API changes that landed while 0.3.0 was being prepared. Additive,

@@ -44,6 +44,21 @@ type Session struct {
 	PendingToken string `json:"pending_token,omitempty"`
 	// ExpiresIn is how long PendingToken remains valid, in seconds.
 	ExpiresIn int `json:"expires_in,omitempty"`
+
+	// DeviceToken is set when the confirmed login code asked to remember the
+	// browser ([ConfirmParams.RememberDevice]). Send it back as
+	// [LoginParams.DeviceToken] on the next password sign-in to skip the
+	// emailed code.
+	DeviceToken string `json:"device_token,omitempty"`
+
+	// LinkRequired is set instead of tokens when a provider sign-in resolved
+	// to an existing password account: the identity links, and the session is
+	// issued, only once that account's password reaches
+	// [AuthService.LinkSSO] along with PendingToken. LinkEmail is the account
+	// and LinkProvider the provider being linked.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // LoginParams starts a sign-in or a signup. Turnstile carries a bot-check
@@ -65,6 +80,11 @@ type LoginParams struct {
 	// on a closed deployment fails with "registration_invite_only" or
 	// "registration_closed".
 	Invite string `json:"invite,omitempty"`
+
+	// DeviceToken is the remembered-browser token an earlier
+	// [AuthService.LoginConfirm] returned in [Session.DeviceToken]. Login
+	// only; it skips the emailed code on a browser the account has confirmed.
+	DeviceToken string `json:"device_token,omitempty"`
 }
 
 // AuthStep is the outcome of the first step of a sign-in or signup. Either
@@ -95,11 +115,16 @@ type AuthStep struct {
 	TwoFARequired bool   `json:"two_fa_required,omitempty"`
 	PendingToken  string `json:"pending_token,omitempty"`
 	ExpiresIn     int    `json:"expires_in,omitempty"`
+
+	// PasswordChangeRequired is set when the password was an initial one an
+	// administrator issued. PendingToken is then the challenge to hand to
+	// [AuthService.LoginInitialPassword] with the person's own password.
+	PasswordChangeRequired bool `json:"password_change_required,omitempty"`
 }
 
 // Done reports whether the flow finished in this step, with either a session
 // or a 2FA challenge to complete.
-func (a *AuthStep) Done() bool { return !a.CodeRequired }
+func (a *AuthStep) Done() bool { return !a.CodeRequired && !a.PasswordChangeRequired }
 
 // ConfirmParams completes a two-step flow with the emailed code.
 type ConfirmParams struct {
@@ -107,6 +132,10 @@ type ConfirmParams struct {
 	Session   string `json:"session"`
 	Code      string `json:"code"`
 	Turnstile string `json:"turnstile,omitempty"`
+	// RememberDevice asks for a trusted-device token with the session
+	// ([Session.DeviceToken]), so the next sign-in from this browser skips the
+	// emailed code. Login only.
+	RememberDevice bool `json:"remember_device,omitempty"`
 }
 
 // UserSession is one active session on the account.
@@ -875,13 +904,28 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, opts ...RequestOption) (
 	return s.client.delete(ctx, "auth/me/avatar", opts...)
 }
 
-// ChangePassword sets a new password, which requires the current one.
-func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Response, error) {
-	body := struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
-	}{CurrentPassword: currentPassword, NewPassword: newPassword}
-	return s.client.post(ctx, "auth/me/password", body, nil, opts...)
+// ChangePasswordParams changes the signed-in person's password.
+type ChangePasswordParams struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	// RevokeAPICredentials also ends the person's OAuth app authorizations and
+	// the API keys they created.
+	RevokeAPICredentials bool `json:"revoke_api_credentials,omitempty"`
+}
+
+// ChangePassword sets a new password, which requires the current one. Every
+// session of the account ends with it, including the one making the call: the
+// returned [Session] is the token pair of a new session for this device, and
+// the client must use it from here on. Its token fields are empty when the
+// server issued no replacement session.
+func (s *AuthService) ChangePassword(ctx context.Context, currentPassword, newPassword string, opts ...RequestOption) (*Session, *Response, error) {
+	return s.ChangePasswordWith(ctx, &ChangePasswordParams{CurrentPassword: currentPassword, NewPassword: newPassword}, opts...)
+}
+
+// ChangePasswordWith is [AuthService.ChangePassword] with the optional
+// [ChangePasswordParams.RevokeAPICredentials].
+func (s *AuthService) ChangePasswordWith(ctx context.Context, params *ChangePasswordParams, opts ...RequestOption) (*Session, *Response, error) {
+	return send[Session](ctx, s.client.post, "auth/me/password", params, opts)
 }
 
 // SetUndoSendSeconds sets how long an instant send is held, and stays
