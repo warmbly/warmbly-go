@@ -148,3 +148,16 @@ func TestSwitchToAppPasswordConflict(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestEmailSignin(t *testing.T) {
+	var got recordedRequest
+	c := recordingFixtureClient(t, &got, `{"method":"oauth","full_mail_access":null,"personal":false,"managed":true,"options":{"google_signin":{"client_id":"cid"},"app_password":true,"vendor":null,"grant":{"id":"g1","domain":"acme.com"}},"auto_switch":false,"switch":{"status":"queued","automatic":true,"at":"2026-11-14T10:00:00Z"}}`)
+	s, _, err := c.Emails.Signin(context.Background(), "em_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkRequest(t, got, "GET", "/v1/emails/em_1/signin", "", "")
+	if s.FullMailAccess != nil || !s.Options.AppPassword || s.Options.Vendor != nil || s.Options.Grant.Domain != "acme.com" || s.Switch == nil || !s.Switch.Automatic {
+		t.Fatalf("%+v", s)
+	}
+}

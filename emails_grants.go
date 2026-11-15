@@ -349,3 +349,69 @@ const (
 	// sign in with Google on its own or through a grant.
 	ErrCodeMailboxNotGoogleSignin = "mailbox_not_google_signin"
 )
+
+// MailboxSignin is how one mailbox signs in today and which switches can
+// succeed for it, from [EmailService.Signin].
+type MailboxSignin struct {
+	// Method is the current sign-in method.
+	Method string `json:"method"`
+	// FullMailAccess is set for a Google sign-in whose granted scopes are
+	// recorded; nil otherwise.
+	FullMailAccess *bool                `json:"full_mail_access"`
+	Personal       bool                 `json:"personal"`
+	Managed        bool                 `json:"managed"`
+	Options        MailboxSigninOptions `json:"options"`
+	// AutoSwitch is a mailbox Warmbly reconnects through its vendor without
+	// a click.
+	AutoSwitch bool `json:"auto_switch"`
+	// Switch is where the last vendor reconnect stands; nil when none ran.
+	Switch *MailboxSigninSwitch `json:"switch"`
+}
+
+// MailboxSigninOptions are the switches offered. Each is nil or false when it
+// cannot succeed.
+type MailboxSigninOptions struct {
+	// GoogleSignin names the OAuth client a Workspace admin marks trusted
+	// before the new Google sign-in.
+	GoogleSignin *MailboxSigninGoogle `json:"google_signin"`
+	// AppPassword offers [EmailService.SwitchToAppPassword].
+	AppPassword bool                 `json:"app_password"`
+	Vendor      *MailboxSigninVendor `json:"vendor"`
+	Grant       *MailboxSigninGrant  `json:"grant"`
+}
+
+// MailboxSigninGoogle is the client to trust for the new Google sign-in.
+type MailboxSigninGoogle struct {
+	ClientID string `json:"client_id"`
+}
+
+// MailboxSigninVendor is the healthy vendor connection that can sign in again
+// as the mailbox.
+type MailboxSigninVendor struct {
+	ConnectionID string `json:"connection_id"`
+	Vendor       string `json:"vendor"`
+	Label        string `json:"label"`
+}
+
+// MailboxSigninGrant is the domain's active admin grant the mailbox can move
+// onto.
+type MailboxSigninGrant struct {
+	ID     string `json:"id"`
+	Domain string `json:"domain"`
+}
+
+// MailboxSigninSwitch is where the mailbox's last vendor reconnect stands.
+type MailboxSigninSwitch struct {
+	Status    string    `json:"status"`
+	Message   string    `json:"message,omitempty"`
+	Automatic bool      `json:"automatic"`
+	At        time.Time `json:"at"`
+}
+
+// Signin reports how a mailbox signs in and what it can switch to: a new
+// Google sign-in, an app password, its inbox vendor or a domain-wide grant.
+//
+// Session only; needs the manage-emails organization permission.
+func (s *EmailService) Signin(ctx context.Context, id string, opts ...RequestOption) (*MailboxSignin, *Response, error) {
+	return fetch[MailboxSignin](ctx, s.client, "emails/"+url.PathEscape(id)+"/signin", opts)
+}

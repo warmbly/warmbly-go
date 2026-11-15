@@ -120,6 +120,20 @@ type CloudLinkMailbox struct {
 	// count, 7-day totals). Nil when not enrolled or when the cloud could not
 	// be reached for the listing.
 	Cloud *PoolLinkMailboxState `json:"cloud,omitempty"`
+	// Legacy marks a mailbox enrolled through this server's older pool link
+	// rather than its current cloud link.
+	Legacy bool `json:"legacy"`
+	// IndependentSMTP marks an SMTP mailbox Warmbly Cloud holds as its own
+	// cloud account.
+	IndependentSMTP bool `json:"independent_smtp,omitempty"`
+	// EnrollmentState is the enrollment's progress as Cloud reports it.
+	EnrollmentState string `json:"enrollment_state,omitempty"`
+	// StandingObservedAt and SettingsObservedAt are when this server last
+	// read the mailbox's standing and settings from Cloud.
+	StandingObservedAt *time.Time `json:"standing_observed_at,omitempty"`
+	SettingsObservedAt *time.Time `json:"settings_observed_at,omitempty"`
+	// Executor is "cloud" or empty; "instance" marks a legacy enrollment.
+	Executor string `json:"executor,omitempty"`
 }
 
 // CloudLinkOAuthStart is the handle on a Google or Microsoft consent brokered

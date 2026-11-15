@@ -180,6 +180,14 @@ fmt.Println(created.ID)
 | `client.Generation` | AI writing and rewriting |
 | `client.Skills` | Workspace AI playbooks that steer it |
 | `client.AgentTools` | The AI tool registry over plain HTTP, for function-calling agents |
+| `client.Leads` | The lead finder: company and people search, enrichment and verified addresses |
+| `client.Placement` | Inbox placement tests, batches and scheduled campaign monitors |
+| `client.EmailImages` | Images hosted for use in email bodies |
+| `client.Reports` | Client reports: previews, share links and email schedules |
+| `client.ToolMigrations` | Bringing campaigns, leads, mailboxes and blocklists over from another outreach tool |
+| `client.Salesforce` / `Apollo` / `Clay` | Provider-specific sync, imports and enrichment for those integrations |
+| `client.Assistant` | The AI assistant's sessions, approvals and tool policies |
+| `client.Agency` | Agencies: staff, client workspaces, the shared send pool and AI balance, cross-client inbox, billing, brand and agency API keys |
 | `client.Webhooks` | Endpoints, the event catalog, and the delivery log |
 | `client.APIKeys` | Keys, scopes and usage analytics |
 | `client.OAuthApps` | OAuth 2.1 application registration and the consent flow |
