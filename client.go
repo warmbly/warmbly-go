@@ -144,6 +144,10 @@ type Client struct {
 	Organization *OrganizationService
 	// Billing manages the subscription, AI credits and referrals.
 	Billing *BillingService
+	// Agency manages agencies: their staff, client workspaces, shared send
+	// pool and AI balance, billing, white-label brand and agency API keys.
+	// It takes a signed-in session or an agency API key ("wmagency_").
+	Agency *AgencyService
 	// WebsiteTracking configures the website tracking snippet (session-only).
 	WebsiteTracking *WebsiteTrackingService
 	// PoolLink manages self-hosted instances linked to this workspace's warmup
@@ -241,6 +245,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Auth = (*AuthService)(&c.common)
 	c.Organization = (*OrganizationService)(&c.common)
 	c.Billing = (*BillingService)(&c.common)
+	c.Agency = (*AgencyService)(&c.common)
 	c.WebsiteTracking = (*WebsiteTrackingService)(&c.common)
 	c.PoolLink = (*PoolLinkService)(&c.common)
 	c.CloudLink = (*CloudLinkService)(&c.common)
