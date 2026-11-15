@@ -282,6 +282,16 @@ type Member struct {
 	// Permissions is the effective grant across every assigned role. Test it
 	// with [Member.Can].
 	Permissions uint16 `json:"permissions"`
+	// AccessScope is which resources the roles apply to: [AccessScopeWorkspace]
+	// or [AccessScopeRestricted]. Treat an unknown value as restricted.
+	AccessScope string `json:"access_scope"`
+	// Access lists the grants. It is filled only where the server loads them
+	// (for example the result of [OrganizationService.SetMemberAccess]); read
+	// [OrganizationService.MemberAccess] otherwise.
+	Access *MemberAccess `json:"access,omitempty"`
+	// ScopeActions are the OrgPerm* bits a restricted member may act with
+	// inside their grants, where the server lists them.
+	ScopeActions uint16 `json:"scope_actions,omitempty"`
 
 	InvitedBy  *string    `json:"invited_by,omitempty"`
 	InvitedAt  time.Time  `json:"invited_at"`
