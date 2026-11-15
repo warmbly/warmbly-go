@@ -106,3 +106,38 @@ func ExampleWebhookService_ConstructEvent() {
 		fmt.Println("a mailbox was blocked from the warmup pool")
 	}
 }
+
+// An agency key ("wmagency_...") reads across the agency's clients, and
+// [warmbly.WithAgencyOrganization] points any workspace call at one client.
+func ExampleAgencyService_Clients() {
+	client, _ := warmbly.New(warmbly.WithAPIKey("wmagency_..."))
+	ctx := context.Background()
+
+	clients, _, err := client.Agency.Clients(ctx, "agency-id")
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, c := range clients {
+		page, err := client.Campaigns.List(ctx, nil, warmbly.WithAgencyOrganization(c.OrganizationID))
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(c.OrganizationID, len(page.Data))
+	}
+}
+
+// A single-use sign-in link lets a mailbox owner connect their own Google or
+// Microsoft mailbox without handing over a password. Partnership plan only.
+func ExampleEmailService_CreateConnectLink() {
+	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
+
+	link, _, err := client.Emails.CreateConnectLink(context.Background(), &warmbly.MailboxConnectLinkParams{
+		Provider:       "gmail",
+		Email:          "owner@example.com",
+		ExpiresInHours: 48,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(link.URL)
+}

@@ -389,7 +389,7 @@ const (
 	ErrCodeConnectGrantInput             = "connect_grant_input"               // 400
 	ErrCodeConnectGrantMailboxNotAllowed = "connect_grant_mailbox_not_allowed" // 403
 	ErrCodeConnectGrantOffline           = "connect_grant_offline"             // 422
-	ErrCodeConnectGrantRedirectUri       = "connect_grant_redirect_uri"        // 400
+	ErrCodeConnectGrantRedirectURI       = "connect_grant_redirect_uri"        // 400
 	ErrCodeConnectGrantRefused           = "connect_grant_refused"             // 422
 	ErrCodeConnectGrantWrongMailbox      = "connect_grant_wrong_mailbox"       // 403
 	ErrCodeConnectLinkBrowser            = "connect_link_browser"              // 403
