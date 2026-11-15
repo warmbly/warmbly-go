@@ -404,6 +404,50 @@ func (s *OAuthAppService) RevokeAuthorizedApp(ctx context.Context, applicationID
 	return s.client.delete(ctx, "oauth/authorized-apps/"+url.PathEscape(applicationID), opts...)
 }
 
+// WorkspaceAuthorization is one member's live authorization of an
+// application in the workspace, as the people who manage the workspace's
+// credentials see it.
+type WorkspaceAuthorization struct {
+	ApplicationID string `json:"application_id"`
+	Name          string `json:"name"`
+	LogoURL       string `json:"logo_url,omitempty"`
+	WebsiteURL    string `json:"website_url,omitempty"`
+	// UserID, UserEmail and UserName identify the member who authorized it.
+	UserID    string `json:"user_id"`
+	UserEmail string `json:"user_email"`
+	UserName  string `json:"user_name"`
+	// Scopes is what was granted, an OR of the API permission bits.
+	Scopes       uint64     `json:"scopes"`
+	AuthorizedAt time.Time  `json:"authorized_at"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+}
+
+// WorkspaceAuthorizations lists every member's live application
+// authorizations in the current workspace. Session-only; needs the
+// manage-API-keys or manage-settings organization permission.
+func (s *OAuthAppService) WorkspaceAuthorizations(ctx context.Context, opts ...RequestOption) ([]WorkspaceAuthorization, *Response, error) {
+	var out struct {
+		Authorizations []WorkspaceAuthorization `json:"authorizations"`
+	}
+	resp, err := s.client.get(ctx, "oauth/workspace-authorizations", &out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	if out.Authorizations == nil {
+		out.Authorizations = []WorkspaceAuthorization{}
+	}
+	return out.Authorizations, resp, nil
+}
+
+// RevokeWorkspaceAuthorization ends one member's authorization of an
+// application in the workspace. applicationID is [WorkspaceAuthorization.ApplicationID] and userID the
+// member's [WorkspaceAuthorization.UserID]. Revoking an authorization that
+// does not exist also succeeds. Session-only; needs the manage-API-keys or
+// manage-settings organization permission.
+func (s *OAuthAppService) RevokeWorkspaceAuthorization(ctx context.Context, applicationID, userID string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "oauth/workspace-authorizations/"+url.PathEscape(applicationID)+"/members/"+url.PathEscape(userID), opts...)
+}
+
 // --- dynamic client registration (RFC 7591) ---
 
 // DynamicClientParams self-registers a client at runtime, the RFC 7591 way that
