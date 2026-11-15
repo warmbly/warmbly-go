@@ -35,25 +35,10 @@ import (
 // [WithAgencyOrganization] on each request.
 type AgencyService service
 
-// Agency API key scopes. They extend the workspace scope bits (see
-// [PermReadEmails]) and are only ever held by an agency API key; OR them into
+// The agency API key scopes are [PermAgencyRead], [PermAgencyManageClients],
+// [PermAgencyReadUsage], [PermAgencyTransferAI] and [PermAgencyMigrate]
+// (together [PermAgencyAll]). Only an agency API key holds them; OR them into
 // [AgencyAPIKeyCreateParams.Permissions].
-const (
-	// PermAgencyRead reads the agency, its staff, clients, overview, mailboxes,
-	// inbox (with [PermReadUnibox]) and brand.
-	PermAgencyRead uint64 = 1 << 26
-	// PermAgencyManageClients creates, attaches, caps and detaches client
-	// workspaces.
-	PermAgencyManageClients uint64 = 1 << 27
-	// PermAgencyReadUsage reads the shared send pool and the AI balance.
-	PermAgencyReadUsage uint64 = 1 << 28
-	// PermAgencyTransferAI moves AI balance from the agency into a client
-	// workspace.
-	PermAgencyTransferAI uint64 = 1 << 29
-	// PermAgencyMigrate migrates client accounts in from another outreach
-	// tool.
-	PermAgencyMigrate uint64 = 1 << 31
-)
 
 // AgencyOrganizationHeader is the header an agency API key names the client
 // workspace it acts on with. [WithAgencyOrganization] sets it.
@@ -132,17 +117,9 @@ type AgencyGrant struct {
 	Until *time.Time `json:"until,omitempty"`
 }
 
-// AgencyPlan is a plan sold to agencies: a regular [Plan] plus the send pool
-// and AI allowance shared by every client.
-type AgencyPlan struct {
-	Plan
-	// MonthlySendPool is the sends shared by all clients each period. Zero is
-	// a plan with no pool cap.
-	MonthlySendPool *int `json:"monthly_send_pool,omitempty"`
-	// AgencyAIAllowanceUSD is what the plan refills the shared AI balance to
-	// each period, in dollars.
-	AgencyAIAllowanceUSD *float64 `json:"agency_ai_allowance_usd,omitempty"`
-}
+// AgencyPlan is a plan sold to agencies. It is a [Plan] whose
+// MonthlySendPool and AgencyAIAllowanceUSD are set.
+type AgencyPlan = Plan
 
 // AgencyList is the agencies the caller belongs to.
 type AgencyList struct {

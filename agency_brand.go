@@ -18,7 +18,7 @@ const (
 	AgencyPortalSignInWarmbly AgencyPortalSignIn = "warmbly"
 )
 
-// Values for the [AgencyPortalTheme] fields. An empty field means the
+// Values for the [PortalTheme] fields. An empty field means the
 // default.
 const (
 	// AgencyPortalFontSystem sets the portal in the system typeface.
@@ -52,35 +52,6 @@ const (
 	AgencyPortalSignInBackgroundImage = "image"
 )
 
-// AgencyBrandSettings is the stored brand itself.
-type AgencyBrandSettings struct {
-	DisplayName string `json:"display_name"`
-	LogoURL     string `json:"logo_url"`
-	// AccentColor is a hex color such as "#0284c7".
-	AccentColor   string    `json:"accent_color"`
-	WebsiteURL    string    `json:"website_url"`
-	HidePoweredBy bool      `json:"hide_powered_by"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	UpdatedBy     *string   `json:"updated_by,omitempty"`
-}
-
-// AgencyPortalTheme is how the agency's portal looks and reads beyond its
-// name, logo and accent. Every field is optional; see the AgencyPortal*
-// constants for the enumerated ones.
-type AgencyPortalTheme struct {
-	Font             string `json:"font,omitempty"`
-	Corners          string `json:"corners,omitempty"`
-	Appearance       string `json:"appearance,omitempty"`
-	SignInLayout     string `json:"sign_in_layout,omitempty"`
-	SignInBackground string `json:"sign_in_background,omitempty"`
-	SignInHeading    string `json:"sign_in_heading,omitempty"`
-	SignInMessage    string `json:"sign_in_message,omitempty"`
-	SupportEmail     string `json:"support_email,omitempty"`
-	SupportURL       string `json:"support_url,omitempty"`
-	TermsURL         string `json:"terms_url,omitempty"`
-	PrivacyURL       string `json:"privacy_url,omitempty"`
-}
-
 // AgencyPortalDomainStatus is the agency's portal domain and its DNS
 // verification. The wire names reuse the forms custom-domain shape, so the
 // domain travels as "forms_domain".
@@ -108,30 +79,13 @@ type AgencyPortalDomainStatus struct {
 	FormsHostUnresolvable bool `json:"forms_host_unresolvable"`
 	// EdgeRecords are the records the edge provider still needs before it
 	// serves the domain over HTTPS.
-	EdgeRecords []AgencyDNSRecord `json:"edge_records,omitempty"`
-}
-
-// AgencyDNSRecord is one DNS record to create.
-type AgencyDNSRecord struct {
-	Purpose string `json:"purpose"`
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Value   string `json:"value"`
-	OK      bool   `json:"ok"`
-	// Optional records improve the result but are not required.
-	Optional bool `json:"optional,omitempty"`
-}
-
-// AgencyPoweredBy is the deployment's attribution.
-type AgencyPoweredBy struct {
-	Name string `json:"name"`
-	URL  string `json:"url,omitempty"`
+	EdgeRecords []DNSRecord `json:"edge_records,omitempty"`
 }
 
 // AgencyBrand is the agency's white-label brand, inherited by every client
 // workspace without a brand of its own, plus its portal domain.
 type AgencyBrand struct {
-	Brand AgencyBrandSettings `json:"brand"`
+	Brand BrandSettings `json:"brand"`
 	// FullWhiteLabel reports a plan that may hide the attribution.
 	FullWhiteLabel bool `json:"full_white_label"`
 	// CanManage reports whether the caller may change the brand (owner or
@@ -142,13 +96,13 @@ type AgencyBrand struct {
 	// shared portal address; empty when the deployment has none.
 	PortalBaseURL string `json:"portal_base_url"`
 	// PoweredBy is the deployment's attribution; nil when it has none.
-	PoweredBy    *AgencyPoweredBy   `json:"powered_by,omitempty"`
+	PoweredBy    *PoweredBy         `json:"powered_by,omitempty"`
 	PortalSignIn AgencyPortalSignIn `json:"portal_sign_in"`
 	// IconURL and SignInImageURL are the uploaded tab icon and sign-in page
 	// image; empty when none.
-	IconURL        string            `json:"icon_url"`
-	SignInImageURL string            `json:"sign_in_image_url"`
-	Theme          AgencyPortalTheme `json:"theme"`
+	IconURL        string      `json:"icon_url"`
+	SignInImageURL string      `json:"sign_in_image_url"`
+	Theme          PortalTheme `json:"theme"`
 }
 
 // AgencyBrandParams replaces the agency's brand. Text fields are written as
@@ -164,7 +118,7 @@ type AgencyBrandParams struct {
 	// PortalSignIn is kept when nil.
 	PortalSignIn *AgencyPortalSignIn `json:"portal_sign_in,omitempty"`
 	// Theme is kept when nil; a value replaces the whole theme.
-	Theme *AgencyPortalTheme `json:"theme,omitempty"`
+	Theme *PortalTheme `json:"theme,omitempty"`
 }
 
 // Brand returns the agency's brand and portal domain.

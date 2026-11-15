@@ -114,17 +114,17 @@ func TestAgencyRouting(t *testing.T) {
 		{"MigrationProviders", func() error { _, _, e := c.Agency.MigrationProviders(ctx, agID); return e }, "GET", base + "/migrations/providers", "", ""},
 		{"Migrations", func() error { _, e := c.Agency.Migrations(ctx, agID, &ListOptions{Limit: 10}); return e }, "GET", base + "/migrations", "limit=10", ""},
 		{"CreateMigration", func() error {
-			_, _, e := c.Agency.CreateMigration(ctx, agID, &AgencyMigrationCreateParams{
+			_, _, e := c.Agency.CreateMigration(ctx, agID, &ToolMigrationCreateParams{
 				Provider:    "smartlead",
-				Credentials: []map[string]string{{"api_key": "sk"}},
+				Credentials: []ToolMigrationCredentials{{"api_key": "sk"}},
 			})
 			return e
 		}, "POST", base + "/migrations", "", `{"provider":"smartlead","credentials":[{"api_key":"sk"}]}`},
 		{"GetMigration", func() error { _, _, e := c.Agency.GetMigration(ctx, agID, "mig_1"); return e }, "GET", base + "/migrations/mig_1", "", ""},
 		{"StartMigration", func() error {
-			_, _, e := c.Agency.StartMigration(ctx, agID, "mig_1", &AgencyMigrationStartParams{
-				Options: AgencyMigrationOptions{Kinds: []string{AgencyMigrationKindCampaigns}, InFlight: AgencyMigrationRestart},
-				Targets: []AgencyMigrationTargetChoice{{WorkspaceID: "w1", CreateName: "Acme"}, {WorkspaceID: "w2", Key: 1, OrganizationID: String(orgID)}},
+			_, _, e := c.Agency.StartMigration(ctx, agID, "mig_1", &ToolMigrationStartParams{
+				Options: ToolMigrationOptions{Kinds: []string{ToolMigrationKindCampaigns}, InFlight: ToolMigrationInFlightRestart},
+				Targets: []ToolMigrationTargetChoice{{WorkspaceID: "w1", CreateName: "Acme"}, {WorkspaceID: "w2", Key: 1, OrganizationID: String(orgID)}},
 			})
 			return e
 		}, "POST", base + "/migrations/mig_1/start", "", `{"options":{"kinds":["campaigns"],"in_flight":"restart","skip_finished":false,"warmup":false},"targets":[{"workspace_id":"w1","key":0,"create_name":"Acme"},{"workspace_id":"w2","key":1,"organization_id":"` + orgID + `"}]}`},
@@ -180,7 +180,7 @@ func TestAgencyRouting(t *testing.T) {
 				DisplayName:  "Northwind",
 				AccentColor:  "#0284c7",
 				PortalSignIn: &signIn,
-				Theme:        &AgencyPortalTheme{Font: AgencyPortalFontSerif},
+				Theme:        &PortalTheme{Font: AgencyPortalFontSerif},
 			})
 			return e
 		}, "PUT", base + "/brand", "", `{"display_name":"Northwind","accent_color":"#0284c7","website_url":"","hide_powered_by":false,"portal_sign_in":"warmbly","theme":{"font":"serif"}}`},
@@ -645,17 +645,17 @@ func TestAgencyMigrationDecode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Status != AgencyMigrationRunning || m.AgencyID == nil || m.OrganizationID != nil || !m.CredentialsHeld || m.FinishedAt != nil {
+	if m.Status != ToolMigrationRunning || m.AgencyID == nil || m.OrganizationID != nil || !m.CredentialsHeld || m.FinishedAt != nil {
 		t.Errorf("migration = %+v", m)
 	}
 	if len(m.Inventory) != 1 || m.Inventory[0].Inventory.Leads != 900 || m.Inventory[0].Inventory.Summaries[0].Steps != 3 {
 		t.Errorf("inventory = %+v", m.Inventory)
 	}
-	if m.Options == nil || !m.Options.SkipFinished || m.Options.InFlight != AgencyMigrationRestart || len(m.Options.Kinds) != 3 {
+	if m.Options == nil || !m.Options.SkipFinished || m.Options.InFlight != ToolMigrationInFlightRestart || len(m.Options.Kinds) != 3 {
 		t.Errorf("options = %+v", m.Options)
 	}
 	tg := m.Targets[0]
-	if tg.OrganizationName != "Acme" || tg.Phase != AgencyMigrationKindLeads || tg.Counts.LeadsEnrolled != 390 || tg.MailboxImportID != nil || tg.CategoryID == nil {
+	if tg.OrganizationName != "Acme" || tg.Phase != ToolMigrationKindLeads || tg.Counts.LeadsEnrolled != 390 || tg.MailboxImportID != nil || tg.CategoryID == nil {
 		t.Errorf("target = %+v", tg)
 	}
 	if len(tg.Followup.Reconnect) != 1 || tg.Followup.Campaigns[0].MissingSenders[0] != "old@acme.test" {

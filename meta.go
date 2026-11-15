@@ -53,8 +53,10 @@ type Plan struct {
 	AIGeneration bool `json:"ai_generation"`
 	AccountLimit uint `json:"account_limit"`
 
-	Price           float32 `json:"price"`
-	DiscountedPrice float32 `json:"discounted_price"`
+	Price float32 `json:"price"`
+	// PriceYearly is the yearly price where the plan sells one; nil otherwise.
+	PriceYearly     *float32 `json:"price_yearly,omitempty"`
+	DiscountedPrice float32  `json:"discounted_price"`
 	// Duration is [DurationMonth] or [DurationYear].
 	Duration string `json:"duration"`
 	// Savings is the percentage saved against the monthly price.
@@ -75,7 +77,10 @@ type Plan struct {
 	MaxEmailAccounts   *int `json:"max_email_accounts,omitempty"`
 
 	// MonthlyCredits is the AI credit grant included each month.
-	MonthlyCredits int `json:"monthly_credits"`
+	// MonthlyAllowanceUSD is the AI allowance the plan refills each period,
+	// in dollars.
+	MonthlyAllowanceUSD float64 `json:"monthly_allowance_usd"`
+	MonthlyCredits      int     `json:"monthly_credits"`
 	// ReferralRewardPercent is the share of this plan's month-equivalent
 	// price a referrer earns when an invitee converts to it; 100 is a full
 	// month.
