@@ -161,6 +161,25 @@ const (
 	AuditEntityPlacementTest    = "placement_test"
 	AuditEntityPlacementMonitor = "placement_monitor"
 	AuditEntityPlacementBatch   = "placement_batch"
+	// Partnership tools: a workspace's own mailbox OAuth app saved or
+	// removed, and a mailbox sign-in link made or revoked.
+	AuditEntityMailboxOAuthApp    = "mailbox_oauth_app"
+	AuditEntityMailboxConnectLink = "mailbox_connect_link"
+	// AuditEntityAgency is an agency renamed, or its staff, clients, a
+	// client's monthly limit or billing changed.
+	AuditEntityAgency = "agency"
+	// AuditEntityWorkspaceBrand is the brand a workspace's public pages and
+	// client members' dashboard show.
+	AuditEntityWorkspaceBrand = "workspace_brand"
+	// AuditEntityClientConnectLink is a client connect link created, revoked
+	// or used to connect a mailbox.
+	AuditEntityClientConnectLink = "client_connect_link"
+	// AuditEntityClientReport is a client report, its share link or its
+	// email schedule.
+	AuditEntityClientReport = "client_report"
+	// AuditEntityToolMigration is a migration from another outreach tool
+	// created, started, canceled, finished or dismissed.
+	AuditEntityToolMigration = "tool_migration"
 )
 
 // AuditActor is the member who performed an audited action.

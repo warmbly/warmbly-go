@@ -59,6 +59,10 @@ const (
 	EventEmailClicked EventName = "EMAIL_CLICKED"
 	// EventEmailReplied fires when a human reply lands for a campaign contact.
 	EventEmailReplied EventName = "EMAIL_REPLIED"
+	// EventEmailBounced fires on the workspace channel when a campaign email
+	// bounces. It carries the [EngagementEvent] fields that identify the
+	// message: campaign, contact, contact email and step.
+	EventEmailBounced EventName = "EMAIL_BOUNCED"
 	// EventDirectEmailOpened fires when a recipient opens a tracked email that
 	// was not sent by a campaign (a one-off message from the unibox, for
 	// example). [EngagementEvent.CampaignID] is empty and
@@ -425,7 +429,8 @@ type RateLimited struct {
 }
 
 // EngagementEvent is the payload of the per-message pulse events
-// ([EventEmailOpened], [EventEmailClicked], [EventEmailReplied]). It also
+// ([EventEmailOpened], [EventEmailClicked], [EventEmailReplied],
+// [EventEmailBounced]). It also
 // decodes the fields [EventEmailSent] shares; see [TaskProgressEvent] for the
 // rest of that payload.
 type EngagementEvent struct {

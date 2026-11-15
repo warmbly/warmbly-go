@@ -84,6 +84,34 @@ const (
 	PermAIAgent
 	// PermAIResearch grants running AI contact research.
 	PermAIResearch
+
+	// PermConnectEmails grants connecting mailboxes with their credentials
+	// and managing mailbox sign-in links and the workspace's own mailbox
+	// OAuth apps. Only Partnership workspaces can use it, and a third-party
+	// OAuth app can never be granted it.
+	PermConnectEmails
+	// PermManageReports grants creating, sharing and scheduling client
+	// reports.
+	PermManageReports
+
+	// PermAgencyRead grants reading the agency, its staff, clients, overview,
+	// inbox and brand. Only an agency API key can hold an agency scope.
+	PermAgencyRead
+	// PermAgencyManageClients grants creating, attaching, capping and
+	// detaching client workspaces.
+	PermAgencyManageClients
+	// PermAgencyReadUsage grants reading the shared send pool and AI balance.
+	PermAgencyReadUsage
+	// PermAgencyTransferAI grants moving AI balance from the agency into a
+	// client workspace.
+	PermAgencyTransferAI
+
+	// PermImportTools grants migrating data in from another outreach tool.
+	PermImportTools
+
+	// PermAgencyMigrate grants migrating client accounts in from another
+	// outreach tool. Agency keys only.
+	PermAgencyMigrate
 )
 
 // Preset permission masks matching the presets the API advertises.
@@ -99,13 +127,20 @@ const (
 		PermWriteContacts | PermWriteUnibox | PermBulkContacts |
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
-		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch
+		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch |
+		PermConnectEmails | PermManageReports | PermImportTools
+
+	// PermAgencyAll is every agency scope. Only an agency API key can hold
+	// these; a workspace key never does.
+	PermAgencyAll = PermAgencyRead | PermAgencyManageClients |
+		PermAgencyReadUsage | PermAgencyTransferAI | PermAgencyMigrate
 
 	// PermAppGrantable is every scope a third-party OAuth app may request:
-	// everything except [PermAPIKeys], which stays with people and API keys.
+	// everything except [PermAPIKeys] and [PermConnectEmails], which stay with
+	// people and API keys.
 	// A key or grant also never exceeds what its holder's role covers; see
 	// [PermissionCatalog.Grantable].
-	PermAppGrantable = PermFullAccess &^ PermAPIKeys
+	PermAppGrantable = PermFullAccess &^ (PermAPIKeys | PermConnectEmails)
 )
 
 // API key lifecycle states returned in [APIKey.Status].
