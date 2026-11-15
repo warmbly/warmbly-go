@@ -312,6 +312,207 @@ const (
 	// 429s for too many tests or batches running at once.
 	ErrCodePlacementTooManyRunning = "placement_too_many_running"
 	ErrCodePlacementTooManyBatches = "placement_too_many_batches"
+
+	// Codes added with the agency, Partnership connect, client report, tool
+	// migration and branding surfaces. The trailing comment is the HTTP status.
+
+	// Agency endpoints and agency API keys.
+	ErrCodeAgencyAIBalanceInsufficient    = "agency_ai_balance_insufficient"    // 402
+	ErrCodeAgencyAlreadySubscribed        = "agency_already_subscribed"         // 409
+	ErrCodeAgencyAPIKeyNotFound           = "agency_api_key_not_found"          // 404
+	ErrCodeAgencyBilled                   = "agency_billed"                     // 409
+	ErrCodeAgencyBillingDisabled          = "agency_billing_disabled"           // 503
+	ErrCodeAgencyClientHasSubscription    = "agency_client_has_subscription"    // 409
+	ErrCodeAgencyClientInboxForbidden     = "agency_client_inbox_forbidden"     // 403
+	ErrCodeAgencyClientMailboxesForbidden = "agency_client_mailboxes_forbidden" // 403
+	ErrCodeAgencyClientNotFound           = "agency_client_not_found"           // 404
+	ErrCodeAgencyClientNotOwner           = "agency_client_not_owner"           // 403
+	ErrCodeAgencyClientTaken              = "agency_client_taken"               // 409
+	ErrCodeAgencyCredentialRequired       = "agency_credential_required"        // 403
+	ErrCodeAgencyForbidden                = "agency_forbidden"                  // 403
+	ErrCodeAgencyKeyHolderLeft            = "agency_key_holder_left"            // 401
+	ErrCodeAgencyKeyIPNotAllowed          = "agency_key_ip_not_allowed"         // 403
+	ErrCodeAgencyKeyNotAllowed            = "agency_key_not_allowed"            // 403
+	ErrCodeAgencyKeyNotClient             = "agency_key_not_client"             // 403
+	ErrCodeAgencyKeyOrganizationRequired  = "agency_key_organization_required"  // 400
+	ErrCodeAgencyLeaveAgencyOwner         = "agency_leave_agency_owner"         // 409
+	ErrCodeAgencyLeaveNotOwner            = "agency_leave_not_owner"            // 403
+	ErrCodeAgencyLimitReached             = "agency_limit_reached"              // 403
+	ErrCodeAgencyNoPaymentMethod          = "agency_no_payment_method"          // 409
+	ErrCodeAgencyNoSubscription           = "agency_no_subscription"            // 400
+	ErrCodeAgencyNotFound                 = "agency_not_found"                  // 404
+	ErrCodeAgencyOwnerFixed               = "agency_owner_fixed"                // 403
+	ErrCodeAgencyPlanPreviewExpired       = "agency_plan_preview_expired"       // 409
+	ErrCodeAgencyPlanUnavailable          = "agency_plan_unavailable"           // 400
+	ErrCodeAgencyPlanUnchanged            = "agency_plan_unchanged"             // 409
+	ErrCodeAgencyPoolExceedsPlan          = "agency_pool_exceeds_plan"          // 409
+	ErrCodeAgencyPoolUnlimited            = "agency_pool_unlimited"             // 400
+	ErrCodeAgencyStaffNotFound            = "agency_staff_not_found"            // 404
+	ErrCodeAgencySubscriptionActive       = "agency_subscription_active"        // 409
+	ErrCodeAgencyVendorManaged            = "agency_vendor_managed"             // 409
+	ErrCodeAgencyVendorStaffOnly          = "agency_vendor_staff_only"          // 403
+	ErrCodeInvalidAgencyKeyPermissions    = "invalid_agency_key_permissions"    // 400
+	ErrCodeInvalidAgencyRole              = "invalid_agency_role"               // 400
+	ErrCodeInvalidAIAmount                = "invalid_ai_amount"                 // 400
+	ErrCodeInvalidAIAutoTopup             = "invalid_ai_auto_topup"             // 400
+	ErrCodeInvalidAutoTopup               = "invalid_auto_topup"                // 400
+	ErrCodeInvalidMonthlyAILimit          = "invalid_monthly_ai_limit"          // 400
+	ErrCodeInvalidMonthlySendLimit        = "invalid_monthly_send_limit"        // 400
+
+	// Client connect links (/emails/client-links) and the pages they open.
+	ErrCodeClientLinkCaptchaFailed       = "client_link_captcha_failed"        // 400
+	ErrCodeClientLinkExhausted           = "client_link_exhausted"             // 409
+	ErrCodeClientLinkExpired             = "client_link_expired"               // 403
+	ErrCodeClientLinkInvalidExpiry       = "client_link_invalid_expiry"        // 400
+	ErrCodeClientLinkInvalidMaxMailboxes = "client_link_invalid_max_mailboxes" // 400
+	ErrCodeClientLinkInvalidProviders    = "client_link_invalid_providers"     // 400
+	ErrCodeClientLinkInvalidTags         = "client_link_invalid_tags"          // 400
+	ErrCodeClientLinkNoMailboxes         = "client_link_no_mailboxes"          // 400
+	ErrCodeClientLinkNotFound            = "client_link_not_found"             // 404
+	ErrCodeClientLinkProviderNotAllowed  = "client_link_provider_not_allowed"  // 400
+	ErrCodeClientLinkProviderUnavailable = "client_link_provider_unavailable"  // 400
+	ErrCodeClientLinkRateLimited         = "client_link_rate_limited"          // 429
+	ErrCodeClientLinkRevoked             = "client_link_revoked"               // 403
+	ErrCodeClientLinkSigninDeclined      = "client_link_signin_declined"       // 400
+	ErrCodeClientLinkSigninExpired       = "client_link_signin_expired"        // 400
+	ErrCodeClientLinkTooManyMailboxes    = "client_link_too_many_mailboxes"    // 409
+	ErrCodeClientLinksUnavailable        = "client_links_unavailable"          // 503
+
+	// Warmbly Cloud pool link enrollment.
+	ErrCodeCloudLinkCredentialRequired = "cloud_link_credential_required" // 409
+	ErrCodeCloudLinkExecutor           = "cloud_link_executor"            // 400
+	ErrCodePoolLinkExecutor            = "pool_link_executor"             // 400
+	ErrCodePoolLinkExecutorConflict    = "pool_link_executor_conflict"    // 409
+
+	// The mailbox connect API (/emails/connect/...), Partnership plan only.
+	ErrCodeConnectGrantAppRequired       = "connect_grant_app_required"        // 422
+	ErrCodeConnectGrantInput             = "connect_grant_input"               // 400
+	ErrCodeConnectGrantMailboxNotAllowed = "connect_grant_mailbox_not_allowed" // 403
+	ErrCodeConnectGrantOffline           = "connect_grant_offline"             // 422
+	ErrCodeConnectGrantRedirectURI       = "connect_grant_redirect_uri"        // 400
+	ErrCodeConnectGrantRefused           = "connect_grant_refused"             // 422
+	ErrCodeConnectGrantWrongMailbox      = "connect_grant_wrong_mailbox"       // 403
+	ErrCodeConnectLinkBrowser            = "connect_link_browser"              // 403
+	ErrCodeConnectLinkCreatorLeft        = "connect_link_creator_left"         // 403
+	ErrCodeConnectLinkDeclined           = "connect_link_declined"             // 400
+	ErrCodeConnectLinkEmail              = "connect_link_email"                // 400
+	ErrCodeConnectLinkExpiry             = "connect_link_expiry"               // 400
+	ErrCodeConnectLinkNotFound           = "connect_link_not_found"            // 404
+	ErrCodeConnectLinkProvider           = "connect_link_provider"             // 400
+	ErrCodeConnectLinkReturnURL          = "connect_link_return_url"           // 400
+	ErrCodeConnectLinkUnavailable        = "connect_link_unavailable"          // 404
+	ErrCodeConnectLinkWrongMailbox       = "connect_link_wrong_mailbox"        // 403
+	ErrCodeConnectWarmup                 = "connect_warmup"                    // 400
+
+	// Copying campaigns and templates into other workspaces.
+	ErrCodeCopyDestinationsLimit             = "copy_destinations_limit"               // 400
+	ErrCodeCopyTemplatesLimit                = "copy_templates_limit"                  // 400
+	ErrCodeCrossWorkspaceCopyRequiresSession = "cross_workspace_copy_requires_session" // 403
+	// ErrCodeCopyDestinationForbidden is not an HTTP refusal: it is the code
+	// on one destination's entry in a copy result.
+	ErrCodeCopyDestinationForbidden = "copy_destination_forbidden"
+
+	// Balance top-up, automatic reload and plan offers.
+	ErrCodeCardDeclined           = "card_declined"           // 402
+	ErrCodeAuthenticationRequired = "authentication_required" // 402
+	ErrCodeChargeInProgress       = "charge_in_progress"      // 409
+	ErrCodeMonthlyLimitTooSmall   = "monthly_limit_too_small" // 422
+	ErrCodePlanOfferRequired      = "plan_offer_required"     // 403
+	ErrCodeWarmupPlanRetired      = "warmup_plan_retired"     // 409
+
+	// Member access restrictions.
+	ErrCodeOwnerAccessUnrestricted = "owner_access_unrestricted" // 403
+	ErrCodeInvalidAccessScope      = "invalid_access_scope"      // 400
+	ErrCodeTooManyAccessGrants     = "too_many_access_grants"    // 400
+	ErrCodeInvalidAccessResource   = "invalid_access_resource"   // 400
+
+	// The Slack panel.
+	ErrCodeSlackNotConfigured      = "slack_not_configured"       // 503
+	ErrCodeSlackNotConnected       = "slack_not_connected"        // 404
+	ErrCodeSlackNotLinked          = "slack_not_linked"           // 404
+	ErrCodeSlackLinkInvalid        = "slack_link_invalid"         // 404
+	ErrCodeSlackLinkEmailMismatch  = "slack_link_email_mismatch"  // 403
+	ErrCodeSlackVerifyUnavailable  = "slack_verify_unavailable"   // 503
+	ErrCodeSlackVerifyFailed       = "slack_verify_failed"        // 403
+	ErrCodeSlackVerifyWrongAccount = "slack_verify_wrong_account" // 403
+
+	// Saved list views.
+	ErrCodeUnknownView     = "unknown_view"     // 404
+	ErrCodeInvalidColumn   = "invalid_column"   // 400
+	ErrCodeDuplicateColumn = "duplicate_column" // 400
+	ErrCodeTooManyColumns  = "too_many_columns" // 400
+	ErrCodeInvalidSort     = "invalid_sort"     // 400
+	ErrCodeInvalidLayout   = "invalid_layout"   // 400
+
+	// Other refusals.
+	ErrCodeFormsDomainTaken          = "forms_domain_taken"          // 409
+	ErrCodeIdempotencyOutcomeUnknown = "idempotency_outcome_unknown" // 409
+	// ErrCodeContactLimitReached is the 403 for new contacts that would take
+	// the workspace past its contact limit.
+	ErrCodeContactLimitReached = "contact_limit_reached"
+	// ErrCodeConnectWarmupFailed and ErrCodeConnectWarmupSettingsFailed are
+	// not HTTP refusals: they are set as the error code on a connect link that
+	// connected its mailbox but could not start warmup, or started it on the
+	// default ramp.
+	ErrCodeConnectWarmupFailed         = "connect_warmup_failed"
+	ErrCodeConnectWarmupSettingsFailed = "connect_warmup_settings_failed"
+	ErrCodeInitialPasswordWebOnly      = "initial_password_web_only"   // 403
+	ErrCodeInvalidCursor               = "invalid_cursor"              // 400
+	ErrCodeInvalidEmail                = "invalid_email"               // 400
+	ErrCodeInvalidLimit                = "invalid_limit"               // 400
+	ErrCodeInvalidName                 = "invalid_name"                // 400
+	ErrCodeInvalidReportLink           = "invalid_report_link"         // 400
+	ErrCodeInvalidReportRange          = "invalid_report_range"        // 400
+	ErrCodeInvalidReportSchedule       = "invalid_report_schedule"     // 400
+	ErrCodeInvalidReportScope          = "invalid_report_scope"        // 400
+	ErrCodeInvalidReportSections       = "invalid_report_sections"     // 400
+	ErrCodeMailboxVendorHoldExpired    = "mailbox_vendor_hold_expired" // 400
+	ErrCodeScheduledSendNotPending     = "scheduled_send_not_pending"  // 409
+
+	// Workspace and agency branding, portal domains and portal sessions.
+	ErrCodeInvalidAccentColor       = "invalid_accent_color"       // 400
+	ErrCodeInvalidBrandLink         = "invalid_brand_link"         // 400
+	ErrCodeInvalidBrandText         = "invalid_brand_text"         // 400
+	ErrCodeInvalidPortalDomain      = "invalid_portal_domain"      // 400
+	ErrCodeInvalidPortalSignIn      = "invalid_portal_sign_in"     // 400
+	ErrCodeInvalidTheme             = "invalid_theme"              // 400
+	ErrCodeInvalidWebsiteURL        = "invalid_website_url"        // 400
+	ErrCodePortalDomainTaken        = "portal_domain_taken"        // 409
+	ErrCodePortalNotFound           = "portal_not_found"           // 404
+	ErrCodePortalRegistrationClosed = "portal_registration_closed" // 403
+	ErrCodePortalSessionRestricted  = "portal_session_restricted"  // 403
+	ErrCodePortalSignInElsewhere    = "portal_sign_in_elsewhere"   // 403
+	ErrCodeWhiteLabelNotEntitled    = "white_label_not_entitled"   // 403
+
+	// A workspace's own mailbox OAuth apps (/emails/oauth-apps).
+	ErrCodeOAuthAppClientID            = "oauth_app_client_id"            // 400
+	ErrCodeOAuthAppClientSecret        = "oauth_app_client_secret"        // 400
+	ErrCodeOAuthAppInUse               = "oauth_app_in_use"               // 409
+	ErrCodeOAuthAppNotFound            = "oauth_app_not_found"            // 404
+	ErrCodeOAuthAppProvider            = "oauth_app_provider"             // 400
+	ErrCodeOAuthAppRedirectURL         = "oauth_app_redirect_url"         // 400
+	ErrCodeOAuthAppRejected            = "oauth_app_rejected"             // 422
+	ErrCodeOAuthAppSecretMissing       = "oauth_app_secret_missing"       // 422
+	ErrCodePartnershipOAuthAppRequired = "partnership_oauth_app_required" // 422
+	ErrCodePartnershipPlanRequired     = "partnership_plan_required"      // 403
+
+	// Client reports (/reports).
+	ErrCodeReportEmailsUnavailable = "report_emails_unavailable" // 422
+	ErrCodeReportLimitReached      = "report_limit_reached"      // 409
+	ErrCodeReportLinksUnavailable  = "report_links_unavailable"  // 422
+	ErrCodeReportNotFound          = "report_not_found"          // 404
+
+	// Tool migrations (/migrations).
+	ErrCodeToolMigrationInFlightUnsupported = "tool_migration_in_flight_unsupported" // 400
+	ErrCodeToolMigrationKeyRejected         = "tool_migration_key_rejected"          // 422
+	ErrCodeToolMigrationLimit               = "tool_migration_limit"                 // 409
+	ErrCodeToolMigrationNotFound            = "tool_migration_not_found"             // 404
+	ErrCodeToolMigrationNotReady            = "tool_migration_not_ready"             // 409
+	ErrCodeToolMigrationPermission          = "tool_migration_permission"            // 403
+	ErrCodeToolMigrationProviderUnavailable = "tool_migration_provider_unavailable"  // 503
+	ErrCodeToolMigrationProviderUnknown     = "tool_migration_provider_unknown"      // 400
+	ErrCodeToolMigrationRunning             = "tool_migration_running"               // 409
+	ErrCodeToolMigrationTargetInvalid       = "tool_migration_target_invalid"        // 400
 )
 
 // Send-admission diagnostics. These appear in campaign activity and task

@@ -124,8 +124,10 @@ const (
 	ApprovalApprove = "approve"
 	// ApprovalDeny abandons it and lets the assistant continue without it.
 	ApprovalDeny = "deny"
-	// ApprovalAlwaysAllow runs it and stops asking for that tool in this
-	// session.
+	// ApprovalAlwaysAllow runs it and, when the member manages settings and
+	// the tool may be auto-approved, records a workspace [ToolPolicy] so the
+	// assistant stops asking for that tool. Otherwise it acts as
+	// [ApprovalApprove].
 	ApprovalAlwaysAllow = "always_allow"
 )
 
@@ -234,6 +236,38 @@ func (s *AssistantService) Approve(ctx context.Context, sessionID, decision stri
 		Decision string `json:"decision"`
 	}{Decision: decision}
 	return s.streamRun(ctx, "ai/sessions/"+url.PathEscape(sessionID)+"/approve", body, fn, opts)
+}
+
+// ToolPolicy is a workspace "always allow" decision for one assistant tool,
+// recorded when a member who manages settings answered
+// [ApprovalAlwaysAllow]. Only write-class tools that are not external (MCP)
+// tools can have one.
+type ToolPolicy struct {
+	OrgID string `json:"org_id"`
+	// ToolName is the tool's name, as in [PendingTool.ToolName].
+	ToolName string `json:"tool_name"`
+	// Decision is the recorded decision; today always [ApprovalAlwaysAllow].
+	Decision string `json:"decision"`
+	// CreatedBy is the member who set it, when still known, and
+	// CreatedByName their display name.
+	CreatedBy     *string   `json:"created_by,omitempty"`
+	CreatedByName string    `json:"created_by_name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ToolPolicies lists the tools the assistant runs without asking in the
+// current workspace. A stored policy that no longer takes effect (the tool
+// was removed or now always asks) is left out. Session-only; needs the
+// manage-settings organization permission.
+func (s *AssistantService) ToolPolicies(ctx context.Context, opts ...RequestOption) ([]ToolPolicy, *Response, error) {
+	return fetchData[ToolPolicy](ctx, s.client, "ai/tool-policies", opts)
+}
+
+// RevokeToolPolicy makes the assistant ask about tool again. tool is
+// [ToolPolicy.ToolName]; a tool with no policy answers 404. Session-only;
+// needs the manage-settings organization permission.
+func (s *AssistantService) RevokeToolPolicy(ctx context.Context, tool string, opts ...RequestOption) (*Response, error) {
+	return s.client.delete(ctx, "ai/tool-policies/"+url.PathEscape(tool), opts...)
 }
 
 func (s *AssistantService) streamRun(ctx context.Context, path string, body any, fn func(*AgentEvent) bool, opts []RequestOption) (*Response, error) {

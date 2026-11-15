@@ -53,8 +53,10 @@ type Plan struct {
 	AIGeneration bool `json:"ai_generation"`
 	AccountLimit uint `json:"account_limit"`
 
-	Price           float32 `json:"price"`
-	DiscountedPrice float32 `json:"discounted_price"`
+	Price float32 `json:"price"`
+	// PriceYearly is the yearly price where the plan sells one; nil otherwise.
+	PriceYearly     *float32 `json:"price_yearly,omitempty"`
+	DiscountedPrice float32  `json:"discounted_price"`
 	// Duration is [DurationMonth] or [DurationYear].
 	Duration string `json:"duration"`
 	// Savings is the percentage saved against the monthly price.
@@ -75,11 +77,22 @@ type Plan struct {
 	MaxEmailAccounts   *int `json:"max_email_accounts,omitempty"`
 
 	// MonthlyCredits is the AI credit grant included each month.
-	MonthlyCredits int `json:"monthly_credits"`
+	// MonthlyAllowanceUSD is the AI allowance the plan refills each period,
+	// in dollars.
+	MonthlyAllowanceUSD float64 `json:"monthly_allowance_usd"`
+	MonthlyCredits      int     `json:"monthly_credits"`
 	// ReferralRewardPercent is the share of this plan's month-equivalent
 	// price a referrer earns when an invitee converts to it; 100 is a full
 	// month.
 	ReferralRewardPercent int `json:"referral_reward_percent"`
+
+	// MonthlySendPool is set only on an agency plan: the sends shared by all
+	// of the agency's clients each period. Zero is an agency plan with no
+	// pool cap; nil is a workspace plan.
+	MonthlySendPool *int `json:"monthly_send_pool,omitempty"`
+	// AgencyAIAllowanceUSD is what an agency plan refills the agency's shared
+	// AI balance to each period; nil on a workspace plan.
+	AgencyAIAllowanceUSD *float64 `json:"agency_ai_allowance_usd,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`

@@ -11,7 +11,14 @@ func TestSyncPermissionValues(t *testing.T) {
 		PermAIAgent != 1<<22 || PermAIResearch != 1<<23 {
 		t.Fatal("permission bit values drifted from the server")
 	}
-	if PermAppGrantable&PermAPIKeys != 0 || PermAppGrantable|PermAPIKeys != PermFullAccess {
+	if PermConnectEmails != 1<<24 || PermManageReports != 1<<25 || PermAgencyRead != 1<<26 ||
+		PermAgencyTransferAI != 1<<29 || PermImportTools != 1<<30 || PermAgencyMigrate != 1<<31 {
+		t.Fatal("new permission bit values drifted from the server")
+	}
+	if PermFullAccess&PermAgencyAll != 0 {
+		t.Error("PermFullAccess must not carry agency scopes")
+	}
+	if PermAppGrantable&(PermAPIKeys|PermConnectEmails) != 0 || PermAppGrantable|PermAPIKeys|PermConnectEmails != PermFullAccess {
 		t.Errorf("PermAppGrantable = %d", PermAppGrantable)
 	}
 }

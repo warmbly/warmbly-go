@@ -172,6 +172,19 @@ type OrganizationWithLimits struct {
 	Organization
 	Limits *OrganizationLimits `json:"limits,omitempty"`
 	Counts *OrganizationCounts `json:"counts,omitempty"`
+	// Agency is the agency this workspace is a client of; nil when it is not
+	// one.
+	Agency *AgencyRef `json:"agency,omitempty"`
+}
+
+// AgencyRef names the agency a workspace is a client of.
+type AgencyRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// CanLeave is false when the workspace's owner also owns the agency; that
+	// owner detaches the workspace from the agency instead of leaving it
+	// (see [OrganizationService.LeaveAgency]).
+	CanLeave bool `json:"can_leave"`
 }
 
 // OrganizationLimits are the ceilings the server actually enforces: the plan's,
@@ -269,6 +282,16 @@ type Member struct {
 	// Permissions is the effective grant across every assigned role. Test it
 	// with [Member.Can].
 	Permissions uint16 `json:"permissions"`
+	// AccessScope is which resources the roles apply to: [AccessScopeWorkspace]
+	// or [AccessScopeRestricted]. Treat an unknown value as restricted.
+	AccessScope string `json:"access_scope"`
+	// Access lists the grants. It is filled only where the server loads them
+	// (for example the result of [OrganizationService.SetMemberAccess]); read
+	// [OrganizationService.MemberAccess] otherwise.
+	Access *MemberAccess `json:"access,omitempty"`
+	// ScopeActions are the OrgPerm* bits a restricted member may act with
+	// inside their grants, where the server lists them.
+	ScopeActions uint16 `json:"scope_actions,omitempty"`
 
 	InvitedBy  *string    `json:"invited_by,omitempty"`
 	InvitedAt  time.Time  `json:"invited_at"`
@@ -276,6 +299,9 @@ type Member struct {
 
 	User         *User         `json:"user,omitempty"`
 	Organization *Organization `json:"organization,omitempty"`
+	// Agency is the agency the workspace is a client of. It is filled only on
+	// the caller's own membership list ([OrganizationService.List]).
+	Agency *AgencyRef `json:"agency,omitempty"`
 
 	// Email and Name are flattened from the joined user for convenience.
 	Email string `json:"email"`
@@ -340,13 +366,20 @@ type Invitation struct {
 	InvitedBy      string       `json:"invited_by"`
 	ExpiresAt      time.Time    `json:"expires_at"`
 	CreatedAt      time.Time    `json:"created_at"`
+	// Access is the restriction the invitee joins with; nil is the entire
+	// workspace.
+	Access *MemberAccess `json:"access,omitempty"`
+	// Lapsed is the server's "expired" flag, set on invitations listed for
+	// sending again; such an invitation grants nothing. [Invitation.Expired]
+	// folds it in.
+	Lapsed bool `json:"expired,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
 }
 
 // Expired reports whether the invitation has lapsed.
-func (i *Invitation) Expired() bool { return timeNow().After(i.ExpiresAt) }
+func (i *Invitation) Expired() bool { return i.Lapsed || timeNow().After(i.ExpiresAt) }
 
 // InvitationPreview is the public view of an invitation, resolved from its
 // token before the recipient commits to joining. It deliberately carries only
@@ -396,6 +429,9 @@ type InviteMemberParams struct {
 	RoleIDs []string `json:"role_ids,omitempty"`
 	// RoleID is a single-role shorthand for RoleIDs.
 	RoleID *string `json:"role_id,omitempty"`
+	// Access restricts the invitee from the moment they join; nil is the
+	// entire workspace.
+	Access *MemberAccessParams `json:"access,omitempty"`
 }
 
 // UpdateMemberParams replaces a member's assigned roles.
@@ -1069,4 +1105,177 @@ func (s *OrganizationService) CancelDeletion(ctx context.Context, reason string,
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
 	return s.client.deleteBody(ctx, "organization/current/danger-zone/delete", body, opts...)
+}
+
+// --- agency ---
+
+// LeaveAgency takes the workspace out of the agency it is a client of
+// ([OrganizationWithLimits.Agency]). Only the workspace's owner may call it
+// (403 "agency_leave_not_owner" otherwise), and it needs a recently confirmed
+// session (see [AuthService.Reauth]). When the owner also owns the agency
+// ([AgencyRef.CanLeave] is false) it is refused with 409
+// "agency_leave_agency_owner"; the workspace is then removed from the
+// agency's own client list instead. A workspace that is no agency's client
+// answers 204 too. Answers 204.
+func (s *OrganizationService) LeaveAgency(ctx context.Context, opts ...RequestOption) (*Response, error) {
+	return s.client.post(ctx, "organization/agency/leave", nil, nil, opts...)
+}
+
+// --- white-label brand ---
+
+// Where a brand resolution came from, for [BrandResolution.Source]. Other
+// values may appear.
+const (
+	// BrandSourceWorkspace: the workspace's own brand.
+	BrandSourceWorkspace = "workspace"
+	// BrandSourceAgency: the brand of the agency the workspace is a client of.
+	BrandSourceAgency = "agency"
+	// BrandSourceDeployment: the instance's own brand; nothing overrides it.
+	BrandSourceDeployment = "deployment"
+)
+
+// BrandSettings is one stored brand. Empty fields mean nothing was set.
+type BrandSettings struct {
+	DisplayName string `json:"display_name"`
+	LogoURL     string `json:"logo_url"`
+	// AccentColor is a #rrggbb value.
+	AccentColor string `json:"accent_color"`
+	WebsiteURL  string `json:"website_url"`
+	// HidePoweredBy removes the instance's attribution from public pages; it
+	// takes effect only on a plan with full white-label.
+	HidePoweredBy bool      `json:"hide_powered_by"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	UpdatedBy     *string   `json:"updated_by,omitempty"`
+}
+
+// PoweredBy is the instance's attribution line.
+type PoweredBy struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+}
+
+// PortalTheme is how an agency's portal looks beyond its name, logo and
+// accent. Empty fields mean the default. A workspace's own brand carries none;
+// it appears on an [EffectiveBrand] inherited from an agency.
+type PortalTheme struct {
+	// Font is "system", "geometric" or "serif".
+	Font string `json:"font,omitempty"`
+	// Corners is "sharp" or "round".
+	Corners string `json:"corners,omitempty"`
+	// Appearance is "light" or "dark".
+	Appearance string `json:"appearance,omitempty"`
+	// SignInLayout is "split" or "cover".
+	SignInLayout string `json:"sign_in_layout,omitempty"`
+	// SignInBackground is "accent", "dark" or "image".
+	SignInBackground string `json:"sign_in_background,omitempty"`
+	SignInHeading    string `json:"sign_in_heading,omitempty"`
+	SignInMessage    string `json:"sign_in_message,omitempty"`
+	SupportEmail     string `json:"support_email,omitempty"`
+	SupportURL       string `json:"support_url,omitempty"`
+	TermsURL         string `json:"terms_url,omitempty"`
+	PrivacyURL       string `json:"privacy_url,omitempty"`
+}
+
+// EffectiveBrand is the brand a workspace's public pages actually show.
+type EffectiveBrand struct {
+	Name        string `json:"name"`
+	LogoURL     string `json:"logo_url,omitempty"`
+	AccentColor string `json:"accent_color,omitempty"`
+	WebsiteURL  string `json:"website_url,omitempty"`
+	// IconURL, SignInImageURL and Theme come only from an agency's brand.
+	IconURL        string       `json:"icon_url,omitempty"`
+	SignInImageURL string       `json:"sign_in_image_url,omitempty"`
+	Theme          *PortalTheme `json:"theme,omitempty"`
+	// PoweredBy is the instance's attribution; nil when the brand removed it
+	// or the instance configured none.
+	PoweredBy *PoweredBy `json:"powered_by,omitempty"`
+}
+
+// BrandResolution is which brand won and why.
+type BrandResolution struct {
+	Brand EffectiveBrand `json:"brand"`
+	// Source is one of the BrandSource* constants.
+	Source string `json:"source"`
+	// AgencyID is the agency the workspace is a client of, whether or not its
+	// brand is the one shown.
+	AgencyID *string `json:"agency_id,omitempty"`
+	// PortalHost is the agency's verified portal domain; empty when none.
+	PortalHost string `json:"portal_host,omitempty"`
+	// FullWhiteLabel reports whether "Powered by" may be removed.
+	FullWhiteLabel bool `json:"full_white_label"`
+}
+
+// WorkspaceBrand is the workspace's white-label state: what it stored, what
+// it would inherit, and what its public pages show.
+type WorkspaceBrand struct {
+	// Brand is what the workspace stored; empty fields mean it stored nothing.
+	Brand BrandSettings `json:"brand"`
+	// Inherited is the agency's brand the workspace shows when it sets none;
+	// nil when there is no agency brand.
+	Inherited *BrandSettings  `json:"inherited,omitempty"`
+	Effective BrandResolution `json:"effective"`
+	// PortalHost is the host connect links and reports are built on;
+	// PortalSource is "agency" for an agency's verified domain, else
+	// "shared".
+	PortalHost   string `json:"portal_host"`
+	PortalSource string `json:"portal_source"`
+	// PortalBaseURL is PortalHost as an origin, for embed snippets.
+	PortalBaseURL string `json:"portal_base_url"`
+	// PoweredBy is the instance's attribution whether or not this brand hides
+	// it; nil when the instance configured none.
+	PoweredBy *PoweredBy `json:"powered_by,omitempty"`
+}
+
+// WorkspaceBrandParams replaces the workspace's brand whole: a field left
+// empty is cleared. The logo is set separately with
+// [OrganizationService.UploadBrandLogo].
+type WorkspaceBrandParams struct {
+	DisplayName string `json:"display_name"`
+	// AccentColor is a hex color such as "#0284c7" (400
+	// "invalid_accent_color" otherwise).
+	AccentColor string `json:"accent_color"`
+	// WebsiteURL is a full https:// address (400 "invalid_website_url"
+	// otherwise).
+	WebsiteURL string `json:"website_url"`
+	// HidePoweredBy needs a plan with full white-label to turn on (403
+	// "white_label_not_entitled").
+	HidePoweredBy bool `json:"hide_powered_by"`
+}
+
+// Brand returns the workspace's white-label brand. Any member may read it.
+func (s *OrganizationService) Brand(ctx context.Context, opts ...RequestOption) (*WorkspaceBrand, *Response, error) {
+	return fetch[WorkspaceBrand](ctx, s.client, "organization/brand", opts)
+}
+
+// UpdateBrand replaces the workspace's brand and returns the result. It is a
+// full-state write, so a retry is safe. Needs the manage-settings
+// permission ([OrgPermManageSettings]).
+func (s *OrganizationService) UpdateBrand(ctx context.Context, params *WorkspaceBrandParams, opts ...RequestOption) (*WorkspaceBrand, *Response, error) {
+	return send[WorkspaceBrand](ctx, s.client.put, "organization/brand", params, opts)
+}
+
+// ResetBrand clears the workspace's brand, logo included, so it falls back
+// to its agency's brand or the instance's. Needs the manage-settings
+// permission ([OrgPermManageSettings]).
+func (s *OrganizationService) ResetBrand(ctx context.Context, opts ...RequestOption) (*WorkspaceBrand, *Response, error) {
+	return deleteFor[WorkspaceBrand](ctx, s.client, "organization/brand", opts)
+}
+
+// UploadBrandLogo sets the brand's logo and returns the brand. The image is
+// sent as the multipart field "file" and must be a PNG or JPEG, at most 2 MB
+// and 1024 pixels on a side. The previous logo is deleted. Needs the
+// manage-settings permission ([OrgPermManageSettings]).
+func (s *OrganizationService) UploadBrandLogo(ctx context.Context, file *FileUpload, opts ...RequestOption) (*WorkspaceBrand, *Response, error) {
+	out := new(WorkspaceBrand)
+	resp, err := s.client.postMultipart(ctx, "organization/brand/logo", "file", file, nil, out, opts...)
+	if err != nil {
+		return nil, resp, err
+	}
+	return out, resp, nil
+}
+
+// DeleteBrandLogo removes the brand's logo and returns the brand. Needs the
+// manage-settings permission ([OrgPermManageSettings]).
+func (s *OrganizationService) DeleteBrandLogo(ctx context.Context, opts ...RequestOption) (*WorkspaceBrand, *Response, error) {
+	return deleteFor[WorkspaceBrand](ctx, s.client, "organization/brand/logo", opts)
 }

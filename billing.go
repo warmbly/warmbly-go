@@ -46,6 +46,10 @@ type Subscription struct {
 
 	// IsEnterprise marks a subscription negotiated outside the plan catalog.
 	IsEnterprise bool `json:"is_enterprise"`
+	// ManagedByAgencyID is set on an agency client: the agency whose
+	// subscription this workspace's plan mirrors. Such a workspace cannot buy
+	// a plan of its own (checkout answers 409 agency_billed).
+	ManagedByAgencyID *string `json:"managed_by_agency_id,omitempty"`
 	// Plan is the plan this subscription is on, joined in by the API so a
 	// caller does not have to look it up in [MetaService.Plans].
 	Plan *Plan `json:"plan,omitempty"`

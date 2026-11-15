@@ -120,6 +120,10 @@ const (
 	JoinReasonJWTRequired      = "jwt_required"
 	JoinReasonAdminMFARequired = "admin_mfa_required"
 	JoinReasonNotAnAdmin       = "not_an_admin"
+	// JoinReasonPortalSessionRestricted accompanies
+	// [JoinCodePermissionDenied] when a session signed in through an agency's
+	// client portal asks for a topic that session may not open.
+	JoinReasonPortalSessionRestricted = "portal_session_restricted"
 )
 
 // ErrUnauthorized is returned by [Client.Open] when the credential is rejected.

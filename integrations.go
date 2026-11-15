@@ -51,6 +51,9 @@ const (
 	ProviderGooglePlaces = "google_places"
 	ProviderFoursquare   = "foursquare"
 	ProviderOutscraper   = "outscraper"
+	// ProviderJina is a Jina AI key (config.api_key): the lead finder reads
+	// sites that turn a direct visit away, and searches the web, through it.
+	ProviderJina = "jina"
 )
 
 // Connection states returned in [IntegrationConnection.Status].

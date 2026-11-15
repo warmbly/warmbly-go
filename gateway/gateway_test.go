@@ -229,6 +229,7 @@ func TestJoinErrorClassification(t *testing.T) {
 		{"connection cap", `{"code":4009,"reason":"Connection limit exceeded"}`, JoinCodeConnectionLimit, nil, false},
 		{"not a member", `{"code":4010,"reason":"not_a_member"}`, JoinCodePermissionDenied, ErrForbidden, true},
 		{"no such campaign", `{"code":4010,"reason":"campaign_not_found"}`, JoinCodePermissionDenied, ErrForbidden, true},
+		{"portal session", `{"code":4010,"reason":"portal_session_restricted"}`, JoinCodePermissionDenied, ErrForbidden, true},
 		{"unknown code", `{"code":5000,"reason":"server busy"}`, 5000, nil, false},
 	}
 	for _, tc := range cases {

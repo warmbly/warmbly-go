@@ -66,11 +66,12 @@ const (
 	// phone, company, custom.*) take the text operators; comparisons ignore
 	// case.
 	SegmentFieldText SegmentFieldKind = "text"
-	// SegmentFieldEnum fields (source, verification_status, esp_provider)
-	// take in/not_in with Values drawn from [SegmentFieldSpec.Options].
+	// SegmentFieldEnum fields (source, verification_status, mail_host,
+	// esp_provider, world_region, country, timezone) take in/not_in with
+	// Values drawn from [SegmentFieldSpec.Options].
 	SegmentFieldEnum SegmentFieldKind = "enum"
-	// SegmentFieldBool fields (subscribed, suppressed, is_catch_all) take
-	// is_true/is_false and no value.
+	// SegmentFieldBool fields (subscribed, suppressed, is_catch_all,
+	// location_known) take is_true/is_false and no value.
 	SegmentFieldBool SegmentFieldKind = "bool"
 	// SegmentFieldDate fields (created_at, updated_at, last_sent_at,
 	// last_opened_at, last_clicked_at, last_replied_at) take within_days,
@@ -151,6 +152,12 @@ const (
 	SegmentOpIsFalse SegmentOperator = "is_false"
 )
 
+// SegmentWorldRegionNone is the world_region value for a contact with no
+// known country: nothing on the record places it, or only a bare UTC offset
+// does. The other world_region values are listed in that field's
+// [SegmentFieldSpec.Options].
+const SegmentWorldRegionNone = "none"
+
 // SegmentCustomFieldPrefix addresses a contact custom field in a condition:
 // "custom.industry" filters on the custom field "industry". Custom fields are
 // text fields. The workspace's current keys are returned by
@@ -218,12 +225,16 @@ type SegmentFieldSpec struct {
 	Field string `json:"field"`
 	// Label is the human-readable name, for a condition builder.
 	Label string `json:"label"`
-	// Group is the display group: "Contact", "Company", "Campaign
-	// activity", "Email engagement", "Segments" or "Custom field".
+	// Group is the display group: "Contact", "Company", "Location",
+	// "Campaign activity", "Email engagement", "Segments" or "Custom field".
 	Group string           `json:"group"`
 	Kind  SegmentFieldKind `json:"kind"`
 	// Options lists the accepted Values of an enum field; nil otherwise.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels names an enum's values for display where the value alone
+	// is not readable (a country code, a timezone); a value missing from it
+	// shows as itself.
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 }
 
 // SegmentCreateParams creates a segment. Name is required; everything else

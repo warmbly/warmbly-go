@@ -120,6 +120,20 @@ type CloudLinkMailbox struct {
 	// count, 7-day totals). Nil when not enrolled or when the cloud could not
 	// be reached for the listing.
 	Cloud *PoolLinkMailboxState `json:"cloud,omitempty"`
+	// Legacy marks a mailbox enrolled through this server's older pool link
+	// rather than its current cloud link.
+	Legacy bool `json:"legacy"`
+	// IndependentSMTP marks an SMTP mailbox Warmbly Cloud holds as its own
+	// cloud account.
+	IndependentSMTP bool `json:"independent_smtp,omitempty"`
+	// EnrollmentState is the enrollment's progress as Cloud reports it.
+	EnrollmentState string `json:"enrollment_state,omitempty"`
+	// StandingObservedAt and SettingsObservedAt are when this server last
+	// read the mailbox's standing and settings from Cloud.
+	StandingObservedAt *time.Time `json:"standing_observed_at,omitempty"`
+	SettingsObservedAt *time.Time `json:"settings_observed_at,omitempty"`
+	// Executor is "cloud" or empty; "instance" marks a legacy enrollment.
+	Executor string `json:"executor,omitempty"`
 }
 
 // CloudLinkOAuthStart is the handle on a Google or Microsoft consent brokered
@@ -246,6 +260,32 @@ func (s *CloudLinkService) PauseMailbox(ctx context.Context, id string, opts ...
 // manage-emails permission; recorded in the audit log.
 func (s *CloudLinkService) ResumeMailbox(ctx context.Context, id string, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
 	return s.lifecycle(ctx, id, "resume", opts)
+}
+
+// MailboxParticipation is how an enrolled mailbox takes part in the hosted
+// pool's deliverability tests, as [Email.TestMode] and its companions say for
+// a local mailbox.
+type MailboxParticipation struct {
+	// Mode is [TestModeDiagnostic] or [TestModeOff]; [TestModeLegacy] is
+	// refused here.
+	Mode string `json:"mode"`
+	// Send and Receive say whether the mailbox sends and receives test mail.
+	// Both must be false with [TestModeOff].
+	Send    bool `json:"send"`
+	Receive bool `json:"receive"`
+	// SharedDailyLimit caps the mailbox's total daily sends across its shared
+	// use, and RollingRecipientLimit its distinct recipients over the rolling
+	// window; nil for no cap. Neither may be negative.
+	SharedDailyLimit      *int `json:"shared_daily_limit,omitempty"`
+	RollingRecipientLimit *int `json:"rolling_recipient_limit,omitempty"`
+}
+
+// SetMailboxParticipation changes how enrolled mailbox id takes part in the
+// hosted pool's deliverability tests and returns the mailbox. An invalid
+// combination is refused with a 400, and a mailbox that is not enrolled with
+// not found. Needs the manage-emails permission; recorded in the audit log.
+func (s *CloudLinkService) SetMailboxParticipation(ctx context.Context, id string, params *MailboxParticipation, opts ...RequestOption) (*CloudLinkMailbox, *Response, error) {
+	return send[CloudLinkMailbox](ctx, s.client.patch, "cloud-link/mailboxes/"+url.PathEscape(id)+"/participation", params, opts)
 }
 
 func (s *CloudLinkService) lifecycle(ctx context.Context, id, action string, opts []RequestOption) (*CloudLinkMailbox, *Response, error) {

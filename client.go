@@ -74,6 +74,10 @@ type Client struct {
 	Analytics *AnalyticsService
 	// Advisor reads and acts on continuous checks of the sending posture.
 	Advisor *AdvisorService
+	// Reports are client reports: scoped analytics shared by link or email.
+	Reports *ReportService
+	// ToolMigrations move a workspace in from another outreach tool.
+	ToolMigrations *ToolMigrationService
 
 	// CRM manages pipelines, deals and the task board.
 	CRM *CRMService
@@ -144,6 +148,10 @@ type Client struct {
 	Organization *OrganizationService
 	// Billing manages the subscription, AI credits and referrals.
 	Billing *BillingService
+	// Agency manages agencies: their staff, client workspaces, shared send
+	// pool and AI balance, billing, white-label brand and agency API keys.
+	// It takes a signed-in session or an agency API key ("wmagency_").
+	Agency *AgencyService
 	// WebsiteTracking configures the website tracking snippet (session-only).
 	WebsiteTracking *WebsiteTrackingService
 	// PoolLink manages self-hosted instances linked to this workspace's warmup
@@ -203,6 +211,8 @@ func New(opts ...Option) (*Client, error) {
 	c.Templates = (*TemplateService)(&c.common)
 	c.Analytics = (*AnalyticsService)(&c.common)
 	c.Advisor = (*AdvisorService)(&c.common)
+	c.Reports = (*ReportService)(&c.common)
+	c.ToolMigrations = (*ToolMigrationService)(&c.common)
 
 	c.CRM = (*CRMService)(&c.common)
 	c.Teams = (*TeamService)(&c.common)
@@ -241,6 +251,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Auth = (*AuthService)(&c.common)
 	c.Organization = (*OrganizationService)(&c.common)
 	c.Billing = (*BillingService)(&c.common)
+	c.Agency = (*AgencyService)(&c.common)
 	c.WebsiteTracking = (*WebsiteTrackingService)(&c.common)
 	c.PoolLink = (*PoolLinkService)(&c.common)
 	c.CloudLink = (*CloudLinkService)(&c.common)
@@ -757,18 +768,21 @@ func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file
 	if err := mw.Close(); err != nil {
 		return nil, fmt.Errorf("warmbly: build upload form: %w", err)
 	}
+	return c.postFormBody(ctx, path, buf.Bytes(), mw.FormDataContentType(), out, opts)
+}
 
+// postFormBody POSTs an already encoded multipart body. The payload is held
+// in memory so retries can replay it.
+func (c *Client) postFormBody(ctx context.Context, path string, payload []byte, contentType string, out any, opts []RequestOption) (*Response, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, path, nil, newRequestConfig(opts))
 	if err != nil {
 		return nil, err
 	}
-	payload := buf.Bytes()
 	req.Body = io.NopCloser(bytes.NewReader(payload))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(payload)), nil
 	}
 	req.ContentLength = int64(len(payload))
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-
+	req.Header.Set("Content-Type", contentType)
 	return c.do(req, out)
 }

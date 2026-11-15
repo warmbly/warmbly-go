@@ -5,11 +5,13 @@ grouped by release and version numbers use semantic versioning.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-08
+## [0.4.0] - 2026-11-15
 
-Reconciles the SDK with the current v1 API: the lead finder, inbox placement,
-CRM mode with Salesforce, Apollo and Clay, background contact imports, the
-reauth family, and the newer realtime events. Three changes are breaking.
+Reconciles the SDK with the current v1 API: agencies, client reports, tool
+migrations, the Partnership mailbox connect API, the lead finder, inbox
+placement, CRM mode with Salesforce, Apollo and Clay, mailbox and contact
+imports, the reauth family, and the newer realtime events. Three changes are
+breaking.
 
 ### Changed
 
@@ -33,12 +35,106 @@ reauth family, and the newer realtime events. Three changes are breaking.
   exhausted; `AccountsPage` reads one page.
 - `WarmupHealth.SpamScore` is documented as always 0 and deprecated.
 
+- `PermFullAccess` now includes the new workspace scopes `PermConnectEmails`,
+  `PermManageReports` and `PermImportTools`, matching the server's full access
+  preset. `PermAppGrantable` also leaves out `PermConnectEmails`, which a
+  third-party app can never be granted.
+- `FormService.ListSubmissions` pages by the server's opaque cursor
+  (`FormSubmissionListParams.Cursor`). `Page.NextCursor` is no longer an
+  RFC 3339 timestamp; `Before` still works against older servers.
+- `Invitation.Expired` also reports true when the server marks the
+  invitation expired (`Invitation.Lapsed`).
+- Notification preference updates are merged over the stored preferences by
+  the server, so categories the SDK does not know are left alone.
+
 ### Fixed
 
 - `OAuthAppService.UploadLogo` sent the multipart part as `logo`; the server
   reads `file`, so every upload failed.
 
 ### Added
+
+- `AgencyService` (`Client.Agency`) for the `/agency` API: agencies and plans,
+  staff and invitations, client workspaces with monthly send and AI caps, the
+  shared send pool and AI balance with transfers into clients, the overview,
+  mailbox list and cross-client inbox, migrations, inbox vendor accounts,
+  checkout, plan changes and top-ups, the white-label brand, portal theme and
+  portal domain, and agency API keys. `WithAgencyOrganization` lets an agency
+  key act in one client workspace. Agency scopes: `PermAgencyRead`,
+  `PermAgencyManageClients`, `PermAgencyReadUsage`, `PermAgencyTransferAI`,
+  `PermAgencyMigrate` (together `PermAgencyAll`).
+- `ReportService` (`Client.Reports`) for client reports: create, update,
+  delete, preview, share links and email schedules. Needs `PermManageReports`
+  to write and `PermReadAnalytics` to read.
+- `ToolMigrationService` (`Client.ToolMigrations`) to bring data over from
+  another outreach tool: providers, create and scan, start, cancel, link
+  senders and dismiss. Needs `PermImportTools`.
+- Partnership mailbox connect API on `EmailService`: `ConnectMailboxSMTPIMAP`,
+  `ConnectMailboxSMTPIMAPBulk`, `ConnectMailboxOAuth`,
+  `ConnectMailboxOAuthBulk`; single-use sign-in links (`CreateConnectLink`,
+  `ListConnectLinks`, `GetConnectLink`, `RevokeConnectLink`); the workspace's
+  own mailbox OAuth apps (`ListMailboxOAuthApps`, `PutMailboxOAuthApp`,
+  `DeleteMailboxOAuthApp`); client connect links (`CreateClientLink`,
+  `ListClientLinks`, `ClientLinkUses`, `RevokeClientLink`). Needs
+  `PermConnectEmails`, except client links, which use the email scopes.
+- Warmup filter tag: `EmailService.WarmupFilterTag`, `SetWarmupFilterTag`,
+  `ClearWarmupFilterTag`.
+- Mailbox imports on `EmailService`: `PreviewImport`, `CreateImport`,
+  `ListImports`, `GetImport`, `ImportRows`, `FixImportRow`, `RetryImport`,
+  `CancelImport`, `DismissImport`, `DownloadImportFailures`.
+- Domain-wide administrator grants for Google Workspace and Microsoft 365:
+  `GrantConfig`, `ListGrants`, `StartGoogleGrant`, `FinishGoogleGrant`,
+  `StartMicrosoftGrant`, `FinishMicrosoftGrant`, `GetGrant`, `CheckGrant`,
+  `DeleteGrant`, `GrantUsers`, `ConnectGrantUsers`, plus `SigninMigration`,
+  `Signin` and `SwitchToAppPassword`.
+- Sending domains: `ListDomains`, `BulkSetupDomains`, `TrackingSuggestion`,
+  `SetDomainTracking`, `SetDomainRedirect`, `VerifyDomainRedirect`,
+  `VerifyRedirectWebsite`, `DeleteDomainRedirect`,
+  `SetDomainVendorForwarding`, `SetDomainVendorTracking`.
+  `TrackingDomainStatus` gains `TXTName` and `TXTValue`.
+- Inbox vendor connections: `VendorCatalog`, `ListVendors`, `CreateVendor`,
+  `UpdateVendor`, `DeleteVendor`, `VendorMailboxes`, `ImportVendorMailboxes`,
+  `ReconnectVendorMailboxes`, `VendorReconnectStatus`.
+- `CampaignService.CopyToWorkspaces`, `TemplateService.CopyToWorkspaces` and
+  `CampaignService.LeadTimezones`. `Campaign.TimezoneMode` and
+  `Campaign.WarmupGraduation`, with matching create, update and estimate
+  params, and the `campaign_ramp` estimate bottleneck.
+- `OrganizationService.LeaveAgency` and the workspace brand (`Brand`,
+  `UpdateBrand`, `ResetBrand`, `UploadBrandLogo`, `DeleteBrandLogo`);
+  `OrganizationWithLimits.Agency` and `Member.Agency`.
+- Member access restrictions: `OrganizationService.MemberAccess`,
+  `SetMemberAccess`, `SuggestedSenders`; `Member.AccessScope`, `Member.Access`,
+  `Member.ScopeActions`; `InviteMemberParams.Access` and `Invitation.Access`.
+- `BillingService.Balance`, `TopUpBalance`, `BalanceCheckout`,
+  `SetupPaymentMethod`, `UpdateAutoReload`, `BalanceInvoices`, `PlanOffers`
+  and `CheckoutPlanOffer`. `Plan` gains `PriceYearly`, `MonthlyAllowanceUSD`,
+  `MonthlySendPool` and `AgencyAIAllowanceUSD`; `Subscription` gains
+  `ManagedByAgencyID`.
+- `OAuthAppService.WorkspaceAuthorizations` and
+  `RevokeWorkspaceAuthorization`; `AssistantService.ToolPolicies` and
+  `RevokeToolPolicy`.
+- The Slack panel on `IntegrationService`: `SlackStatus`, `SlackChannels`,
+  `UpdateSlackSettings`, `PreviewSlackLink`, `ConfirmSlackLink`,
+  `StartSlackLinkVerify`, `SetSlackDMNotifications`, `UnlinkSlack`,
+  `RemoveSlackLink`. `AuthService.ViewPreferences`, `SaveViewPreferences` and
+  `ResetViewPreferences` for saved list layouts.
+- `CloudLinkService.SetMailboxParticipation`; `CloudLinkMailbox` gains
+  `Legacy`, `IndependentSMTP`, `EnrollmentState`, `StandingObservedAt`,
+  `SettingsObservedAt` and `Executor`.
+- Lead finder: `LeadEnrichParams.WebSearch`, `LeadEnrichmentRun.WebSearch`,
+  `LeadSite.ReadVia` and `LeadSite.Unread`; `ProviderJina`.
+  `FormsDomainStatus.EdgeRecords`, `SegmentFieldSpec.OptionLabels`, the
+  positive-reply, placement and inbox-action notification categories.
+- Gateway: the `EMAIL_BOUNCED` event (`EventEmailBounced`, decoded as an
+  `EngagementEvent`) and the `portal_session_restricted` join refusal
+  (`JoinReasonPortalSessionRestricted`).
+- About 200 `ErrCode*` constants for the agency, connect, client link, report,
+  tool migration, brand, copy, balance, member access, Slack, saved view,
+  mailbox import, grant, sending domain and vendor refusals, plus
+  `ErrCodeContactLimitReached` and `ErrCodeInitialPasswordWebOnly`.
+- Audit entity types `mailbox_oauth_app`, `mailbox_connect_link`, `agency`,
+  `workspace_brand`, `client_connect_link`, `client_report` and
+  `tool_migration`.
 
 - `Client.Leads` (`LeadService`): the lead finder, covering search, query
   (cursor paginated), facets, points, enrichment, export, saved searches,
@@ -332,6 +428,9 @@ Initial release of the official Go SDK for Warmbly.
   library, with the RFC 6455 WebSocket protocol implemented in an internal
   package.
 
-[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/warmbly/warmbly-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/warmbly/warmbly-go/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/warmbly/warmbly-go/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/warmbly/warmbly-go/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.2.0
 [0.1.0]: https://github.com/warmbly/warmbly-go/releases/tag/v0.1.0
