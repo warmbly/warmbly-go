@@ -175,6 +175,11 @@ type Campaign struct {
 	// EffectiveTimezone is the zone actually in use: Timezone when set, else
 	// the workspace's.
 	EffectiveTimezone string `json:"effective_timezone"`
+	// TimezoneMode says whose clock the schedule is read on:
+	// [CampaignTimezoneModeCampaign] (the campaign's) or
+	// [CampaignTimezoneModeRecipient] (each lead's own, falling back to the
+	// campaign's when a lead's is unknown).
+	TimezoneMode string `json:"timezone_mode"`
 	// Days is a legacy weekday bitmask (bit 0 is Monday), superseded by
 	// ScheduleWindows.
 	Days uint8 `json:"days"`
@@ -216,6 +221,10 @@ type Campaign struct {
 	RampCeiling   int        `json:"ramp_ceiling"`
 	RampLevel     int        `json:"ramp_level"`
 	RampLevelDate *time.Time `json:"ramp_level_date,omitempty"`
+	// WarmupGraduation holds a mailbox leaving warmup to the reply-earned
+	// cold ceiling in this campaign. Off leaves the mailbox cap, the campaign
+	// limit and the campaign ramp as its only volume limits.
+	WarmupGraduation bool `json:"warmup_graduation"`
 
 	// ESPMatchMode is [ESPMatchOff], [ESPMatchPrefer] or [ESPMatchStrict].
 	ESPMatchMode string `json:"esp_match_mode"`
@@ -439,6 +448,14 @@ type CampaignEstimateParams struct {
 	StepWaits []int `json:"step_waits,omitempty"`
 	// CampaignID projects a saved campaign, filling anything not sent from it.
 	CampaignID *string `json:"campaign_id,omitempty"`
+	// WarmupGraduation and the Ramp fields project the campaign's ramp-up.
+	// Fields left nil come from the saved campaign named by CampaignID, else
+	// a new campaign's defaults.
+	WarmupGraduation *bool `json:"warmup_graduation,omitempty"`
+	RampEnabled      *bool `json:"ramp_enabled,omitempty"`
+	RampStart        *int  `json:"ramp_start,omitempty"`
+	RampIncrement    *int  `json:"ramp_increment,omitempty"`
+	RampCeiling      *int  `json:"ramp_ceiling,omitempty"`
 }
 
 // CampaignEstimateResult is the projection from [CampaignService.Estimate]. It
@@ -494,6 +511,7 @@ type CampaignEstimateResult struct {
 // Bottleneck values of a campaign estimate, in [CampaignEstimateResult.Bottleneck].
 const (
 	CampaignEstimateBottleneckCampaignLimit   = "campaign_limit"
+	CampaignEstimateBottleneckCampaignRamp    = "campaign_ramp"
 	CampaignEstimateBottleneckGraduation      = "warmup_graduation"
 	CampaignEstimateBottleneckSpacing         = "spacing"
 	CampaignEstimateBottleneckOtherCampaigns  = "other_campaigns"
@@ -890,9 +908,11 @@ type CampaignCreateParams struct {
 	CC  []string `json:"cc,omitempty"`
 	BCC []string `json:"bcc,omitempty"`
 
-	StartDate       *time.Time       `json:"start_date,omitempty"`
-	EndDate         *time.Time       `json:"end_date,omitempty"`
-	Timezone        *string          `json:"timezone,omitempty"`
+	StartDate *time.Time `json:"start_date,omitempty"`
+	EndDate   *time.Time `json:"end_date,omitempty"`
+	Timezone  *string    `json:"timezone,omitempty"`
+	// TimezoneMode is one of the CampaignTimezoneMode* constants.
+	TimezoneMode    *string          `json:"timezone_mode,omitempty"`
 	Days            *uint8           `json:"days,omitempty"`
 	StartTime       *string          `json:"start_time,omitempty"`
 	EndTime         *string          `json:"end_time,omitempty"`
@@ -912,6 +932,9 @@ type CampaignCreateParams struct {
 	RampStart     *int  `json:"ramp_start,omitempty"`
 	RampIncrement *int  `json:"ramp_increment,omitempty"`
 	RampCeiling   *int  `json:"ramp_ceiling,omitempty"`
+	// WarmupGraduation holds mailboxes leaving warmup to the reply-earned
+	// cold ceiling. On create the server defaults it to true.
+	WarmupGraduation *bool `json:"warmup_graduation,omitempty"`
 
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
@@ -991,7 +1014,9 @@ type CampaignUpdateParams struct {
 	ClearStartDate bool `json:"-"`
 	ClearEndDate   bool `json:"-"`
 
-	Timezone        *string          `json:"timezone,omitempty"`
+	Timezone *string `json:"timezone,omitempty"`
+	// TimezoneMode is one of the CampaignTimezoneMode* constants.
+	TimezoneMode    *string          `json:"timezone_mode,omitempty"`
 	Days            *uint8           `json:"days,omitempty"`
 	StartTime       *string          `json:"start_time,omitempty"`
 	EndTime         *string          `json:"end_time,omitempty"`
@@ -1013,6 +1038,9 @@ type CampaignUpdateParams struct {
 	RampStart     *int  `json:"ramp_start,omitempty"`
 	RampIncrement *int  `json:"ramp_increment,omitempty"`
 	RampCeiling   *int  `json:"ramp_ceiling,omitempty"`
+	// WarmupGraduation holds mailboxes leaving warmup to the reply-earned
+	// cold ceiling. On create the server defaults it to true.
+	WarmupGraduation *bool `json:"warmup_graduation,omitempty"`
 
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
@@ -1401,7 +1429,8 @@ func (s *CampaignService) CopyToWorkspaces(ctx context.Context, id string, param
 	return sendData[WorkspaceCopyResult](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/copy-to", params, opts)
 }
 
-// Campaign timezone modes, for [CampaignLeadTimezones.TimezoneMode]: whose
+// Campaign timezone modes, for [Campaign.TimezoneMode] and
+// [CampaignLeadTimezones.TimezoneMode]: whose
 // clock the sending schedule is read on. Other values may appear.
 const (
 	// CampaignTimezoneModeCampaign reads the schedule in the campaign's own
