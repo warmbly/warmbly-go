@@ -768,18 +768,21 @@ func (c *Client) postMultipart(ctx context.Context, path, fieldName string, file
 	if err := mw.Close(); err != nil {
 		return nil, fmt.Errorf("warmbly: build upload form: %w", err)
 	}
+	return c.postFormBody(ctx, path, buf.Bytes(), mw.FormDataContentType(), out, opts)
+}
 
+// postFormBody POSTs an already encoded multipart body. The payload is held
+// in memory so retries can replay it.
+func (c *Client) postFormBody(ctx context.Context, path string, payload []byte, contentType string, out any, opts []RequestOption) (*Response, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, path, nil, newRequestConfig(opts))
 	if err != nil {
 		return nil, err
 	}
-	payload := buf.Bytes()
 	req.Body = io.NopCloser(bytes.NewReader(payload))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(payload)), nil
 	}
 	req.ContentLength = int64(len(payload))
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-
+	req.Header.Set("Content-Type", contentType)
 	return c.do(req, out)
 }

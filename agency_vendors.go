@@ -39,26 +39,11 @@ type AgencyVendorAccountClient struct {
 }
 
 // AgencyVendor is one supported inbox vendor and what connecting it asks
-// for.
-type AgencyVendor struct {
-	ID         string              `json:"id"`
-	Label      string              `json:"label"`
-	Website    string              `json:"website"`
-	KeyHelpURL string              `json:"key_help_url"`
-	Fields     []AgencyVendorField `json:"fields"`
-	// SignsIn is a vendor that can sign in again as its Google mailboxes, so
-	// they reconnect in place.
-	SignsIn bool `json:"signs_in"`
-}
+// for. The agency and workspace catalogs are the same list.
+type AgencyVendor = MailboxVendor
 
 // AgencyVendorField is one credential input a vendor needs.
-type AgencyVendorField struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Secret   bool   `json:"secret"`
-	Required bool   `json:"required"`
-	Help     string `json:"help,omitempty"`
-}
+type AgencyVendorField = MailboxVendorField
 
 // AgencyVendorList is the agency's vendor accounts and the vendor catalog.
 type AgencyVendorList struct {
@@ -66,34 +51,14 @@ type AgencyVendorList struct {
 	Catalog []AgencyVendor        `json:"catalog"`
 }
 
-// AgencyVendorParams creates or updates an agency vendor account.
-type AgencyVendorParams struct {
-	// Vendor is an [AgencyVendor.ID]; required on create, ignored on update.
-	Vendor string `json:"vendor,omitempty"`
-	// Label names the account; empty takes the vendor's name on create and
-	// keeps the current one on update.
-	Label string `json:"label,omitempty"`
-	// Fields are the credentials, keyed by [AgencyVendorField.Key]. They
-	// are verified with the vendor before being stored. On update, empty
-	// keeps the current key.
-	Fields map[string]string `json:"fields,omitempty"`
-}
+// AgencyVendorParams creates or updates an agency vendor account; it takes
+// the same fields as a workspace connection.
+type AgencyVendorParams = VendorConnectionParams
 
 // AgencyVendorConnection is a client workspace's connection to an agency
-// vendor account.
-type AgencyVendorConnection struct {
-	ID         string     `json:"id"`
-	Vendor     string     `json:"vendor"`
-	Label      string     `json:"label"`
-	Status     string     `json:"status"`
-	LastError  string     `json:"last_error,omitempty"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Mailboxes  int        `json:"mailboxes"`
-	// AgencyConnectionID is the agency vendor account the connection was
-	// made from.
-	AgencyConnectionID *string `json:"agency_connection_id,omitempty"`
-}
+// vendor account: the client's own [VendorConnection], with
+// AgencyConnectionID set.
+type AgencyVendorConnection = VendorConnection
 
 // Vendors returns the agency's inbox vendor accounts, with the clients each
 // is used in, and the catalog of supported vendors.
