@@ -366,13 +366,20 @@ type Invitation struct {
 	InvitedBy      string       `json:"invited_by"`
 	ExpiresAt      time.Time    `json:"expires_at"`
 	CreatedAt      time.Time    `json:"created_at"`
+	// Access is the restriction the invitee joins with; nil is the entire
+	// workspace.
+	Access *MemberAccess `json:"access,omitempty"`
+	// Lapsed is the server's "expired" flag, set on invitations listed for
+	// sending again; such an invitation grants nothing. [Invitation.Expired]
+	// folds it in.
+	Lapsed bool `json:"expired,omitempty"`
 
 	Organization  *Organization `json:"organization,omitempty"`
 	InvitedByUser *User         `json:"invited_by_user,omitempty"`
 }
 
 // Expired reports whether the invitation has lapsed.
-func (i *Invitation) Expired() bool { return timeNow().After(i.ExpiresAt) }
+func (i *Invitation) Expired() bool { return i.Lapsed || timeNow().After(i.ExpiresAt) }
 
 // InvitationPreview is the public view of an invitation, resolved from its
 // token before the recipient commits to joining. It deliberately carries only
@@ -422,6 +429,9 @@ type InviteMemberParams struct {
 	RoleIDs []string `json:"role_ids,omitempty"`
 	// RoleID is a single-role shorthand for RoleIDs.
 	RoleID *string `json:"role_id,omitempty"`
+	// Access restricts the invitee from the moment they join; nil is the
+	// entire workspace.
+	Access *MemberAccessParams `json:"access,omitempty"`
 }
 
 // UpdateMemberParams replaces a member's assigned roles.

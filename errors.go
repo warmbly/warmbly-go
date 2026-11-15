@@ -412,6 +412,38 @@ const (
 	// on one destination's entry in a copy result.
 	ErrCodeCopyDestinationForbidden = "copy_destination_forbidden"
 
+	// Balance top-up, automatic reload and plan offers.
+	ErrCodeCardDeclined           = "card_declined"           // 402
+	ErrCodeAuthenticationRequired = "authentication_required" // 402
+	ErrCodeChargeInProgress       = "charge_in_progress"      // 409
+	ErrCodeMonthlyLimitTooSmall   = "monthly_limit_too_small" // 422
+	ErrCodePlanOfferRequired      = "plan_offer_required"     // 403
+	ErrCodeWarmupPlanRetired      = "warmup_plan_retired"     // 409
+
+	// Member access restrictions.
+	ErrCodeOwnerAccessUnrestricted = "owner_access_unrestricted" // 403
+	ErrCodeInvalidAccessScope      = "invalid_access_scope"      // 400
+	ErrCodeTooManyAccessGrants     = "too_many_access_grants"    // 400
+	ErrCodeInvalidAccessResource   = "invalid_access_resource"   // 400
+
+	// The Slack panel.
+	ErrCodeSlackNotConfigured      = "slack_not_configured"       // 503
+	ErrCodeSlackNotConnected       = "slack_not_connected"        // 404
+	ErrCodeSlackNotLinked          = "slack_not_linked"           // 404
+	ErrCodeSlackLinkInvalid        = "slack_link_invalid"         // 404
+	ErrCodeSlackLinkEmailMismatch  = "slack_link_email_mismatch"  // 403
+	ErrCodeSlackVerifyUnavailable  = "slack_verify_unavailable"   // 503
+	ErrCodeSlackVerifyFailed       = "slack_verify_failed"        // 403
+	ErrCodeSlackVerifyWrongAccount = "slack_verify_wrong_account" // 403
+
+	// Saved list views.
+	ErrCodeUnknownView     = "unknown_view"     // 404
+	ErrCodeInvalidColumn   = "invalid_column"   // 400
+	ErrCodeDuplicateColumn = "duplicate_column" // 400
+	ErrCodeTooManyColumns  = "too_many_columns" // 400
+	ErrCodeInvalidSort     = "invalid_sort"     // 400
+	ErrCodeInvalidLayout   = "invalid_layout"   // 400
+
 	// Other refusals.
 	ErrCodeFormsDomainTaken          = "forms_domain_taken"          // 409
 	ErrCodeIdempotencyOutcomeUnknown = "idempotency_outcome_unknown" // 409

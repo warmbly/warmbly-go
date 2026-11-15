@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -97,4 +98,16 @@ func TestOrganizationSuggestedSenders(t *testing.T) {
 		t.Fatalf("SuggestedSenders(nil): %v", err)
 	}
 	checkRequest(t, got, "GET", "/v1/organization/access/suggested-senders", "", "")
+}
+
+func TestInvitationAccessAndLapsed(t *testing.T) {
+	var inv Invitation
+	in := `{"id":"i","email":"a@b.c","expires_at":"2999-01-01T00:00:00Z","access":{"scope":"restricted","campaign_folder_ids":[],"campaign_ids":["c1"],"email_account_ids":[]},"expired":true}`
+	if err := json.Unmarshal([]byte(in), &inv); err != nil || inv.Access == nil || inv.Access.CampaignIDs[0] != "c1" || !inv.Lapsed || !inv.Expired() {
+		t.Fatalf("%+v %v", inv, err)
+	}
+	b, _ := json.Marshal(&InviteMemberParams{Email: "a@b.c", Access: &MemberAccessParams{Scope: "restricted", CampaignIDs: []string{"c1"}}})
+	if string(b) != `{"email":"a@b.c","access":{"scope":"restricted","campaign_ids":["c1"]}}` {
+		t.Fatalf("invite body = %s", b)
+	}
 }
