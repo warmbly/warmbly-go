@@ -454,6 +454,9 @@ const (
 	// TrackingStatusWrongTarget: the record exists but points at another
 	// host; [TrackingDomainStatus.Observed] says which.
 	TrackingStatusWrongTarget = "wrong_target"
+	// TrackingStatusProofMissing: the CNAME is right but the ownership TXT
+	// record ([TrackingDomainStatus.TXTName]) is not published yet.
+	TrackingStatusProofMissing = "proof_missing"
 	// TrackingStatusLookupError: DNS could not answer. A transient failure
 	// never revokes an already verified domain.
 	TrackingStatusLookupError = "lookup_error"
@@ -477,6 +480,10 @@ type TrackingDomainStatus struct {
 	// CNAMETarget is the value to put in the CNAME record: this install's
 	// tracking host. Empty when the deployment has no tracking host.
 	CNAMETarget string `json:"cname_target"`
+	// TXTName and TXTValue are the ownership record a new verification needs
+	// beside the CNAME; empty when none is needed.
+	TXTName  string `json:"txt_name,omitempty"`
+	TXTValue string `json:"txt_value,omitempty"`
 	// Status is one of the TrackingStatus* constants.
 	Status string `json:"status"`
 	// Message explains Status in one sentence and is safe to show as-is.
