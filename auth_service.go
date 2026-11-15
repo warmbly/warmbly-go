@@ -464,20 +464,33 @@ type PasskeyLoginChallenge struct {
 // Notification categories used in [Notification.Category] and the preference
 // map.
 const (
-	NotifInboundReply    = "inbound_reply"
-	NotifInboundOOO      = "inbound_out_of_office"
-	NotifHealthBounce    = "health_bounce"
-	NotifHealthComplaint = "health_complaint"
-	NotifWorkerDowntime  = "health_worker_downtime"
-	NotifSecuritySignIn  = "security_new_signin"
-	NotifBillingAlert    = "billing_alert"
-	NotifTeamActivity    = "team_activity"
+	NotifInboundReply = "inbound_reply"
+	// NotifInboundPositiveReply is a human reply classified as positive. It
+	// is the one inbound category on by default, and it is delivered as a
+	// plain [NotifInboundReply] while that category is on.
+	NotifInboundPositiveReply = "inbound_positive_reply"
+	NotifInboundOOO           = "inbound_out_of_office"
+	NotifHealthBounce         = "health_bounce"
+	NotifHealthComplaint      = "health_complaint"
+	NotifWorkerDowntime       = "health_worker_downtime"
+	NotifSecuritySignIn       = "security_new_signin"
+	NotifBillingAlert         = "billing_alert"
+	NotifTeamActivity         = "team_activity"
 	// NotifCampaignPaused fires when the platform pauses a campaign on its
 	// own, for example when an auto-pause guardrail is breached.
 	NotifCampaignPaused = "campaign_paused"
 	// NotifDomainAuth fires when a sending domain starts failing SPF or
 	// DMARC: the warning before the send gate applies.
 	NotifDomainAuth = "health_domain_auth"
+	// NotifPlacementFinished tells whoever started an inbox placement test
+	// where its copies landed.
+	NotifPlacementFinished = "placement_finished"
+	// NotifPlacementAlert fires when a campaign's scheduled placement test
+	// comes back below its alert threshold.
+	NotifPlacementAlert = "placement_alert"
+	// NotifInboxActionRequired fires when automatic tagging finds mail in a
+	// mailbox that needs someone to act, such as a failed payment.
+	NotifInboxActionRequired = "inbox_action_required"
 )
 
 // ChannelPrefs are the delivery toggles for one notification category.
@@ -497,19 +510,26 @@ type CategoryPref struct {
 // NotificationPreferences is the caller's full notification configuration. It
 // is always returned fully populated.
 type NotificationPreferences struct {
-	InboundReply    CategoryPref `json:"inbound_reply"`
-	InboundOOO      CategoryPref `json:"inbound_out_of_office"`
-	HealthBounce    CategoryPref `json:"health_bounce"`
-	HealthComplaint CategoryPref `json:"health_complaint"`
-	WorkerDowntime  CategoryPref `json:"health_worker_downtime"`
-	SecuritySignIn  CategoryPref `json:"security_new_signin"`
-	BillingAlert    CategoryPref `json:"billing_alert"`
-	TeamActivity    CategoryPref `json:"team_activity"`
+	InboundReply CategoryPref `json:"inbound_reply"`
+	// InboundPositiveReply covers positive replies while InboundReply is off.
+	InboundPositiveReply CategoryPref `json:"inbound_positive_reply"`
+	InboundOOO           CategoryPref `json:"inbound_out_of_office"`
+	HealthBounce         CategoryPref `json:"health_bounce"`
+	HealthComplaint      CategoryPref `json:"health_complaint"`
+	WorkerDowntime       CategoryPref `json:"health_worker_downtime"`
+	SecuritySignIn       CategoryPref `json:"security_new_signin"`
+	BillingAlert         CategoryPref `json:"billing_alert"`
+	TeamActivity         CategoryPref `json:"team_activity"`
 	// CampaignPaused and DomainAuth default to on with email: both mean the
 	// platform will (or did) stop sending, so they must reach someone who can
 	// act.
 	CampaignPaused CategoryPref `json:"campaign_paused"`
 	DomainAuth     CategoryPref `json:"health_domain_auth"`
+	// PlacementFinished and PlacementAlert are the inbox placement test pair.
+	PlacementFinished CategoryPref `json:"placement_finished"`
+	PlacementAlert    CategoryPref `json:"placement_alert"`
+	// InboxActionRequired is mailbox mail that needs someone to act.
+	InboxActionRequired CategoryPref `json:"inbox_action_required"`
 
 	// EmailDigestMinutes bundles pending notification emails into one send.
 	// It must fall within [NotificationEmailDelivery.MinMinutes] and
@@ -1058,8 +1078,11 @@ func (s *AuthService) NotificationPreferences(ctx context.Context, opts ...Reque
 	return fetch[NotificationPreferencesResult](ctx, s.client, "auth/me/notification-preferences", opts)
 }
 
-// UpdateNotificationPreferences replaces the caller's notification
-// configuration.
+// UpdateNotificationPreferences saves the caller's notification
+// configuration. The server decodes the body over the stored preferences, so
+// a category this SDK version does not know about keeps its stored value.
+// Start from [AuthService.NotificationPreferences] so every known category is
+// sent as it is meant to be.
 func (s *AuthService) UpdateNotificationPreferences(ctx context.Context, prefs *NotificationPreferences, opts ...RequestOption) (*NotificationPreferencesResult, *Response, error) {
 	body := struct {
 		Preferences *NotificationPreferences `json:"preferences"`

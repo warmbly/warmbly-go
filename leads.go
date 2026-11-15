@@ -179,7 +179,8 @@ type LeadArea struct {
 // LeadEmail is one address found for a lead and what checking it said.
 type LeadEmail struct {
 	Email string `json:"email"`
-	// Source is "website" when read off the business's site, else the provider.
+	// Source is "website" when read off the business's site, "search" when a
+	// web search showed it on a page about the business, else the provider.
 	Source      string `json:"source"`
 	URL         string `json:"url,omitempty"`
 	DomainMatch bool   `json:"domain_match"`
@@ -207,10 +208,26 @@ type LeadSite struct {
 	AcceptsAll bool `json:"accepts_all,omitempty"`
 	// FoundWebsite is set when the listing had no website and one was worked
 	// out from the business's name.
-	FoundWebsite bool       `json:"found_website,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	CheckedAt    *time.Time `json:"checked_at,omitempty"`
+	FoundWebsite bool `json:"found_website,omitempty"`
+	// ReadVia names the reader service that fetched the site after it turned
+	// a direct visit away; empty when it was read directly.
+	ReadVia string `json:"read_via,omitempty"`
+	// Unread says why a site that could not be read was not, one of the
+	// LeadSite* constants; empty when it was read. Other values may appear.
+	Unread    string     `json:"unread,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
 }
+
+// Reasons a lead's website could not be read, for [LeadSite.Unread].
+const (
+	// LeadSiteBlocked: the site turned automated visitors away.
+	LeadSiteBlocked = "blocked"
+	// LeadSiteRobots: the site's robots.txt asks not to be read.
+	LeadSiteRobots = "robots"
+	// LeadSiteUnreachable: the site did not answer.
+	LeadSiteUnreachable = "unreachable"
+)
 
 // Lead is one business in the workspace's lead finder.
 type Lead struct {
@@ -327,6 +344,9 @@ type LeadEnrichmentRun struct {
 	// Verify and People echo what the run was asked to do.
 	Verify bool `json:"verify"`
 	People bool `json:"people"`
+	// WebSearch reports whether the run may search the web for a missing
+	// site, or for the addresses an unreadable site publishes elsewhere.
+	WebSearch bool `json:"web_search"`
 	// Status is one of the LeadRun* constants.
 	Status      string `json:"status"`
 	Total       int    `json:"total"`
@@ -597,6 +617,10 @@ type LeadEnrichParams struct {
 	// People also finds the people each site names and works out their
 	// addresses. The server default is true.
 	People *bool `json:"people,omitempty"`
+	// WebSearch lets the run search the web for a missing site or a blocked
+	// site's addresses, when the instance has a search set up. The server
+	// default is true.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 // Export formats for [LeadExportParams.Format].

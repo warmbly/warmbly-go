@@ -74,6 +74,10 @@ type Client struct {
 	Analytics *AnalyticsService
 	// Advisor reads and acts on continuous checks of the sending posture.
 	Advisor *AdvisorService
+	// Reports are client reports: scoped analytics shared by link or email.
+	Reports *ReportService
+	// ToolMigrations move a workspace in from another outreach tool.
+	ToolMigrations *ToolMigrationService
 
 	// CRM manages pipelines, deals and the task board.
 	CRM *CRMService
@@ -203,6 +207,8 @@ func New(opts ...Option) (*Client, error) {
 	c.Templates = (*TemplateService)(&c.common)
 	c.Analytics = (*AnalyticsService)(&c.common)
 	c.Advisor = (*AdvisorService)(&c.common)
+	c.Reports = (*ReportService)(&c.common)
+	c.ToolMigrations = (*ToolMigrationService)(&c.common)
 
 	c.CRM = (*CRMService)(&c.common)
 	c.Teams = (*TeamService)(&c.common)

@@ -459,14 +459,18 @@ type FormSubmission struct {
 }
 
 // FormSubmissionListParams control [FormService.ListSubmissions]. Submissions
-// are keyset-paginated newest first on created_at rather than by opaque
-// cursor.
+// are keyset-paginated newest first.
 type FormSubmissionListParams struct {
 	// Limit is the page size, 1 to 100. Zero uses the server default of 50.
 	Limit int
+	// Cursor is the opaque token from a previous page's NextCursor.
+	// [Page.Next] and [Page.All] pass it for you. It cannot be combined with
+	// Before.
+	Cursor string
 	// Before returns only submissions created strictly before this instant.
-	// Pass the previous page's last CreatedAt to walk backwards in time;
-	// [Page.Next] and [Page.All] do this for you.
+	// It is the older, timestamp-only way to page and is kept for callers
+	// that store a position as a time; prefer Cursor, which also breaks ties
+	// between rows created in the same instant.
 	Before *time.Time
 }
 
@@ -476,6 +480,7 @@ func (p *FormSubmissionListParams) values() url.Values {
 		return q
 	}
 	setPositive(q, "limit", p.Limit)
+	setNonEmpty(q, "cursor", p.Cursor)
 	if p.Before != nil && !p.Before.IsZero() {
 		q.Set("before", formCursor(*p.Before))
 	}
@@ -596,6 +601,24 @@ type FormsDomainStatus struct {
 	// FormsHostUnresolvable reports that the install's own forms host does
 	// not resolve, an operator problem rather than the customer's record.
 	FormsHostUnresolvable bool `json:"forms_host_unresolvable"`
+	// EdgeRecords are the TXT records the edge provider in front of the
+	// forms service still needs before it serves the domain over HTTPS;
+	// empty when there are none to add.
+	EdgeRecords []DNSRecord `json:"edge_records,omitempty"`
+}
+
+// DNSRecord is one DNS record a domain needs, and whether it is in place.
+type DNSRecord struct {
+	// Purpose says what the record is for.
+	Purpose string `json:"purpose"`
+	// Type is the record type, for example "TXT" or "CNAME".
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	// OK reports whether DNS already answers with this record.
+	OK bool `json:"ok"`
+	// Optional records improve the result but are not required to verify.
+	Optional bool `json:"optional,omitempty"`
 }
 
 // List returns every form in the workspace. There is no pagination or
@@ -639,21 +662,22 @@ func (s *FormService) Delete(ctx context.Context, id string, opts ...RequestOpti
 }
 
 // ListSubmissions returns a page of the form's submissions, newest first.
-// Paging is by timestamp rather than opaque cursor: the returned page's
-// NextCursor is the RFC 3339 created_at of its last row, and [Page.Next] and
-// [Page.All] pass it back as the before parameter. [Pagination.Total] is
-// never set; use [Form.SubmissionsCount] for the lifetime count.
+// [Page.Next] and [Page.All] follow the opaque cursor the server returns.
+// [Pagination.Total] is never set; use [Form.SubmissionsCount] for the
+// lifetime count.
 func (s *FormService) ListSubmissions(ctx context.Context, id string, params *FormSubmissionListParams, opts ...RequestOption) (*Page[FormSubmission], error) {
 	return s.submissionsPage(ctx, "forms/"+url.PathEscape(id)+"/submissions", params.values(), opts)
 }
 
-// submissionsPage adapts the endpoint's {"data": [...], "has_more": bool}
-// shape onto [Page] so the usual Next/All helpers work, deriving the cursor
-// from the last row's timestamp.
+// submissionsPage reads the endpoint's {"data", "pagination", "has_more"}
+// shape onto [Page]. A server that predates the pagination object answers
+// only has_more; the cursor is then the last row's timestamp, passed back as
+// before.
 func (s *FormService) submissionsPage(ctx context.Context, path string, query url.Values, opts []RequestOption) (*Page[FormSubmission], error) {
 	var wire struct {
-		Data    []FormSubmission `json:"data"`
-		HasMore bool             `json:"has_more"`
+		Data       []FormSubmission `json:"data"`
+		HasMore    bool             `json:"has_more"`
+		Pagination *Pagination      `json:"pagination"`
 	}
 	resp, err := s.client.get(ctx, withQuery(path, query), &wire, opts...)
 	if err != nil {
@@ -663,14 +687,25 @@ func (s *FormService) submissionsPage(ctx context.Context, path string, query ur
 	if page.Data == nil {
 		page.Data = []FormSubmission{}
 	}
-	page.Pagination.HasMore = wire.HasMore
-	if wire.HasMore && len(wire.Data) > 0 {
-		cursor := formCursor(wire.Data[len(wire.Data)-1].CreatedAt)
-		page.Pagination.NextCursor = &cursor
+	legacy := wire.Pagination == nil
+	if legacy {
+		page.Pagination.HasMore = wire.HasMore
+		if wire.HasMore && len(wire.Data) > 0 {
+			cursor := formCursor(wire.Data[len(wire.Data)-1].CreatedAt)
+			page.Pagination.NextCursor = &cursor
+		}
+	} else {
+		page.Pagination = *wire.Pagination
 	}
 	page.fetch = func(ctx context.Context, cursor string) (*Page[FormSubmission], error) {
 		q := cloneValues(query)
-		q.Set("before", cursor)
+		if legacy {
+			q.Del("cursor")
+			q.Set("before", cursor)
+		} else {
+			q.Del("before")
+			q.Set("cursor", cursor)
+		}
 		return s.submissionsPage(ctx, path, q, opts)
 	}
 	return page, nil
