@@ -1378,3 +1378,72 @@ func (s *CampaignService) UploadAttachment(ctx context.Context, id string, file 
 func (s *CampaignService) DeleteAttachment(ctx context.Context, id, attachmentID string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "campaigns/"+url.PathEscape(id)+"/attachments/"+url.PathEscape(attachmentID), opts...)
 }
+
+// --- copying and lead timezones ---
+
+// CopyToWorkspaces copies the campaign's configuration, and optionally some
+// reply templates, into other workspaces the caller belongs to, each as a new
+// draft. Leads, sends and history stay behind; attachments are copied and
+// count against each destination's storage.
+//
+// The route needs the read_campaigns scope, and the handler also requires
+// write_campaigns (plus read_templates and write_templates when TemplateIDs
+// is set). The caller must be an unrestricted member of the source and hold
+// manage_campaigns in each destination. An API key or OAuth token reaches one
+// workspace, so it can only name the workspace it acts on; naming any other
+// fails the whole call with a 403 "cross_workspace_copy_requires_session".
+// Copying across workspaces is a signed-in session's job.
+//
+// The answer has one entry per destination, in the order asked for, and a
+// destination that was refused or failed does not fail the call; check each
+// [WorkspaceCopyResult.Status].
+func (s *CampaignService) CopyToWorkspaces(ctx context.Context, id string, params *CopyCampaignParams, opts ...RequestOption) ([]WorkspaceCopyResult, *Response, error) {
+	return sendData[WorkspaceCopyResult](ctx, s.client.post, "campaigns/"+url.PathEscape(id)+"/copy-to", params, opts)
+}
+
+// Campaign timezone modes, for [CampaignLeadTimezones.TimezoneMode]: whose
+// clock the sending schedule is read on. Other values may appear.
+const (
+	// CampaignTimezoneModeCampaign reads the schedule in the campaign's own
+	// timezone.
+	CampaignTimezoneModeCampaign = "campaign"
+	// CampaignTimezoneModeRecipient reads it in each lead's timezone, worked
+	// out from the lead's record, and in the campaign's when a lead's is not
+	// known.
+	CampaignTimezoneModeRecipient = "recipient"
+)
+
+// CampaignLeadTimezones is where a campaign's leads are, by the timezone their
+// records resolve to, so the schedule can be checked against them before
+// launch.
+type CampaignLeadTimezones struct {
+	CampaignID string `json:"campaign_id"`
+	// TimezoneMode is one of the CampaignTimezoneMode* constants.
+	TimezoneMode string `json:"timezone_mode"`
+	// Timezone is the campaign's own clock, the one a lead with an unknown
+	// timezone is sent on.
+	Timezone string `json:"timezone"`
+	Total    int    `json:"total"`
+	// Unknown is how many leads nothing on the record places.
+	Unknown int `json:"unknown"`
+	// Resolving is how many leads' records changed and have not been read
+	// again yet; they are counted under their previous answer meanwhile.
+	Resolving int                `json:"resolving"`
+	Zones     []CampaignLeadZone `json:"zones"`
+}
+
+// CampaignLeadZone is one timezone and how many of the campaign's leads are in
+// it.
+type CampaignLeadZone struct {
+	// Timezone is an IANA name, "UTC" or a fixed offset such as "Etc/GMT-2".
+	Timezone string `json:"timezone"`
+	// Country is the zone's country code, "" for UTC and fixed offsets.
+	Country string `json:"country"`
+	Leads   int    `json:"leads"`
+}
+
+// LeadTimezones counts the campaign's leads by the timezone their records
+// resolve to. Needs the read_campaigns scope.
+func (s *CampaignService) LeadTimezones(ctx context.Context, id string, opts ...RequestOption) (*CampaignLeadTimezones, *Response, error) {
+	return fetch[CampaignLeadTimezones](ctx, s.client, "campaigns/"+url.PathEscape(id)+"/lead-timezones", opts)
+}

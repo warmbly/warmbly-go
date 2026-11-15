@@ -144,3 +144,18 @@ func (s *TemplateService) Render(ctx context.Context, id string, variables map[s
 func (s *TemplateService) Score(ctx context.Context, params *TemplateScoreParams, opts ...RequestOption) (*TemplateScore, *Response, error) {
 	return send[TemplateScore](ctx, s.client.post, "templates/score", params, opts)
 }
+
+// CopyToWorkspaces copies reply templates into other workspaces the caller
+// belongs to. The route needs the read_templates scope and the handler also
+// requires write_templates. The caller must hold manage_campaigns in each
+// destination. An API key or OAuth token reaches one workspace, so naming any
+// workspace but the one it acts on fails the whole call with a 403
+// "cross_workspace_copy_requires_session"; copy across workspaces from a
+// signed-in session.
+//
+// The answer has one entry per destination, in the order asked for, and a
+// destination that was refused or failed does not fail the call; check each
+// [WorkspaceCopyResult.Status].
+func (s *TemplateService) CopyToWorkspaces(ctx context.Context, params *CopyTemplatesParams, opts ...RequestOption) ([]WorkspaceCopyResult, *Response, error) {
+	return sendData[WorkspaceCopyResult](ctx, s.client.post, "templates/copy-to", params, opts)
+}

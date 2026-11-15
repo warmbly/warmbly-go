@@ -81,6 +81,14 @@ type Plan struct {
 	// month.
 	ReferralRewardPercent int `json:"referral_reward_percent"`
 
+	// MonthlySendPool is set only on an agency plan: the sends shared by all
+	// of the agency's clients each period. Zero is an agency plan with no
+	// pool cap; nil is a workspace plan.
+	MonthlySendPool *int `json:"monthly_send_pool,omitempty"`
+	// AgencyAIAllowanceUSD is what an agency plan refills the agency's shared
+	// AI balance to each period; nil on a workspace plan.
+	AgencyAIAllowanceUSD *float64 `json:"agency_ai_allowance_usd,omitempty"`
+
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
