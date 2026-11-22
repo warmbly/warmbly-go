@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -1097,4 +1098,29 @@ func (s *StoreService) ResumeMailbox(ctx context.Context, id string, opts ...Req
 // a session needs a recent sign-in.
 func (s *StoreService) SignIn(ctx context.Context, mailboxID string, opts ...RequestOption) (*StoreSignIn, *Response, error) {
 	return send[StoreSignIn](ctx, s.client.post, storeMailboxPath(mailboxID, "sign-in"), nil, opts)
+}
+
+// StoreContactFields is the "details" object of a contact_invalid refusal from
+// [StoreService.PutRegistrant].
+type StoreContactFields struct {
+	// Fields names the refused registrant fields.
+	Fields []string `json:"fields"`
+}
+
+// StorePriceChangedQuote returns the fresh quote a 409 price_changed carries
+// in its details, from [StoreService.CreateOrder] on an expired quote whose
+// total moved. Show its total and, once confirmed, order again with its ID.
+// It reports false for any other error.
+func StorePriceChangedQuote(err error) (*StoreQuote, bool) {
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || !apiErr.HasCode(ErrCodePriceChanged) {
+		return nil, false
+	}
+	var d struct {
+		Quote *StoreQuote `json:"quote"`
+	}
+	if apiErr.DecodeDetails(&d) != nil || d.Quote == nil {
+		return nil, false
+	}
+	return d.Quote, true
 }

@@ -1,14 +1,15 @@
 package warmbly
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
 
 // Error is the typed error returned for any non-2xx API response. It mirrors
 // the JSON error envelope returned by the Warmbly API, which is the same four
-// fields on every endpoint — there is no nested "details" or per-field
-// validation object to dig through:
+// fields on nearly every endpoint:
 //
 //	{
 //	  "error":      "Not Found",
@@ -21,6 +22,11 @@ import (
 // "error" and "message" are for people; branch on [Error.Code] and the HTTP
 // status. "retry_after" appears only where the endpoint has a wait to quote
 // (rate limiting); the client also fills it from the Retry-After header.
+//
+// A few codes carry more. The store's 409 price_changed puts a fresh quote in
+// "details" (read it with [StorePriceChangedQuote]), its 400 contact_invalid
+// names the refused fields there ([Error.DecodeDetails]), and its 402
+// payment_method_required carries a card setup page in [Error.SetupURL].
 //
 // The package sentinels ([ErrNotFound], [ErrUnauthorized], ...) can be matched
 // with errors.Is to branch on the HTTP status without parsing the body, and
@@ -53,8 +59,29 @@ type Error struct {
 	// RetryAfter is the number of seconds to wait before retrying, when the
 	// server provides it (typically on 429 responses).
 	RetryAfter int `json:"retry_after,omitempty"`
+	// Details is the raw "details" object a few codes carry, such as the
+	// fresh quote on the store's price_changed or the refused fields on
+	// contact_invalid. Empty when the body has none. Decode it with
+	// [Error.DecodeDetails].
+	Details json.RawMessage `json:"details,omitempty"`
+	// SetupURL is the card setup page the store's 402
+	// payment_method_required carries. It can be empty when the server could
+	// not create one.
+	SetupURL string `json:"setup_url,omitempty"`
 	// Header is the full set of response headers, for inspection.
 	Header http.Header `json:"-"`
+}
+
+// errNoDetails is returned by [Error.DecodeDetails] when the body had none.
+var errNoDetails = errors.New("warmbly: error has no details")
+
+// DecodeDetails decodes [Error.Details] into v. It returns an error when the
+// response carried no details object.
+func (e *Error) DecodeDetails(v any) error {
+	if len(e.Details) == 0 || string(e.Details) == "null" {
+		return errNoDetails
+	}
+	return json.Unmarshal(e.Details, v)
 }
 
 // Error implements the error interface.

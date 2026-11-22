@@ -3,6 +3,8 @@ package warmbly
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -453,5 +455,53 @@ func TestAgencyStoreDecode(t *testing.T) {
 	}
 	if out.Renewals[0].RenewMicros != 11170000 || out.Renewals[0].ExpiresAt == nil {
 		t.Errorf("renewal = %+v", out.Renewals[0])
+	}
+}
+
+func TestStoreErrorDetails(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+	}{
+		"q_old":  {http.StatusConflict, `{"error":"Conflict","code":"price_changed","request_id":"req_1","message":"The price changed since you looked. Review the new total.","details":{"quote":{"id":"q_new","expires_at":"2026-11-22T10:15:00Z","lines":[],"due_now_micros":13990000,"recurring_monthly_micros":3000000,"yearly_domain_renewal_micros":12990000}}}`},
+		"q_card": {http.StatusPaymentRequired, `{"error":"Payment Required","code":"payment_method_required","request_id":"req_2","message":"Add a card to pay for this order.","setup_url":"https://checkout.example/setup"}`},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in StoreOrderParams
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		tc := cases[in.QuoteID]
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(tc.status)
+		_, _ = w.Write([]byte(tc.body))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(WithAPIKey("wmbly_test"), WithBaseURL(srv.URL+"/v1/"), WithMaxRetries(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	_, _, err = c.Store.CreateOrder(ctx, &StoreOrderParams{QuoteID: "q_old"})
+	q, ok := StorePriceChangedQuote(err)
+	if !ok || q.ID != "q_new" || q.DueNowMicros != 13990000 {
+		t.Fatalf("price changed quote = %+v %v (err %v)", q, ok, err)
+	}
+
+	_, _, err = c.Store.CreateOrder(ctx, &StoreOrderParams{QuoteID: "q_card"})
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || !apiErr.HasCode(ErrCodePaymentMethodRequired) || apiErr.SetupURL != "https://checkout.example/setup" {
+		t.Fatalf("payment method error = %+v", err)
+	}
+	if _, ok := StorePriceChangedQuote(err); ok {
+		t.Error("StorePriceChangedQuote matched a different code")
+	}
+	if apiErr.DecodeDetails(&struct{}{}) == nil {
+		t.Error("DecodeDetails on an error without details should fail")
+	}
+
+	var fields StoreContactFields
+	e := &Error{Code: ErrCodeContactInvalid, Details: json.RawMessage(`{"fields":["phone","country"]}`)}
+	if err := e.DecodeDetails(&fields); err != nil || len(fields.Fields) != 2 || fields.Fields[0] != "phone" {
+		t.Errorf("contact fields = %+v %v", fields, err)
 	}
 }
