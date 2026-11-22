@@ -872,6 +872,15 @@ type TemplatePreviewResult struct {
 	From *TemplatePreviewFrom `json:"from,omitempty"`
 	// Attachments are the files the send would carry, metadata only.
 	Attachments []TemplatePreviewAttachment `json:"attachments,omitempty"`
+	// AIBlocks lists the copy's AI blocks and whether this contact's copy of
+	// each is already written. Sent when the body has AI blocks.
+	AIBlocks []LeadEmailAIBlock `json:"ai_blocks,omitempty"`
+	// Lead reports the contact is a lead of CampaignID, so its AI copy can be
+	// written ahead with [CampaignService.WriteLeadEmailAI].
+	Lead bool `json:"lead,omitempty"`
+	// Personalized reports the lead has their own copy of StepID, which they
+	// get instead of the step's copy.
+	Personalized bool `json:"personalized,omitempty"`
 }
 
 // TemplatePreviewFrom is the sender line of a rendered preview.

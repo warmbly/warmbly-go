@@ -395,7 +395,9 @@ func TestTemplatePreviewResultDecode(t *testing.T) {
 		"subject": "Hi Alex", "body_html": "<p>Hi Alex</p>", "body_plain": "Hi Alex",
 		"unresolved": ["{{.Industry}}"],
 		"from": {"name": "Sam Seller", "email": "sam@acme.com"},
-		"attachments": [{"id": "att_1", "filename": "deck.pdf", "size": 20480, "mime_type": "application/pdf"}]
+		"attachments": [{"id": "att_1", "filename": "deck.pdf", "size": 20480, "mime_type": "application/pdf"}],
+		"ai_blocks": [{"id": "blk_1", "name": "Opener", "written": true}],
+		"lead": true, "personalized": true
 	}`
 	var res TemplatePreviewResult
 	if err := json.Unmarshal([]byte(fixture), &res); err != nil {
@@ -409,6 +411,9 @@ func TestTemplatePreviewResultDecode(t *testing.T) {
 	}
 	if len(res.Unresolved) != 1 {
 		t.Errorf("unresolved = %v", res.Unresolved)
+	}
+	if len(res.AIBlocks) != 1 || !res.AIBlocks[0].Written || res.AIBlocks[0].Name != "Opener" || !res.Lead || !res.Personalized {
+		t.Errorf("lead preview = %+v lead=%v personalized=%v", res.AIBlocks, res.Lead, res.Personalized)
 	}
 }
 
