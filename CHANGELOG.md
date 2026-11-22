@@ -5,15 +5,24 @@ grouped by release and version numbers use semantic versioning.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-15
+## [0.4.0] - 2026-11-22
 
-Reconciles the SDK with the current v1 API: agencies, client reports, tool
-migrations, the Partnership mailbox connect API, the lead finder, inbox
-placement, CRM mode with Salesforce, Apollo and Clay, mailbox and contact
-imports, the reauth family, and the newer realtime events. Three changes are
-breaking.
+Reconciles the SDK with the current v1 API: the domain and mailbox store,
+campaign lead review, agencies, client reports, tool migrations, the
+Partnership mailbox connect API, the lead finder, inbox placement, CRM mode
+with Salesforce, Apollo and Clay, mailbox and contact imports, the reauth
+family, and the newer realtime events. Three changes are breaking.
 
 ### Changed
+
+- `CreditSettings`, `CreditUsage` (with its points and buckets) and
+  `CreditTransaction` also decode the server's `*_usd` dollar fields. Before,
+  only the legacy credit integers were read, so most of the settings response
+  was dropped.
+- The `EmailService.Delete` and `BulkDelete` godoc names the
+  `purchased_mailbox` and `partner_managed_mailbox` refusals.
+- `ErrCodePaymentMethodRequired` is documented as a 402 on store orders as
+  well as the 409 from a balance top-up.
 
 - **Breaking:** the one-time campaign kind is gone. `Campaign.Kind`,
   `CampaignCreateParams.Kind`, `CampaignListParams.Kind`,
@@ -49,10 +58,62 @@ breaking.
 
 ### Fixed
 
+- `Error.Error()` printed an empty message for a status with no standard text
+  and no body, such as the 499 the server answers when the caller hung up. It
+  now says "Client Closed Request" or "unexpected status".
+
 - `OAuthAppService.UploadLogo` sent the multipart part as `logo`; the server
   reads `file`, so every upload failed.
 
 ### Added
+
+- `StoreService` (`Client.Store`) for the `/store` API: status and domain
+  search, the registrant, quotes and orders, purchased and connected domains
+  (renew, transfer out, connection check and regenerate, remove), DNS records,
+  the Microsoft 365 approval link, purchased mailboxes (update, photo, cancel,
+  resume, sign-in) and profile photos. Money is in int64 micros and every
+  enum decodes unknown values. Reads need `PermReadStore`, changes
+  `PermManageStore`; charging routes also need manage-billing.
+- `AgencyService.Store` for the purchased domains and mailboxes across an
+  agency's clients.
+- Campaign lead review on `CampaignService`: `Review`, `SetReview`,
+  `ReviewLeads` (cursor paged), `ApproveReviewLeads`, `ReopenReviewLeads` and
+  the paid `WriteReviewAI` pass, plus per-lead email copy with `LeadEmails`,
+  `SetLeadEmail`, `ResetLeadEmail` and `WriteLeadEmailAI`.
+  `Campaign.ReviewLeads` (read-only) and the `LeadHoldReview` hold source.
+- `TemplatePreviewResult.AIBlocks`, `Lead` and `Personalized`.
+- `EmailService.PartnerMailboxes` (`GET /emails/partner`) for a workspace a
+  partner manages, with the `PartnerEnablement*` constants.
+- `BillingService.CreateCardSetupIntent`, `AdoptCardSetup`,
+  `BalanceWithBurn` (`BalanceState.Burn`) and
+  `CreditTransactionsInCategory` with `CreditCategoryStore`.
+- The 3% card processing fee: `BalanceTopUpBounds.FeeBps`,
+  `BalanceTopUp.ChargedUSD`, `BalanceState.StripePublishableKey` and
+  `AgencyAITopUpLimits.FeeBps`.
+- AI spending from the balance: `CreditSettings.AIOverageEnabled`,
+  `AIOverageMonthlyLimitUSD` and `AIOverageMonthlyLimitMicros`, the matching
+  `CreditSettingsParams` fields with `ClearAIOverageLimit`, and
+  `CreditUsage.AIFromBalanceMonthUSD`.
+- `Error.Details` with `Error.DecodeDetails`, `Error.SetupURL`,
+  `StorePriceChangedQuote` and `StoreContactFields`, for the store refusals
+  that carry more than a code.
+- Fields: `Email.Purchased` and `Email.PurchaseCancelledAt`,
+  `DomainGrant.Purchased`, `SegmentIDs` on forms and on Apollo and Salesforce
+  import sources (and their params), `MailboxSyncPolicy.FullCheckSeconds`,
+  `User.ContactEmail` and `User.PartnerAccount`, and
+  `OrganizationWithLimits.Partner` (`PartnerManagedRef`).
+- API key scopes `PermReadStore` (bit 32, in `PermReadOnly`) and
+  `PermManageStore` (bit 33).
+- Gateway: `EventStoreOrderUpdated`, `EventStoreDomainUpdated` and
+  `EventStoreMailboxUpdated` with the `StoreEvent` payload, and `IntentStore`.
+  They need manage-emails.
+- Error codes for the store, AI spending from the balance
+  (`ai_allowance_used`, `ai_overage_limit_reached`), partner-managed
+  workspaces (`organization_suspended`, `organization_cancelled`,
+  `partner_managed`, `partner_account`, `partner_managed_mailbox`),
+  `invalid_category`, `payment_failed` and `lead_step_sent`.
+- Audit catalogue: `AuditActionApprove`, `AuditEntityStoreOrder`,
+  `AuditEntityStoreDomain` and `AuditEntityStoreMailbox`.
 
 - `AgencyService` (`Client.Agency`) for the `/agency` API: agencies and plans,
   staff and invitations, client workspaces with monthly send and AI caps, the

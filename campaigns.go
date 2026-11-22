@@ -225,6 +225,11 @@ type Campaign struct {
 	// cold ceiling in this campaign. Off leaves the mailbox cap, the campaign
 	// limit and the campaign ramp as its only volume limits.
 	WarmupGraduation bool `json:"warmup_graduation"`
+	// ReviewLeads holds each new lead until a member approves its first
+	// email. It is read-only here: create and update do not take it, and it
+	// changes only through [CampaignService.SetReview], which also holds or
+	// releases the leads. A duplicate copies it.
+	ReviewLeads bool `json:"review_leads"`
 
 	// ESPMatchMode is [ESPMatchOff], [ESPMatchPrefer] or [ESPMatchStrict].
 	ESPMatchMode string `json:"esp_match_mode"`
@@ -867,6 +872,15 @@ type TemplatePreviewResult struct {
 	From *TemplatePreviewFrom `json:"from,omitempty"`
 	// Attachments are the files the send would carry, metadata only.
 	Attachments []TemplatePreviewAttachment `json:"attachments,omitempty"`
+	// AIBlocks lists the copy's AI blocks and whether this contact's copy of
+	// each is already written. Sent when the body has AI blocks.
+	AIBlocks []LeadEmailAIBlock `json:"ai_blocks,omitempty"`
+	// Lead reports the contact is a lead of CampaignID, so its AI copy can be
+	// written ahead with [CampaignService.WriteLeadEmailAI].
+	Lead bool `json:"lead,omitempty"`
+	// Personalized reports the lead has their own copy of StepID, which they
+	// get instead of the step's copy.
+	Personalized bool `json:"personalized,omitempty"`
 }
 
 // TemplatePreviewFrom is the sender line of a rendered preview.

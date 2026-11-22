@@ -141,3 +141,31 @@ func ExampleEmailService_CreateConnectLink() {
 	}
 	fmt.Println(link.URL)
 }
+
+func ExampleStoreService_CreateOrder() {
+	client, _ := warmbly.New(warmbly.WithAPIKey("wmbly_..."))
+	ctx := context.Background()
+
+	quote, _, err := client.Store.CreateQuote(ctx, &warmbly.StoreQuoteParams{
+		Items: []warmbly.StoreQuoteItem{
+			{Type: warmbly.StoreItemDomain, Domain: "acme-mail.com", Years: 1},
+			{Type: warmbly.StoreItemMailboxes, Domain: "acme-mail.com", Provider: warmbly.StoreProviderGoogle,
+				Mailboxes: []warmbly.StoreNewMailbox{{LocalPart: "sam", FirstName: "Sam", LastName: "Seller", Admin: true}}},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	due := quote.DueNowMicros
+	order, _, err := client.Store.CreateOrder(ctx, &warmbly.StoreOrderParams{QuoteID: quote.ID, ExpectedDueNowMicros: &due})
+	if fresh, ok := warmbly.StorePriceChangedQuote(err); ok {
+		// Nothing was charged. Show fresh.DueNowMicros and order again with fresh.ID once confirmed.
+		fmt.Println("new total:", fresh.DueNowMicros)
+		return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(order.ID, order.Status)
+}

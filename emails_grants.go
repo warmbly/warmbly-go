@@ -108,6 +108,9 @@ type DomainGrant struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	// Mailboxes counts the mailboxes connected through the grant.
 	Mailboxes int `json:"mailboxes"`
+	// Purchased is true for a grant made in a domain bought in the store;
+	// AdminEmail then names one of its mailboxes.
+	Purchased bool `json:"purchased"`
 }
 
 // GoogleGrantStart says how the workspace proves it controls the domain.

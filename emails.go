@@ -123,6 +123,13 @@ type Email struct {
 	// that provisioned the mailbox, when it was provisioned through one.
 	VendorConnectionID *string `json:"vendor_connection_id,omitempty"`
 	Vendor             string  `json:"vendor,omitempty"`
+	// Purchased is true for a mailbox bought in the store. While it is live
+	// it cannot be removed or signed in again ([ErrCodePurchasedMailbox]);
+	// cancel it through the store instead.
+	Purchased bool `json:"purchased,omitempty"`
+	// PurchaseCancelledAt is when a purchased mailbox's subscription ended;
+	// nil while it is live.
+	PurchaseCancelledAt *time.Time `json:"purchase_cancelled_at,omitempty"` //nolint:misspell // wire name
 	// AvatarURL is the mailbox's profile picture, or "" when none is known.
 	AvatarURL string `json:"avatar_url"`
 
@@ -805,6 +812,9 @@ type MailboxSyncPolicy struct {
 	// its subfolders). Per mailbox and IMAP only; set it with
 	// [EmailService.UpdateSyncSettings].
 	SkipFolders []string `json:"skip_folders,omitempty"`
+	// FullCheckSeconds is the interval between full checks of the mailbox;
+	// zero means the worker's default.
+	FullCheckSeconds int `json:"full_check_seconds,omitempty"`
 }
 
 // MailboxSyncFolderCursor is the resumable position inside one folder of a
@@ -1188,8 +1198,41 @@ func (s *EmailService) Update(ctx context.Context, id string, params *EmailUpdat
 // carrying [ErrCodeMailboxWorkerUnreachable] and nothing is removed; the
 // client's default retry policy already retries 5xx responses, so retry again
 // in a moment if it still fails rather than assuming it worked.
+//
+// A mailbox bought in the store cannot be removed while it is live (403
+// [ErrCodePurchasedMailbox]; cancel it through the store), nor one a partner
+// holds in a workspace it manages (403 [ErrCodePartnerManagedMailbox]). The
+// same refusals answer signing either in again.
 func (s *EmailService) Delete(ctx context.Context, id string, opts ...RequestOption) (*Response, error) {
 	return s.client.delete(ctx, "emails/"+url.PathEscape(id), opts...)
+}
+
+// Partner enablement levels in [PartnerMailbox.Enablement]. Other values may
+// appear.
+const (
+	PartnerEnablementOff           = "off"
+	PartnerEnablementWarmupOnly    = "warmup_only"
+	PartnerEnablementSendingWarmup = "sending_warmup"
+)
+
+// PartnerMailbox is one mailbox's enablement in a workspace a partner
+// (reseller) manages. The partner sets it; members only read it.
+type PartnerMailbox struct {
+	EmailAccountID string `json:"email_account_id"`
+	// Enablement is a PartnerEnablement* constant: off, warmup only, or
+	// sending and warmup.
+	Enablement string `json:"enablement"`
+	// Managed is true while the partner attached the mailbox and still holds
+	// it: members cannot remove or reconnect it
+	// ([ErrCodePartnerManagedMailbox]).
+	Managed bool `json:"managed"`
+}
+
+// PartnerMailboxes lists each mailbox's enablement in a workspace a partner
+// manages, read-only. It is empty for any other workspace. Needs the read
+// emails scope ([PermReadEmails]) or the view-campaigns role permission.
+func (s *EmailService) PartnerMailboxes(ctx context.Context, opts ...RequestOption) ([]PartnerMailbox, *Response, error) {
+	return fetchData[PartnerMailbox](ctx, s.client, "emails/partner", opts)
 }
 
 // BulkTag adds and removes tags across many mailboxes in one call.
@@ -1340,8 +1383,9 @@ func (s *EmailService) Certificates(ctx context.Context, id string, opts ...Requ
 
 // BulkDelete removes many mailboxes (at most 500) through the single delete
 // path. The call answers 200 with a row per mailbox; a mailbox already
-// removed reports not_found in its row, so a retry is safe. Needs the email
-// write scope.
+// removed reports not_found in its row, so a retry is safe. A purchased or
+// partner-held mailbox reports [ErrCodePurchasedMailbox] or
+// [ErrCodePartnerManagedMailbox] in its row. Needs the email write scope.
 func (s *EmailService) BulkDelete(ctx context.Context, emailIDs []string, opts ...RequestOption) (*BulkMailboxResponse, *Response, error) {
 	body := struct {
 		EmailIDs []string `json:"email_ids"`

@@ -70,6 +70,11 @@ const (
 	// IntentCRM covers CRM sync signals ([EventCRMSynced]). The trailing
 	// underscore keeps it from matching unrelated types.
 	IntentCRM = "CRM_"
+	// IntentStore covers store purchases changing state
+	// ([EventStoreOrderUpdated], [EventStoreDomainUpdated],
+	// [EventStoreMailboxUpdated]). The trailing underscore keeps it from
+	// matching unrelated types.
+	IntentStore = "STORE_"
 	// IntentCustom covers developer-fired custom events.
 	IntentCustom = "CUSTOM"
 )

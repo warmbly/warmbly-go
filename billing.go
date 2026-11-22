@@ -2,6 +2,7 @@ package warmbly
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"time"
 )
@@ -204,6 +205,21 @@ type CreditTransaction struct {
 	ActorUserID *string       `json:"actor_user_id,omitempty"`
 	Context     CreditContext `json:"context"`
 	CreatedAt   time.Time     `json:"created_at"`
+
+	// The movement in US dollars: AmountUSD is negative for spend, CostUSD
+	// what the work cost, and the *AfterUSD fields the pools once it
+	// applied. Store charges and refunds appear here too, with
+	// TokensUsed zero.
+	AmountUSD         float64 `json:"amount_usd"`
+	CostUSD           float64 `json:"cost_usd"`
+	BalanceAfterUSD   float64 `json:"balance_after_usd"`
+	MonthlyAfterUSD   float64 `json:"monthly_after_usd"`
+	PurchasedAfterUSD float64 `json:"purchased_after_usd"`
+	PurchasedDeltaUSD float64 `json:"purchased_delta_usd"`
+	AgencyDeltaUSD    float64 `json:"agency_delta_usd"`
+	InputTokens       int     `json:"input_tokens"`
+	OutputTokens      int     `json:"output_tokens"`
+	Quantity          int     `json:"quantity"`
 }
 
 // CreditUsage is AI spend over a window, with the daily series and breakdowns
@@ -219,6 +235,18 @@ type CreditUsage struct {
 	LimitWeekly  *int `json:"limit_weekly"`
 	LimitMonthly *int `json:"limit_monthly"`
 
+	// The same windows and caps in US dollars.
+	SpentTodayUSD   float64  `json:"spent_today_usd"`
+	SpentWeekUSD    float64  `json:"spent_week_usd"`
+	SpentMonthUSD   float64  `json:"spent_month_usd"`
+	LimitDailyUSD   *float64 `json:"limit_daily_usd"`
+	LimitWeeklyUSD  *float64 `json:"limit_weekly_usd"`
+	LimitMonthlyUSD *float64 `json:"limit_monthly_usd"`
+	// AIFromBalanceMonthUSD is what AI took this calendar month from money
+	// the workspace added (the overage that
+	// [CreditSettings.AIOverageMonthlyLimitUSD] caps).
+	AIFromBalanceMonthUSD float64 `json:"ai_from_balance_month_usd"`
+
 	Series   []CreditUsagePoint  `json:"series"`
 	ByReason []CreditUsageBucket `json:"by_reason"`
 	ByModel  []CreditUsageBucket `json:"by_model"`
@@ -230,6 +258,8 @@ type CreditUsagePoint struct {
 	Date    string `json:"date"`
 	Credits int    `json:"credits"`
 	Tokens  int    `json:"tokens"`
+	// AmountUSD is the day's spend in US dollars.
+	AmountUSD float64 `json:"amount_usd"`
 }
 
 // CreditUsageBucket is one slice of a usage breakdown.
@@ -239,6 +269,8 @@ type CreditUsageBucket struct {
 	Tokens  int    `json:"tokens"`
 	// Count is how many charges landed in this bucket.
 	Count int `json:"count"`
+	// AmountUSD is the bucket's spend in US dollars.
+	AmountUSD float64 `json:"amount_usd"`
 }
 
 // CreditSettings are the workspace's AI spend controls.
@@ -270,6 +302,30 @@ type CreditSettings struct {
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
+
+	// The same controls in US dollars, as the server reports them. A nil
+	// limit means none.
+	SpendLimitDailyUSD    *float64 `json:"spend_limit_daily_usd"`
+	SpendLimitWeeklyUSD   *float64 `json:"spend_limit_weekly_usd"`
+	SpendLimitMonthlyUSD  *float64 `json:"spend_limit_monthly_usd"`
+	MemberLimitDailyUSD   *float64 `json:"member_limit_daily_usd"`
+	MemberLimitWeeklyUSD  *float64 `json:"member_limit_weekly_usd"`
+	MemberLimitMonthlyUSD *float64 `json:"member_limit_monthly_usd"`
+	LowBalanceUSD         float64  `json:"low_balance_usd"`
+	// AutoReloadEnabled mirrors automatic reload of the balance (read-only
+	// here; see [BillingService.UpdateAutoReload]).
+	AutoReloadEnabled bool `json:"auto_reload_enabled"`
+
+	// AIOverageEnabled lets AI spend money the workspace added once the
+	// plan's included usage is used up (on by default). Off, AI stops with
+	// 402 [ErrCodeAIAllowanceUsed] instead.
+	AIOverageEnabled bool `json:"ai_overage_enabled"`
+	// AIOverageMonthlyLimitUSD is the most AI may take from added money per
+	// calendar month (UTC), and AIOverageMonthlyLimitMicros the same in
+	// millionths of a dollar; nil means no cap. At the cap AI stops with 402
+	// [ErrCodeAIOverageLimitReached].
+	AIOverageMonthlyLimitUSD    *float64 `json:"ai_overage_monthly_limit_usd"`
+	AIOverageMonthlyLimitMicros *int64   `json:"ai_overage_monthly_limit_micros"`
 }
 
 // CreditSettingsParams updates the spend controls. An omitted limit disables
@@ -288,6 +344,31 @@ type CreditSettingsParams struct {
 	AutoTopupPack        string `json:"auto_topup_pack,omitempty"`
 	AutoTopupThreshold   int    `json:"auto_topup_threshold,omitempty"`
 	AutoTopupMaxPerMonth int    `json:"auto_topup_max_per_month,omitempty"`
+
+	// AIOverageEnabled turns AI's use of added money on or off; nil keeps
+	// the saved value.
+	AIOverageEnabled *bool `json:"ai_overage_enabled,omitempty"`
+	// AIOverageMonthlyLimitUSD caps what AI takes from added money per
+	// calendar month (UTC); it must be positive. Nil keeps the saved limit;
+	// set ClearAIOverageLimit to remove it.
+	AIOverageMonthlyLimitUSD *float64 `json:"ai_overage_monthly_limit_usd,omitempty"`
+	// ClearAIOverageLimit sends ai_overage_monthly_limit_usd as null, which
+	// removes the cap. It wins over AIOverageMonthlyLimitUSD.
+	ClearAIOverageLimit bool `json:"-"`
+}
+
+// MarshalJSON sends ai_overage_monthly_limit_usd as null when
+// ClearAIOverageLimit is set.
+func (p CreditSettingsParams) MarshalJSON() ([]byte, error) {
+	type plain CreditSettingsParams
+	if !p.ClearAIOverageLimit {
+		return json.Marshal(plain(p))
+	}
+	p.AIOverageMonthlyLimitUSD = nil
+	return json.Marshal(struct {
+		*plain
+		AIOverageMonthlyLimitUSD *float64 `json:"ai_overage_monthly_limit_usd"`
+	}{plain: (*plain)(&p)})
 }
 
 // ReferralCode is the workspace's own referral code, as returned by
@@ -616,6 +697,26 @@ func (s *BillingService) Credits(ctx context.Context, opts ...RequestOption) (*C
 func (s *BillingService) CreditTransactions(ctx context.Context, params *ListOptions, opts ...RequestOption) (*Page[CreditTransaction], error) {
 	q := make(url.Values)
 	params.apply(q)
+	return listJSON[CreditTransaction](ctx, s.client, "subscription/credits/transactions", q, opts...)
+}
+
+// Categories for [BillingService.CreditTransactionsInCategory].
+const (
+	// CreditCategoryStore keeps only the store's lines: domain and mailbox
+	// charges, renewals and their refunds.
+	CreditCategoryStore = "store"
+)
+
+// CreditTransactionsInCategory returns a page of the ledger narrowed to one
+// category, newest first; category is a CreditCategory* constant. An unknown
+// category fails with 400 [ErrCodeInvalidCategory]. Session-only; needs the
+// manage-billing organization permission.
+func (s *BillingService) CreditTransactionsInCategory(ctx context.Context, category string, params *ListOptions, opts ...RequestOption) (*Page[CreditTransaction], error) {
+	q := make(url.Values)
+	params.apply(q)
+	if category != "" {
+		q.Set("category", category)
+	}
 	return listJSON[CreditTransaction](ctx, s.client, "subscription/credits/transactions", q, opts...)
 }
 

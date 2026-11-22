@@ -222,6 +222,9 @@ type Form struct {
 	// CategoryIDs are the contact categories every submitted contact is
 	// filed under.
 	CategoryIDs []string `json:"category_ids"`
+	// SegmentIDs are the segments every submitted contact is pinned into (at
+	// most 20).
+	SegmentIDs []string `json:"segment_ids"`
 	// AllowedDomains restricts which sites may embed the form; a domain
 	// covers its subdomains. Empty allows any site. The hosted link works
 	// either way.
@@ -374,7 +377,7 @@ type FormCreateParams struct {
 }
 
 // FormUpdateParams is the PATCH payload for [FormService.Update]. Nil fields
-// are left untouched. Fields, Design, CategoryIDs and AllowedDomains replace
+// are left untouched. Fields, Design, CategoryIDs, SegmentIDs and AllowedDomains replace
 // their whole value when set (send the complete list or theme, not a diff),
 // so an empty slice clears the list.
 type FormUpdateParams struct {
@@ -398,8 +401,10 @@ type FormUpdateParams struct {
 	CampaignID *string `json:"campaign_id,omitempty"`
 	// ClearCampaign sends campaign_id as JSON null, detaching the campaign.
 	// It wins over CampaignID when both are set.
-	ClearCampaign  bool      `json:"-"`
-	CategoryIDs    *[]string `json:"category_ids,omitempty"`
+	ClearCampaign bool      `json:"-"`
+	CategoryIDs   *[]string `json:"category_ids,omitempty"`
+	// SegmentIDs pins submitted contacts into these segments (at most 20).
+	SegmentIDs     *[]string `json:"segment_ids,omitempty"`
 	AllowedDomains *[]string `json:"allowed_domains,omitempty"`
 	CaptchaEnabled *bool     `json:"captcha_enabled,omitempty"`
 }

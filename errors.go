@@ -1,14 +1,15 @@
 package warmbly
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
 
 // Error is the typed error returned for any non-2xx API response. It mirrors
 // the JSON error envelope returned by the Warmbly API, which is the same four
-// fields on every endpoint — there is no nested "details" or per-field
-// validation object to dig through:
+// fields on nearly every endpoint:
 //
 //	{
 //	  "error":      "Not Found",
@@ -21,6 +22,11 @@ import (
 // "error" and "message" are for people; branch on [Error.Code] and the HTTP
 // status. "retry_after" appears only where the endpoint has a wait to quote
 // (rate limiting); the client also fills it from the Retry-After header.
+//
+// A few codes carry more. The store's 409 price_changed puts a fresh quote in
+// "details" (read it with [StorePriceChangedQuote]), its 400 contact_invalid
+// names the refused fields there ([Error.DecodeDetails]), and its 402
+// payment_method_required carries a card setup page in [Error.SetupURL].
 //
 // The package sentinels ([ErrNotFound], [ErrUnauthorized], ...) can be matched
 // with errors.Is to branch on the HTTP status without parsing the body, and
@@ -53,8 +59,29 @@ type Error struct {
 	// RetryAfter is the number of seconds to wait before retrying, when the
 	// server provides it (typically on 429 responses).
 	RetryAfter int `json:"retry_after,omitempty"`
+	// Details is the raw "details" object a few codes carry, such as the
+	// fresh quote on the store's price_changed or the refused fields on
+	// contact_invalid. Empty when the body has none. Decode it with
+	// [Error.DecodeDetails].
+	Details json.RawMessage `json:"details,omitempty"`
+	// SetupURL is the card setup page the store's 402
+	// payment_method_required carries. It can be empty when the server could
+	// not create one.
+	SetupURL string `json:"setup_url,omitempty"`
 	// Header is the full set of response headers, for inspection.
 	Header http.Header `json:"-"`
+}
+
+// errNoDetails is returned by [Error.DecodeDetails] when the body had none.
+var errNoDetails = errors.New("warmbly: error has no details")
+
+// DecodeDetails decodes [Error.Details] into v. It returns an error when the
+// response carried no details object.
+func (e *Error) DecodeDetails(v any) error {
+	if len(e.Details) == 0 || string(e.Details) == "null" {
+		return errNoDetails
+	}
+	return json.Unmarshal(e.Details, v)
 }
 
 // Error implements the error interface.
@@ -62,6 +89,12 @@ func (e *Error) Error() string {
 	msg := e.Message
 	if msg == "" {
 		msg = http.StatusText(e.StatusCode)
+	}
+	if msg == "" && e.StatusCode == statusClientClosedRequest {
+		msg = "Client Closed Request"
+	}
+	if msg == "" {
+		msg = "unexpected status"
 	}
 	parts := fmt.Sprintf("warmbly: %d", e.StatusCode)
 	if e.Code != "" {
@@ -73,6 +106,10 @@ func (e *Error) Error() string {
 	}
 	return parts
 }
+
+// statusClientClosedRequest is the status the server records, and answers
+// with no body, when the client gave up on the request before it finished.
+const statusClientClosedRequest = 499
 
 // Is reports whether the error matches target. It enables matching against the
 // package sentinels by HTTP status. The [ErrServer] sentinel matches any 5xx
@@ -156,7 +193,8 @@ const (
 
 	// ErrCodeInsufficientCredits is the 402 every AI action returns once the
 	// workspace's credit balance is spent. Top up or wait for the monthly
-	// allowance; retrying changes nothing.
+	// allowance; retrying changes nothing. An AI action can also answer 402
+	// with [ErrCodeAIAllowanceUsed] or [ErrCodeAIOverageLimitReached].
 	ErrCodeInsufficientCredits = "insufficient_credits"
 	// ErrCodeUsageCapExceeded is a 429 from the AI endpoints: a short-term
 	// usage cap, not the request-rate limiter. Unlike
@@ -299,7 +337,9 @@ const (
 	// a surface that acts across the whole workspace.
 	ErrCodeAPIKeyMailboxLimited = "api_key_mailbox_limited"
 
-	// ErrCodePaymentMethodRequired is the 409 for a top-up with no saved card.
+	// ErrCodePaymentMethodRequired is the 409 for a top-up with no saved card,
+	// and the 402 for a store order the balance does not cover with no saved
+	// card.
 	ErrCodePaymentMethodRequired = "payment_method_required"
 	// ErrCodeRechargeTooSmall is the 422 for an auto-reload amount that would
 	// not lift the balance past its threshold.
@@ -513,6 +553,82 @@ const (
 	ErrCodeToolMigrationProviderUnknown     = "tool_migration_provider_unknown"      // 400
 	ErrCodeToolMigrationRunning             = "tool_migration_running"               // 409
 	ErrCodeToolMigrationTargetInvalid       = "tool_migration_target_invalid"        // 400
+
+	// The store (/store): domains and mailboxes bought for the workspace.
+	// [ErrCodePaymentMethodRequired], [ErrCodeCardDeclined],
+	// [ErrCodeAuthenticationRequired], [ErrCodeChargeInProgress],
+	// [ErrCodeInvalidCursor], [ErrCodeInvalidLimit], [ErrCodeInvalidName] and
+	// [ErrCodeReauthRequired] also answer store routes.
+	ErrCodeContactInvalid            = "contact_invalid"             // 400
+	ErrCodeStoreItemsInvalid         = "store_items_invalid"         // 400
+	ErrCodeInvalidQuery              = "invalid_query"               // 400
+	ErrCodeForwardingURLInvalid      = "forwarding_url_invalid"      // 400
+	ErrCodeLocalPartInvalid          = "local_part_invalid"          // 400
+	ErrCodeDNSRecordInvalid          = "dns_record_invalid"          // 400
+	ErrCodePhotoInvalid              = "photo_invalid"               // 400
+	ErrCodePhotoNotFound             = "photo_not_found"             // 400
+	ErrCodePaymentFailed             = "payment_failed"              // 402
+	ErrCodeInsufficientBalance       = "insufficient_balance"        // 402
+	ErrCodePlanRequired              = "plan_required"               // 402
+	ErrCodeStoreManagedByPartner     = "store_managed_by_partner"    // 403
+	ErrCodePurchasedMailbox          = "purchased_mailbox"           // 403
+	ErrCodeStoreDisabled             = "store_disabled"              // 404
+	ErrCodeQuoteNotFound             = "quote_not_found"             // 404
+	ErrCodeProfilePhotoMissing       = "profile_photo_missing"       // 404
+	ErrCodePriceChanged              = "price_changed"               // 409
+	ErrCodePaymentProcessing         = "payment_processing"          // 409
+	ErrCodeStorePurchasesActive      = "store_purchases_active"      // 409
+	ErrCodeDomainUnavailable         = "domain_unavailable"          // 409
+	ErrCodeDomainRegisteredElsewhere = "domain_registered_elsewhere" // 409
+	ErrCodeDomainRegisteredHere      = "domain_registered_here"      // 409
+	ErrCodeDomainInUse               = "domain_in_use"               // 409
+	ErrCodeDNSRecordConflict         = "dns_record_conflict"         // 409
+	ErrCodeDNSRecordManaged          = "dns_record_managed"          // 409
+	ErrCodeDNSNotHosted              = "dns_not_hosted"              // 409
+	ErrCodeSignInUnavailable         = "sign_in_unavailable"         // 409
+	ErrCodeStoreStateConflict        = "store_state_conflict"        // 409
+	ErrCodeMailboxExists             = "mailbox_exists"              // 409
+	ErrCodeDomainNotReady            = "domain_not_ready"            // 409
+	ErrCodeDomainNotRenewable        = "domain_not_renewable"        // 409
+	ErrCodeRenewalInProgress         = "renewal_in_progress"         // 409
+	ErrCodeTransferLocked            = "transfer_locked"             // 409
+	ErrCodeMailboxNotCancellable     = "mailbox_not_cancellable"     // 409
+	ErrCodeRegistrantRequired        = "registrant_required"         // 422
+	ErrCodeDomainPremium             = "domain_premium"              // 422
+	ErrCodeTLDUnsupported            = "tld_unsupported"             // 422
+	ErrCodeProviderMixed             = "provider_mixed"              // 422
+	ErrCodeProviderUnavailable       = "provider_unavailable"        // 422
+	ErrCodeMailboxLimit              = "mailbox_limit"               // 422
+	ErrCodeRenewalNotDue             = "renewal_not_due"             // 422
+	ErrCodeRenewalWindowClosed       = "renewal_window_closed"       // 422
+	ErrCodePhotoLimitReached         = "photo_limit_reached"         // 429
+	ErrCodeStoreRateLimited          = "rate_limited"                // 429
+	ErrCodePhotoStorageUnavailable   = "photo_storage_unavailable"   // 503
+	ErrCodeStoreUnavailable          = "store_unavailable"           // 503
+	// ErrCodeInvalidCategory is the 400 from [BillingService.CreditTransactionsInCategory]
+	// with a category the server does not know.
+	ErrCodeInvalidCategory = "invalid_category" // 400
+
+	// AI refusals (402) beside [ErrCodeInsufficientCredits]: the plan's
+	// included usage is spent and AI may not use added money
+	// ([CreditSettings.AIOverageEnabled] is off), or AI took its monthly limit
+	// from added money ([CreditSettings.AIOverageMonthlyLimitUSD]).
+	ErrCodeAIAllowanceUsed       = "ai_allowance_used"        // 402
+	ErrCodeAIOverageLimitReached = "ai_overage_limit_reached" // 402
+
+	// A workspace a partner (reseller) manages. A suspended or canceled one
+	// is read-only; billing changes are made with the partner; an account the
+	// partner signs in cannot set a password, passkey or second factor; and a
+	// mailbox the partner holds is removed or reconnected through it.
+	ErrCodeOrganizationSuspended = "organization_suspended"  // 403
+	ErrCodeOrganizationCancelled = "organization_cancelled"  //nolint:misspell // 403; wire value
+	ErrCodePartnerManaged        = "partner_managed"         // 403
+	ErrCodePartnerAccount        = "partner_account"         // 403
+	ErrCodePartnerManagedMailbox = "partner_managed_mailbox" // 403
+
+	// ErrCodeLeadStepSent is the 409 for personalizing, resetting or
+	// rewriting one lead's email after the lead already received it.
+	ErrCodeLeadStepSent = "lead_step_sent" // 409
 )
 
 // Send-admission diagnostics. These appear in campaign activity and task

@@ -21,6 +21,11 @@ const (
 	// LeadHoldCC holds a contact's own lead while they are copied on another
 	// lead's thread in the same campaign, so they never get two sequences.
 	LeadHoldCC = "cc"
+	// LeadHoldReview is a lead in a review campaign that a member has not
+	// approved yet. Only [CampaignService.ApproveReviewLeads] or turning
+	// review off with [CampaignService.SetReview] lifts it; resuming the lead
+	// does not.
+	LeadHoldReview = "review"
 )
 
 // Why a copied contact is or is not on the next email

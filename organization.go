@@ -93,6 +93,14 @@ type User struct {
 	Email     string   `json:"email"`
 	AvatarURL *string  `json:"avatar_url,omitempty"`
 	Roles     []string `json:"roles,omitempty"`
+	// ContactEmail is the address a partner gave for a person it signs in.
+	// It is never a sign-in or a mail destination. The caller's own profile
+	// ([AuthService.Me]) already shows it as Email and leaves this empty.
+	ContactEmail string `json:"contact_email,omitempty"`
+	// PartnerAccount marks an account that signs in only through the partner
+	// managing its workspace: it cannot set a password, passkey or second
+	// factor ([ErrCodePartnerAccount]).
+	PartnerAccount bool `json:"partner_account,omitempty"`
 
 	ReferralSource        *string    `json:"referral_source,omitempty"`
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
@@ -175,6 +183,34 @@ type OrganizationWithLimits struct {
 	// Agency is the agency this workspace is a client of; nil when it is not
 	// one.
 	Agency *AgencyRef `json:"agency,omitempty"`
+	// Partner is the reseller that manages and bills this workspace; nil when
+	// none does.
+	Partner *PartnerManagedRef `json:"partner,omitempty"`
+}
+
+// States of a partner-managed workspace, in [PartnerManagedRef.State]. Other
+// values may appear.
+const (
+	PartnerOrgActive    = "active"
+	PartnerOrgSuspended = "suspended"
+	PartnerOrgCancelled = "cancelled" //nolint:misspell // wire value
+)
+
+// PartnerManagedRef is what a managed workspace's members see of the partner
+// billing it. A suspended or canceled workspace is read-only (403
+// [ErrCodeOrganizationSuspended] or [ErrCodeOrganizationCancelled] on
+// changes), and billing changes are made with the partner
+// ([ErrCodePartnerManaged]).
+type PartnerManagedRef struct {
+	DisplayName string `json:"display_name"`
+	// State is one of the PartnerOrg* constants.
+	State string `json:"state"`
+	// SuspendedReason is why the partner suspended it, for example "billing",
+	// "admin" or "reseller".
+	SuspendedReason *string `json:"suspended_reason,omitempty"`
+	// DeletesAt is when a canceled workspace is deleted unless the partner
+	// restores it.
+	DeletesAt *time.Time `json:"deletes_at,omitempty"`
 }
 
 // AgencyRef names the agency a workspace is a client of.

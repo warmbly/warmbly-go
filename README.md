@@ -162,7 +162,7 @@ fmt.Println(created.ID)
 | Service | What it covers |
 | --- | --- |
 | `client.Emails` | Connected mailboxes, warmup lifecycle, domain authentication, address verification, one-off sends |
-| `client.Campaigns` | Campaigns, sequence steps, A/B variants, attachments, senders, preflight, template preview |
+| `client.Campaigns` | Campaigns, sequence steps, A/B variants, attachments, senders, preflight, lead review, template preview |
 | `client.Contacts` | Contacts and the 360 view, faceted search, address verification, CRM notes, import and export, AI research |
 | `client.Segments` | Saved contact audiences, evaluated live, with per-contact overrides |
 | `client.Suppressions` | The workspace do-not-contact list |
@@ -183,11 +183,12 @@ fmt.Println(created.ID)
 | `client.Leads` | The lead finder: company and people search, enrichment and verified addresses |
 | `client.Placement` | Inbox placement tests, batches and scheduled campaign monitors |
 | `client.EmailImages` | Images hosted for use in email bodies |
+| `client.Store` | Buying domains and Google Workspace or Microsoft 365 mailboxes, connected domains, DNS records |
 | `client.Reports` | Client reports: previews, share links and email schedules |
 | `client.ToolMigrations` | Bringing campaigns, leads, mailboxes and blocklists over from another outreach tool |
 | `client.Salesforce` / `Apollo` / `Clay` | Provider-specific sync, imports and enrichment for those integrations |
 | `client.Assistant` | The AI assistant's sessions, approvals and tool policies |
-| `client.Agency` | Agencies: staff, client workspaces, the shared send pool and AI balance, cross-client inbox, billing, brand and agency API keys |
+| `client.Agency` | Agencies: staff, client workspaces, the shared send pool and AI balance, cross-client inbox, purchases, billing, brand and agency API keys |
 | `client.Webhooks` | Endpoints, the event catalog, and the delivery log |
 | `client.APIKeys` | Keys, scopes and usage analytics |
 | `client.OAuthApps` | OAuth 2.1 application registration and the consent flow |
