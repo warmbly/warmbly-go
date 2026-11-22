@@ -62,6 +62,9 @@ type Client struct {
 	Segments *SegmentService
 	// Placement runs inbox placement tests and batches against seed mailboxes.
 	Placement *PlacementService
+	// Store buys domains and Google Workspace or Microsoft 365 mailboxes,
+	// connects domains registered elsewhere and manages their DNS.
+	Store *StoreService
 	// Suppressions is the workspace's do-not-contact list.
 	Suppressions *SuppressionService
 	// Forms are hosted lead-capture forms and their submissions.
@@ -205,6 +208,7 @@ func New(opts ...Option) (*Client, error) {
 	c.Contacts = (*ContactService)(&c.common)
 	c.Segments = (*SegmentService)(&c.common)
 	c.Placement = (*PlacementService)(&c.common)
+	c.Store = (*StoreService)(&c.common)
 	c.Suppressions = (*SuppressionService)(&c.common)
 	c.Forms = (*FormService)(&c.common)
 	c.Unibox = (*UniboxService)(&c.common)
