@@ -225,6 +225,11 @@ type Campaign struct {
 	// cold ceiling in this campaign. Off leaves the mailbox cap, the campaign
 	// limit and the campaign ramp as its only volume limits.
 	WarmupGraduation bool `json:"warmup_graduation"`
+	// ReviewLeads holds each new lead until a member approves its first
+	// email. It is read-only here: create and update do not take it, and it
+	// changes only through [CampaignService.SetReview], which also holds or
+	// releases the leads. A duplicate copies it.
+	ReviewLeads bool `json:"review_leads"`
 
 	// ESPMatchMode is [ESPMatchOff], [ESPMatchPrefer] or [ESPMatchStrict].
 	ESPMatchMode string `json:"esp_match_mode"`
