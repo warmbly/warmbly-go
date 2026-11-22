@@ -26,6 +26,9 @@ const (
 	AuditActionStop   = "stop"
 	AuditActionPause  = "pause"
 	AuditActionResume = "resume"
+	// AuditActionApprove records a member approving held work, such as
+	// campaign leads waiting in review.
+	AuditActionApprove = "approve"
 
 	// Credentials and connections.
 	AuditActionRevoke     = "revoke"
@@ -139,6 +142,11 @@ const (
 	AuditEntityMailboxGrant   = "mailbox_grant"
 	AuditEntityMailboxVendor  = "mailbox_vendor"
 	AuditEntityDomainRedirect = "domain_redirect"
+	// Store purchases: an order, a domain and a mailbox bought (or a domain
+	// connected) through the store.
+	AuditEntityStoreOrder   = "store_order"
+	AuditEntityStoreDomain  = "store_domain"
+	AuditEntityStoreMailbox = "store_mailbox"
 	// AuditEntityEmailImage is one image in the workspace's email image
 	// library.
 	AuditEntityEmailImage = "email_image"

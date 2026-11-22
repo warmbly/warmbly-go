@@ -181,6 +181,22 @@ const (
 	EventCRMSynced EventName = "CRM_SYNCED"
 )
 
+// Store events fire when something bought in the store changes state. They
+// carry ids and a status only; refetch the order, domain or mailbox for the
+// rest. They require manage_emails. Payload: [StoreEvent].
+const (
+	// EventStoreOrderUpdated fires when an order moves, for example from
+	// "charging" to "processing" and then "completed", "partially_failed" or
+	// "failed".
+	EventStoreOrderUpdated EventName = "STORE_ORDER_UPDATED"
+	// EventStoreDomainUpdated fires when a purchased or connected domain
+	// changes state, for example once it is active or renewed.
+	EventStoreDomainUpdated EventName = "STORE_DOMAIN_UPDATED"
+	// EventStoreMailboxUpdated fires when a purchased mailbox changes state
+	// or connects to the workspace as a sending mailbox.
+	EventStoreMailboxUpdated EventName = "STORE_MAILBOX_UPDATED"
+)
+
 // Bulk operation events. Payload: [BulkEvent].
 //
 // These events carry no workspace id, so the org channel never sees them. They
@@ -628,6 +644,26 @@ type CRMSyncedEvent struct {
 	Objects []string `json:"objects"`
 	// ContactID is set when the change concerns one contact.
 	ContactID string `json:"contact_id,omitempty"`
+}
+
+// StoreEvent is the payload of [EventStoreOrderUpdated],
+// [EventStoreDomainUpdated] and [EventStoreMailboxUpdated]. The workspace is
+// in [BaseEvent.OrgID].
+type StoreEvent struct {
+	BaseEvent
+	// ID is the order, domain or mailbox the event is about, by event type.
+	ID string `json:"id"`
+	// Status is that record's new status. The set is open.
+	Status string `json:"status"`
+	// OrderID and DomainID name the order and domain the record belongs to,
+	// when it belongs to one.
+	OrderID  string `json:"order_id,omitempty"`
+	DomainID string `json:"domain_id,omitempty"`
+	// EmailAccountID is the workspace mailbox a purchased mailbox became,
+	// once it is connected, and ConnectState how far that connection got
+	// ("waiting", "connecting", "connected" or "failed").
+	EmailAccountID string `json:"email_account_id,omitempty"`
+	ConnectState   string `json:"connect_state,omitempty"`
 }
 
 // BulkEvent is the payload of the bulk-operation events and of

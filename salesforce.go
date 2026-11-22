@@ -357,6 +357,8 @@ type SalesforceImportSource struct {
 	// CampaignID is the campaign new contacts are enrolled in, if any.
 	CampaignID  *string  `json:"campaign_id,omitempty"`
 	CategoryIDs []string `json:"category_ids"`
+	// SegmentIDs are the segments imported contacts are pinned into.
+	SegmentIDs []string `json:"segment_ids"`
 	// Recurring re-reads the source every 30 minutes.
 	Recurring bool `json:"recurring"`
 	Enabled   bool `json:"enabled"`
@@ -385,8 +387,12 @@ type SalesforceImportSourceParams struct {
 	// ClearCampaign removes the campaign target on edit.
 	ClearCampaign bool     `json:"-"`
 	CategoryIDs   []string `json:"category_ids,omitempty"`
-	Recurring     *bool    `json:"recurring,omitempty"`
-	Enabled       *bool    `json:"enabled,omitempty"`
+	// SegmentIDs pins imported contacts into these segments (at most 20).
+	// Nil leaves them unchanged on edit; a pointer to an empty slice clears
+	// them.
+	SegmentIDs *[]string `json:"segment_ids,omitempty"`
+	Recurring  *bool     `json:"recurring,omitempty"`
+	Enabled    *bool     `json:"enabled,omitempty"`
 }
 
 // MarshalJSON sends campaign_id as null when ClearCampaign is set, which the

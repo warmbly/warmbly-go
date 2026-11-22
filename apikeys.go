@@ -112,6 +112,17 @@ const (
 	// PermAgencyMigrate grants migrating client accounts in from another
 	// outreach tool. Agency keys only.
 	PermAgencyMigrate
+
+	// PermReadStore grants reading the store: its status and domain search,
+	// orders, purchased and connected domains and their DNS checks, and
+	// purchased mailboxes. With [PermAgencyRead] on an agency key it also
+	// reads the agency's purchased infrastructure overview. It needs the
+	// manage_emails role permission.
+	PermReadStore
+	// PermManageStore grants buying, renewing and canceling domains and
+	// mailboxes and editing their DNS. Charging routes also hold the member
+	// to manage_billing. It needs the manage_emails role permission.
+	PermManageStore
 )
 
 // Preset permission masks matching the presets the API advertises.
@@ -119,7 +130,7 @@ const (
 	// PermReadOnly grants every read scope and nothing else.
 	PermReadOnly = PermReadEmails | PermReadCampaigns | PermReadContacts |
 		PermReadUnibox | PermReadAnalytics | PermReadTemplates |
-		PermReadCRM | PermReadAuditLogs
+		PermReadCRM | PermReadAuditLogs | PermReadStore
 
 	// PermFullAccess grants every scope this SDK release knows about. A key
 	// minted with it will not pick up scopes added later.
@@ -128,7 +139,8 @@ const (
 		PermBulkCampaigns | PermSendCampaigns | PermWriteTemplates |
 		PermWriteCRM | PermRealtimeSubscribe | PermWebhooks | PermAPIKeys |
 		PermIntegrations | PermWarmupRouting | PermAIAgent | PermAIResearch |
-		PermConnectEmails | PermManageReports | PermImportTools
+		PermConnectEmails | PermManageReports | PermImportTools |
+		PermManageStore
 
 	// PermAgencyAll is every agency scope. Only an agency API key can hold
 	// these; a workspace key never does.
