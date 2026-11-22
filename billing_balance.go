@@ -117,6 +117,35 @@ type BalanceState struct {
 	// a second top-up is refused with 409 "charge_in_progress" until it
 	// settles.
 	ChargeInProgress bool `json:"charge_in_progress,omitempty"`
+
+	// StripePublishableKey is the payment provider's publishable key, for
+	// saving a card in the page with Stripe.js (see
+	// [BillingService.CreateCardSetupIntent]). Empty when card payments are
+	// off.
+	StripePublishableKey string `json:"stripe_publishable_key,omitempty"`
+
+	// Burn is what the balance pays for a day. It is set only by
+	// [BillingService.BalanceWithBurn].
+	Burn *BalanceBurn `json:"burn,omitempty"`
+}
+
+// BalanceBurn is what the balance pays for a day, for a "lasts about N days"
+// estimate: a month of bought mailboxes over 30 days, each auto-renewing
+// domain charged in the next 60 days over the days until its charge, and the
+// average daily AI spend over the last 30 days. Amounts are US dollars.
+type BalanceBurn struct {
+	PerDayUSD          float64 `json:"per_day_usd"`
+	MailboxesPerDayUSD float64 `json:"mailboxes_per_day_usd"`
+	RenewalsPerDayUSD  float64 `json:"renewals_per_day_usd"`
+	AIPerDayUSD        float64 `json:"ai_per_day_usd"`
+	// MailboxesMonthlyUSD is a month of the workspace's bought mailboxes.
+	MailboxesMonthlyUSD float64 `json:"mailboxes_monthly_usd"`
+	// RenewalsDueUSD is what auto-renewing domains charge in the next 60
+	// days.
+	RenewalsDueUSD float64 `json:"renewals_due_usd"`
+	// BillingDay is the day of the month mailboxes are billed; nil before
+	// the first one.
+	BillingDay *int `json:"billing_day"`
 }
 
 // BalanceTopUpBounds are the amounts a top-up may take, in US dollars.
@@ -127,6 +156,11 @@ type BalanceTopUpBounds struct {
 	// and DefaultUSD the one it selects.
 	PresetsUSD []float64 `json:"presets_usd"`
 	DefaultUSD float64   `json:"default_usd"`
+	// FeeBps is the card processing fee added on top of every card payment
+	// into the balance, in basis points (300 is 3%). The balance gains the
+	// amount chosen; the card pays the amount plus the fee, rounded half up
+	// to the cent.
+	FeeBps int `json:"fee_bps"`
 }
 
 // AutoReloadState is the automatic reload configuration and how it has been
@@ -193,8 +227,11 @@ const (
 // BalanceTopUp is the result of [BillingService.TopUpBalance].
 type BalanceTopUp struct {
 	// Status is one of the BalanceTopUp* constants.
-	Status    string  `json:"status"`
-	AmountUSD float64 `json:"amount_usd"`
+	Status string `json:"status"`
+	// AmountUSD is what the balance gains, and ChargedUSD what the card
+	// paid: the amount plus the processing fee ([BalanceTopUpBounds.FeeBps]).
+	AmountUSD  float64 `json:"amount_usd"`
+	ChargedUSD float64 `json:"charged_usd"`
 	// BalanceUSD is the balance after the charge, or before it while it is
 	// still processing.
 	BalanceUSD       float64 `json:"balance_usd"`
@@ -248,8 +285,54 @@ func (s *BillingService) Balance(ctx context.Context, opts ...RequestOption) (*B
 	return fetch[BalanceState](ctx, s.client, "subscription/balance", opts)
 }
 
-// TopUpBalance charges the saved card amountUSD (rounded to whole cents,
-// from 5 to 5,000) and adds it to the balance. A charge still going through
+// BalanceWithBurn is [BillingService.Balance] with [BalanceState.Burn] set:
+// what the balance pays for a day. It sums a month of the ledger, so ask for
+// it only where it is shown. Session-only; needs the manage-billing
+// organization permission.
+func (s *BillingService) BalanceWithBurn(ctx context.Context, opts ...RequestOption) (*BalanceState, *Response, error) {
+	return fetch[BalanceState](ctx, s.client, "subscription/balance?include=burn", opts)
+}
+
+// CardSetup is a payment-provider SetupIntent for saving a card in the page,
+// from [BillingService.CreateCardSetupIntent].
+type CardSetup struct {
+	// ClientSecret confirms the SetupIntent with Stripe.js
+	// (stripe.confirmSetup), which runs any bank check in the page.
+	ClientSecret string `json:"client_secret"`
+	// PublishableKey is the key to initialize Stripe.js with.
+	PublishableKey string `json:"publishable_key"`
+}
+
+// CreateCardSetupIntent opens a SetupIntent on the workspace's payment
+// customer for a card kept for off-session charges, so a page can save a card
+// without leaving for a hosted checkout. Nothing is charged. After
+// stripe.confirmSetup succeeds, call [BillingService.AdoptCardSetup] before
+// charging. It fails with 409 when the workspace has no billing account (use
+// [BillingService.SetupPaymentMethod] instead) and 503 when card payments
+// are off. Session-only; needs the manage-billing organization permission and
+// a recently confirmed session (see [AuthService.Reauth]).
+func (s *BillingService) CreateCardSetupIntent(ctx context.Context, opts ...RequestOption) (*CardSetup, *Response, error) {
+	return send[CardSetup](ctx, s.client.post, "subscription/balance/setup-intent", nil, opts)
+}
+
+// AdoptCardSetup makes the card a confirmed SetupIntent (setupIntentID,
+// "seti_...") saved the workspace's default, so the next top-up, automatic
+// reload or store charge uses it. It answers 204; 404 when the SetupIntent is
+// not on the workspace's customer and 409 while it has not succeeded. Setting
+// the same default again changes nothing, so a retry is safe. Session-only;
+// needs the manage-billing organization permission and a recently confirmed
+// session (see [AuthService.Reauth]).
+func (s *BillingService) AdoptCardSetup(ctx context.Context, setupIntentID string, opts ...RequestOption) (*Response, error) {
+	body := struct {
+		SetupIntentID string `json:"setup_intent_id"`
+	}{SetupIntentID: setupIntentID}
+	return s.client.post(ctx, "subscription/balance/setup-intent/default", body, nil, opts...)
+}
+
+// TopUpBalance adds amountUSD (rounded to whole cents, from 5 to 5,000) to
+// the balance, charging the saved card that amount plus the processing fee
+// ([BalanceTopUpBounds.FeeBps]); [BalanceTopUp.ChargedUSD] is what the card
+// paid. A charge still going through
 // comes back with [BalanceTopUpProcessing] and HTTP 202 rather than an
 // error.
 //
@@ -268,7 +351,8 @@ func (s *BillingService) TopUpBalance(ctx context.Context, amountUSD float64, op
 }
 
 // BalanceCheckout opens a hosted checkout that adds amountUSD (from 5 to
-// 5,000) to the balance and saves the card for later charges. The money lands
+// 5,000) to the balance and saves the card for later charges. The checkout
+// shows the processing fee ([BalanceTopUpBounds.FeeBps]) as its own line. The money lands
 // once the provider confirms the payment. It needs a paid plan (403
 // otherwise). Session-only; needs the manage-billing organization permission
 // and a recently confirmed session (see [AuthService.Reauth]).
